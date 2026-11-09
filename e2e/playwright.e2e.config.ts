@@ -8,6 +8,10 @@ if (!appBaseUrl) {
   );
 }
 
+// 只在手机视口跑的用例：溢出检查，加上标题带 @mobile 标签的手机壳用例。
+// 桌面 project 反过来排除它们（桌面登录后落在 /overview，断言不同）。
+const MOBILE_ONLY = /移动浏览器布局无水平溢出|@mobile/;
+
 export default defineConfig({
   testDir: ".",
   testMatch: "smoke.spec.ts",
@@ -29,12 +33,12 @@ export default defineConfig({
     {
       name: "desktop-chromium",
       use: { ...devices["Desktop Chrome"] },
-      grepInvert: /移动浏览器布局无水平溢出/,
+      grepInvert: MOBILE_ONLY,
     },
     {
       name: "mobile-chromium",
       use: { ...devices["Pixel 7"] },
-      grep: /移动浏览器布局无水平溢出/,
+      grep: MOBILE_ONLY,
     },
   ],
 });

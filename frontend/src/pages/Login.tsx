@@ -7,7 +7,7 @@ import {
   Loader2,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -17,10 +17,12 @@ import {
   AlertTitle,
   AlertDescription,
   Checkbox,
+  cn,
 } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
 import { api, ApiError } from "@/lib/api";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { ACCOUNT_CODES, PASSKEY_LOGIN_CODES } from "@/lib/errorCodes";
 import { passkeySupport } from "@/lib/passkeySupport";
 import { parseUserCode } from "@/lib/userCode";
@@ -137,6 +139,7 @@ export function userCodeFromNext(next: string): string | null {
 
 export default function Login() {
   const { t } = useTranslation();
+  const mobile = useIsMobile();
   const params = new URLSearchParams(window.location.search);
   const next = params.get("next") ?? "";
   // 顶层 user_code 与 next 里的等价，过同一道 parseUserCode；两者并存时以顶层为准
@@ -158,10 +161,21 @@ export default function Login() {
    * 动作的副作用里 —— 用户没有表示过任何东西，我们却当他表示了。
    */
   const [consented, setConsented] = useState(false);
+  /**
+   * 没勾同意就点了登录。手机上按钮始终可点（决策 14）：禁用的按钮读不出原因，
+   * 指尖点了没反应。点下去不发起登录，只把勾选框点亮并在旁边说原因。桌面宽度的
+   * 交互不变（规格 Hard invariants）：那里按钮仍在勾选前禁用。
+   */
+  const [consentMissed, setConsentMissed] = useState(false);
+  const consentHintId = useId();
 
   // 首次登录与失败后重试走的是同一件事：带着 next / user_code 重新发起
   // authorize（err 不透传，它是上一次的结果）。所以只有一个处理函数。
   const onLogin = () => {
+    if (!consented) {
+      setConsentMissed(true);
+      return;
+    }
     const u = new URLSearchParams();
     if (next) u.set("next", next);
     if (userCode) u.set("user_code", userCode);
@@ -185,6 +199,10 @@ export default function Login() {
     // `credentials.get` 会让浏览器中止第一次，抛 NotAllowedError → 被判成
     // 「用户取消」→ 一次本来会成功的登录被自己的第二次点击取消掉。
     if (passkeyPending) return;
+    if (!consented) {
+      setConsentMissed(true);
+      return;
+    }
     setPasskeyPending(true);
     try {
       // 1. 取登录选项。走 api() 而不是裸 fetch：回应是 cago 的
@@ -260,6 +278,7 @@ export default function Login() {
    * label 激活行为之外，所以点《服务条款》只会打开它，不会顺手替用户勾上同意。
    * login.test.tsx 里那条「点条款链接不勾选」守的就是这一点。
    */
+  const showConsentHint = consentMissed && !consented;
   const consent = (
     <div
       data-testid="login-consent"
@@ -268,33 +287,144 @@ export default function Login() {
       <Checkbox
         id="login-consent-box"
         checked={consented}
-        onCheckedChange={(checked) => setConsented(checked === true)}
-        className="mt-0.5"
+        onCheckedChange={(checked) => {
+          setConsented(checked === true);
+          if (checked === true) setConsentMissed(false);
+        }}
+        aria-invalid={showConsentHint || undefined}
+        aria-describedby={showConsentHint ? consentHintId : undefined}
+        className={cn(
+          "mt-0.5",
+          showConsentHint && "border-destructive ring-2 ring-destructive",
+        )}
       />
-      <label
-        htmlFor="login-consent-box"
-        className="text-xs leading-snug text-muted-foreground"
-      >
-        <Trans
-          i18nKey="login.consent"
-          components={{
-            terms: (
-              <Link
-                to="/terms"
-                className="text-foreground underline underline-offset-4"
-              />
-            ),
-            privacy: (
-              <Link
-                to="/privacy"
-                className="text-foreground underline underline-offset-4"
-              />
-            ),
-          }}
-        />
-      </label>
+      <div className="flex flex-col gap-1">
+        <label
+          htmlFor="login-consent-box"
+          className="text-xs leading-snug text-muted-foreground"
+        >
+          <Trans
+            i18nKey="login.consent"
+            components={{
+              terms: (
+                <Link
+                  to="/terms"
+                  className="text-foreground underline underline-offset-4"
+                />
+              ),
+              privacy: (
+                <Link
+                  to="/privacy"
+                  className="text-foreground underline underline-offset-4"
+                />
+              ),
+            }}
+          />
+        </label>
+        {showConsentHint && (
+          <p
+            id={consentHintId}
+            role="alert"
+            className="text-xs font-medium text-destructive-text"
+          >
+            {t("login.consentHint")}
+          </p>
+        )}
+      </div>
     </div>
   );
+
+  const githubButton = (
+    <Button
+      className={cn("w-full", mobile && "h-11")}
+      disabled={!mobile && !consented}
+      onClick={onLogin}
+    >
+      <Github className="mr-2 h-4 w-4" />
+      {t("login.github")}
+    </Button>
+  );
+  const passkeyButton = passkeys === "available" && (
+    <Button
+      variant="outline"
+      className={cn("w-full", mobile && "h-11")}
+      disabled={passkeyPending || (!mobile && !consented)}
+      aria-busy={passkeyPending || undefined}
+      onClick={onPasskeyLogin}
+    >
+      {passkeyPending ? (
+        <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
+      ) : (
+        <Key className="mr-2 h-4 w-4" />
+      )}
+      {t("login.passkey")}
+    </Button>
+  );
+
+  const alerts = (
+    <>
+      {isPasskeyCancelled && (
+        <Alert className="bg-secondary">
+          <Info className="h-4 w-4" />
+          <AlertDescription className="text-sm text-secondary-foreground">
+            {t("login.errors.passkey_cancelled")}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {showError && (
+        <Alert
+          variant="destructive"
+          className="border-destructive bg-destructive-soft"
+        >
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle className="font-semibold text-destructive-text">
+            {t("login.failureTitle")}
+          </AlertTitle>
+          {errorText && (
+            <AlertDescription className="text-sm text-destructive-text">
+              {errorText}
+            </AlertDescription>
+          )}
+        </Alert>
+      )}
+    </>
+  );
+
+  // 手机：整屏、无卡片。品牌在顶栏，标题与（带码时的）眉题在上，同意句与两颗
+  // 按钮钉在拇指区；页脚由 AuthLayout 在钉底时去掉。
+  if (mobile) {
+    return (
+      <AuthLayout
+        pinned={
+          <>
+            {consent}
+            {githubButton}
+            {passkeyButton}
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4 pt-6">
+          <div className="flex flex-col gap-2.5">
+            {userCode && (
+              <div className="flex items-center gap-[7px] text-primary-text">
+                <ShieldCheck className="size-3.5" aria-hidden="true" />
+                <span className="text-xs font-semibold">
+                  {t("device.eyebrowWithCode", { code: userCode })}
+                </span>
+              </div>
+            )}
+            <PageTitle>{t("login.title")}</PageTitle>
+            {/* 品牌与一句标语在上；带码时那一句正文就是这一屏的说明，标语让位。 */}
+            <p className="text-sm text-muted-foreground">
+              {userCode ? t("login.deviceContinue") : t("login.tagline")}
+            </p>
+          </div>
+          {alerts}
+        </div>
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout>
@@ -326,58 +456,17 @@ export default function Login() {
           </div>
         )}
 
-        {isPasskeyCancelled && (
-          <Alert className="bg-secondary">
-            <Info className="h-4 w-4" />
-            <AlertDescription className="text-sm text-secondary-foreground">
-              {t("login.errors.passkey_cancelled")}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {showError && (
-          <Alert
-            variant="destructive"
-            className="border-destructive bg-destructive-soft"
-          >
-            <AlertTriangle className="h-4 w-4" />
-            <AlertTitle className="font-semibold text-destructive-text">
-              {t("login.failureTitle")}
-            </AlertTitle>
-            {errorText && (
-              <AlertDescription className="text-sm text-destructive-text">
-                {errorText}
-              </AlertDescription>
-            )}
-          </Alert>
-        )}
+        {alerts}
 
         {consent}
-        <Button className="w-full" disabled={!consented} onClick={onLogin}>
-          <Github className="mr-2 h-4 w-4" />
-          {t("login.github")}
-        </Button>
+        {githubButton}
 
         {passkeys === "available" && (
           <>
             <p className="text-center text-xs uppercase text-muted-foreground">
               {t("login.or")}
             </p>
-
-            <Button
-              variant="outline"
-              className="w-full"
-              disabled={passkeyPending || !consented}
-              aria-busy={passkeyPending || undefined}
-              onClick={onPasskeyLogin}
-            >
-              {passkeyPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
-              ) : (
-                <Key className="mr-2 h-4 w-4" />
-              )}
-              {t("login.passkey")}
-            </Button>
+            {passkeyButton}
           </>
         )}
       </div>

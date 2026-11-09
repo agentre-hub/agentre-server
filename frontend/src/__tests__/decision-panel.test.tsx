@@ -20,7 +20,7 @@
  * 吞掉异常、不再抛给卡片，否则同一次失败会被说两遍，其中一遍正是要去掉的那行。
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import "@/i18n";
 import DecisionPanel from "@/components/session/DecisionPanel";
@@ -188,5 +188,54 @@ describe("DecisionPanel：与转录里那张是同一张卡", () => {
   it("Given 一条都没有且没有已处理说明, When 渲染, Then 整个面板不出", () => {
     const { container } = renderPanel({});
     expect(container.firstChild).toBeNull();
+  });
+});
+
+/**
+ * 触屏上不画键帽（规格 2026-11-05「触屏输入」）：手机上没有键盘可按，卡上的 ↵ / Esc
+ * 是一句做不到的提示。面板的卡不在转录的渲染上下文里，所以由面板自己关掉。
+ */
+describe("DecisionPanel：手机上不画 ↵ / Esc 键帽", () => {
+  const originalMatchMedia = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  function mockViewport(mobile: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: mobile && query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  const permission = {
+    toolPermissions: [
+      { RequestID: "tp-1", ToolName: "Bash", Input: { command: "ls -la" } },
+    ],
+  };
+
+  it("Given 手机宽度, When 面板渲染一张授权卡, Then 卡上没有键帽、按钮照常", () => {
+    mockViewport(true);
+    renderPanel(permission);
+
+    const card = screen.getByTestId("tool-permission-card");
+    expect(card.querySelectorAll("kbd")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+  });
+
+  it("Given 桌面宽度, When 面板渲染一张授权卡, Then 键帽照旧", () => {
+    mockViewport(false);
+    renderPanel(permission);
+
+    const card = screen.getByTestId("tool-permission-card");
+    expect([...card.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(
+      ["↵", "Esc"],
+    );
   });
 });

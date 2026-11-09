@@ -117,6 +117,26 @@
     "submitFailed": "That decision could not be submitted. Nothing was sent — try again.",
     "retry": "Retry"
   },
+  "phoneHeader": {
+    "status": {
+      "running": "Running",
+      "stopping": "Stopping",
+      "waiting": "Waiting for approval",
+      "failed": "Error",
+      "idle": "Idle",
+      "offline": "Offline · {{time}}",
+      "offlineNoTime": "Offline",
+      "connecting": "Connecting"
+    },
+    "info": {
+      "title": "Conversation info",
+      "project": "Project",
+      "machine": "Runs on",
+      "model": "Model",
+      "lastActive": "Last active",
+      "empty": "—"
+    }
+  },
   "abort": "Stop",
   "menu": {
     "more": "More actions",

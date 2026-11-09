@@ -11,7 +11,11 @@ import type {
 
 import { api } from "@/lib/api";
 import { cliOverlayPath, listCLIModelsOn } from "@/lib/cliModels";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import {
+  deviceDisplayName,
+  fetchDevices,
+  type DeviceItem,
+} from "@/lib/devices";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
 
@@ -436,10 +440,22 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
+export interface BrowserEngineSettingsOptions {
+  /**
+   * 设备一律用显示名（备注名优先，`deviceDisplayName`）：后端行与编辑器里的设备
+   * 选项、摘要都是。手机设置页给（规格 2026-11-05「编辑后端 · 设备显示备注名」）；
+   * 不给即桌面宽度，与以前一样用设备上报的名字。
+   */
+  remarkNames?: boolean;
+}
+
 /** Browser REST + browser→relay adapter for the shared engine panels. */
 export function createBrowserEngineSettingsPorts(
   messages: BrowserEngineSettingsMessages,
+  options: BrowserEngineSettingsOptions = {},
 ): EngineSettingsPorts & { listCLIModels: ListCliModels } {
+  const nameOf = (device: DeviceDTO): string =>
+    options.remarkNames ? deviceDisplayName(device) : device.name;
   const providerIDs = new IdentityMap();
   const modelIDs = new IdentityMap();
   const backendIDs = new IdentityMap();
@@ -573,7 +589,10 @@ export function createBrowserEngineSettingsPorts(
     for (const device of devices) {
       // 没名字的设备退回指纹：名字为空会被读成「这台机器已撤销」，而它明明还在。
       if (device.fingerprint)
-        deviceNames.set(device.fingerprint, device.name || device.fingerprint);
+        deviceNames.set(
+          device.fingerprint,
+          nameOf(device) || device.fingerprint,
+        );
     }
     return devices;
   }
@@ -1221,9 +1240,13 @@ export function createBrowserEngineSettingsPorts(
     },
 
     async listAccountDevices() {
-      return (await loadDevices()).filter(
-        (device) => device.fingerprint && isExecutionDevice(device.kind),
-      );
+      return (await loadDevices())
+        .filter(
+          (device) => device.fingerprint && isExecutionDevice(device.kind),
+        )
+        .map((device) =>
+          options.remarkNames ? { ...device, name: nameOf(device) } : device,
+        );
     },
 
     // 探测走 cliResolvePath 而不是 engineScan：后者一次能答三个类型，但它按设计

@@ -30,6 +30,14 @@
   "inheritedTag": "Inherited",
   "newSessionTitle": "New chat · {{name}}",
   "draftTitle": "New chat",
+  "draftOnline": "Online",
+  "draftFactProject": "Project",
+  "draftFactTarget": "Runs on",
+  "draftFactModel": "Model",
+  "draftModelDefault": "Follows the Agent",
+  "draftEmptyHint": "This chat is saved to your account once you send the first message.",
+  "continueRecent": "Continue a recent conversation",
+  "changeAgentAria": "Change Agent (currently {{name}})",
   "startWithAgent": "Start a conversation with {{agent}}",
   "startWithAgentInProject": "Start a project conversation with {{agent}} in {{project}}",
   "pickTargetTitle": "Where it runs",
@@ -50,5 +58,26 @@
   "clearAgentSearch": "Clear search",
   "noProjectsYetTitle": "No projects yet",
   "noAgentsInProjectBody": "Add an agent to this project in the desktop app and it shows up here.",
-  "listAria": "Conversation list"
+  "listAria": "Conversation list",
+  "phone": {
+    "scopeAll": "All",
+    "scopeMachines": "All machines",
+    "scopeAria": "Switch scope, current: {{name}}",
+    "machinesOnline": "{{online}} / {{total}} machines online",
+    "online": "Online",
+    "offline": "Offline",
+    "offlineSince": "No network · content from {{time}}",
+    "search": "Search conversation titles",
+    "searchScope": "Searching titles in “{{scope}}” · {{count}}",
+    "searchNote": "Only titles are matched. To find by agent, project or machine, switch the scope at the top.",
+    "filterRunning": "In progress",
+    "section": {
+      "needsYou": "Needs you",
+      "inProgress": "In progress",
+      "today": "Today",
+      "earlier": "Earlier"
+    },
+    "scopeSheetTitle": "Scope",
+    "noDepartment": "No department"
+  }
 }

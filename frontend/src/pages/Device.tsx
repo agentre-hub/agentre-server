@@ -7,6 +7,7 @@ import AuthLayout from "@/components/AuthLayout";
 import CodeInput from "@/components/CodeInput";
 import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
 import PageTitle from "@/components/PageTitle";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { api, ApiError } from "@/lib/api";
 import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
 import { describeFailure } from "@/lib/describeFailure";
@@ -30,6 +31,7 @@ function isExpired(e: unknown): boolean {
 export default function Device() {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const mobile = useIsMobile();
   const { state: routeState } = useLocation();
   const guideState = routeState as { from?: unknown; method?: unknown } | null;
   const fromGuide = guideState?.from === "add-guide";
@@ -151,25 +153,25 @@ export default function Device() {
   if (isExpired(failure)) return <Navigate to="/device/expired" replace />;
 
   if (info) {
-    return (
-      <AuthLayout>
-        <DeviceApproval
-          code={code}
-          info={info}
-          submitting={submitting}
-          error={failure === null ? null : failureText(failure)}
-          onApprove={() => void onApprove()}
-          onDeny={() => void onDeny()}
-          // 请求已经发出去时本地这块表说了不算：服务端可能已经把这次授权
-          // 收下了，抢先跳过期页会让用户以为失败而再授权一次，名下于是多出
-          // 一台没打算批两遍的设备。真过期了 approve/deny 自己会回 30202，
-          // 上面那句 isExpired 照样把人送到终态页。
-          onExpire={() => {
-            if (!submitting) nav("/device/expired");
-          }}
-        />
-      </AuthLayout>
+    const approval = (
+      <DeviceApproval
+        code={code}
+        info={info}
+        submitting={submitting}
+        error={failure === null ? null : failureText(failure)}
+        onApprove={() => void onApprove()}
+        onDeny={() => void onDeny()}
+        // 请求已经发出去时本地这块表说了不算：服务端可能已经把这次授权
+        // 收下了，抢先跳过期页会让用户以为失败而再授权一次，名下于是多出
+        // 一台没打算批两遍的设备。真过期了 approve/deny 自己会回 30202，
+        // 上面那句 isExpired 照样把人送到终态页。
+        onExpire={() => {
+          if (!submitting) nav("/device/expired");
+        }}
+      />
     );
+    // 手机的确认页自带整屏外壳（页头与钉底按钮），不再套一层居中卡片外壳。
+    return mobile ? approval : <AuthLayout>{approval}</AuthLayout>;
   }
 
   return (

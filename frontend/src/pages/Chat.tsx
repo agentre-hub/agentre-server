@@ -1,5 +1,6 @@
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ScopeTab } from "@agentre-hub/agentre-ui";
 import {
   Link,
   useLocation,
@@ -8,9 +9,8 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { MessageCirclePlus, PenLine, Plus } from "lucide-react";
+import { MessageCirclePlus, Plus } from "lucide-react";
 
-import AppControls from "@/components/AppControls";
 import { EmptyState } from "@/components/console";
 import {
   Button,
@@ -21,6 +21,7 @@ import {
   DialogShellHeader,
   DialogShellSubmit,
   ResizableSidebar,
+  SessionLifecycle,
   SessionRowSkeleton,
 } from "@agentre-hub/agentre-ui";
 import AppShell from "@/components/AppShell";
@@ -34,15 +35,18 @@ import type {
   NewConvProject,
 } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
-import { fetchDevices, runsSessions, type DeviceItem } from "@/lib/devices";
+import {
+  deviceDisplayName,
+  fetchDevices,
+  runsSessions,
+  type DeviceItem,
+} from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";
 import ResolvedSessionDetail, {
   type SessionDetailSeed,
 } from "@/components/session/ResolvedSessionDetail";
 import { useIsMobile } from "@/components/use-is-mobile";
-import { UserMenu } from "@/components/UserMenu";
-import { useMe } from "@/hooks/use-me";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import {
   AccountChannelDevicePresence,
@@ -66,9 +70,40 @@ import {
 import {
   ChatIndexPanel,
   ChatSearchField,
+  IndexBanners,
   indexSettled,
-  isAccountEmpty,
 } from "@/pages/chat/ChatIndexPanel";
+import {
+  PhoneChatIndex,
+  type PhoneSubtitle,
+} from "@/pages/chat/PhoneChatIndex";
+import { PhoneScopeSheet } from "@/pages/chat/PhoneScopeSheet";
+import {
+  buildScopeAgentGroups,
+  buildScopeMachines,
+  buildScopeProjects,
+  phoneScopeOf,
+  scopeValueOf,
+  tallyRows,
+} from "@/pages/chat/phoneScopeLists";
+import {
+  countPhoneRows,
+  dataFilterOf,
+  narrowPhoneRows,
+  type PhoneCounts,
+  type PhoneFilter,
+} from "@/pages/chat/phoneRows";
+import {
+  phoneDataAxis,
+  phoneScopeKey,
+  phoneServerScope,
+  readMachineScope,
+  readPhoneScope,
+  withPhoneScope,
+  type PhoneScope,
+} from "@/pages/chat/phoneScope";
+import { stopRowTurn } from "@/pages/chat/stopRowTurn";
+import { useOfflineSince } from "@/pages/chat/useOfflineSince";
 import { ProjectDialogs } from "@/pages/chat/ProjectDialogs";
 import { useMachineReachability } from "@/pages/chat/useMachineReachability";
 import { useProjectManagement } from "@/pages/chat/useProjectManagement";
@@ -80,8 +115,6 @@ import {
   readDeviceParam,
   sessionAddress,
 } from "@/lib/sessionAddress";
-import { type SessionFilter } from "@/lib/sessionView";
-import { MOBILE_TAB_BAR_CLEARANCE } from "@/lib/mobileLayout";
 
 /**
  * 「对话」页 = 这一端**唯一**的会话索引（规格 2026-08-17 决策 1），行来自账号镜像
@@ -123,19 +156,6 @@ interface DraftSeed {
   modelNote?: string;
   effortNote?: string;
   turnStartedAt: number;
-}
-
-/**
- * `?machine=<设备标识>`：把机器轴收到这一台上。
- *
- * `/devices/:deviceId/sessions`（「查看这台机器的对话」）重定向过来时带着它——
- * 那句话说的是**一台**机器，不带范围的话落地看到的是账号下每一台。没带、或者
- * 带了个不是设备标识的东西，就是不收范围：机器轴本身仍是每台在线机器各一组。
- */
-function readMachineScope(raw: string | null): number | null {
-  if (!raw) return null;
-  const id = Number(raw);
-  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 /**
@@ -189,11 +209,9 @@ function FirstSaveDialog({
 }
 
 export default function Chat() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const nav = useNavigate();
   const isMobile = useIsMobile();
-  // 移动端账号进页面自己的顶栏：壳那一条已经让位（ownHeader）。
-  const { me } = useMe();
   const [searchParams, setSearchParams] = useSearchParams();
   /**
    * 右栏（移动端是整屏）开着哪一条，真源是**地址**（规格 2026-09-17-chat-session-url
@@ -223,12 +241,29 @@ export default function Chat() {
     };
   });
 
-  const axis = readAxis(searchParams.get("axis"));
+  /**
+   * 手机上没有轴选择器：地址上那几格读作整页范围（全部 / 一个 Agent / 机器），取数
+   * 的轴由范围定（规格 2026-11-05「首页」）。桌面照旧按地址上的轴。
+   */
+  const phoneScope = useMemo(
+    () => readPhoneScope(searchParams),
+    [searchParams],
+  );
+  const axis = isMobile
+    ? phoneDataAxis(phoneScope)
+    : readAxis(searchParams.get("axis"));
   const machineScope = readMachineScope(searchParams.get("machine"));
 
-  const [filter, setFilter] = useState<SessionFilter>("all");
+  /**
+   * 筛选胶囊。手机多一档「需要你」，端点不认它：向端点要的是 `dataFilter`，「需要你」
+   * 「进行中」再在本地按状态收窄（见 phoneRows）。桌面只会落在端点认的三档里。
+   */
+  const [filter, setFilter] = useState<PhoneFilter>("all");
+  const dataFilter = dataFilterOf(filter);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
-  const [agents, setAgents] = useState<NewConvAgent[]>([]);
+  const [agents, setAgents] = useState<
+    (NewConvAgent & { department_name?: string })[]
+  >([]);
   /**
    * Agent 清单**问过了**没有。空数组是它的初值，而挑 Agent 那一屏把空清单读作
    * 「账号里一个 Agent 都没有，去桌面端建一个」——`/chat?compose=1` 直接落在那一
@@ -333,7 +368,8 @@ export default function Chat() {
   const sessionIndex = useSessionIndex({
     axis,
     devices,
-    filter,
+    filter: dataFilter,
+    scope: isMobile ? phoneServerScope(phoneScope) : undefined,
     onDeleted: onSessionDeleted,
     onSaved: onSessionSaved,
   });
@@ -462,7 +498,10 @@ export default function Chat() {
 
   /** 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。 */
   useAliveEffect((alive) => {
-    Promise.all([fetchDevices(), fetchAgents()])
+    Promise.all([
+      fetchDevices(),
+      fetchAgents<NewConvAgent & { department_name?: string }>(),
+    ])
       .then(([d, a]) => {
         if (!alive()) return;
         setDevices(d);
@@ -516,7 +555,7 @@ export default function Chat() {
     axis,
     machineScope,
     keyword: sessionIndex.debouncedSearch,
-    filter,
+    filter: dataFilter,
   });
   const { forgetResolved } = reach;
 
@@ -597,6 +636,15 @@ export default function Chat() {
       // 自己动手换轴的人要的是完整的那一份。再点一次机器轴因此回到每台一组。
       params.delete("machine");
       setSearchParams(params, { replace: true });
+    },
+    [axis, searchParams, setSearchParams, forgetResolved],
+  );
+
+  /** 手机换整页范围（长按「只看这个 Agent / 这台机器」、空态「按机器看」）。 */
+  const setPhoneScope = useCallback(
+    (next: PhoneScope) => {
+      if (axis === "machine" && next.kind !== "machine") forgetResolved();
+      setSearchParams(withPhoneScope(searchParams, next), { replace: true });
     },
     [axis, searchParams, setSearchParams, forgetResolved],
   );
@@ -700,7 +748,7 @@ export default function Chat() {
               mirrorRows: sessionIndex.mirrorRows,
               fromMirrorRow,
               fromMachineRow,
-              filter,
+              filter: dataFilter,
             })
         : null,
     [
@@ -711,7 +759,7 @@ export default function Chat() {
       sessionIndex.rangePending,
       fromMirrorRow,
       fromMachineRow,
-      filter,
+      dataFilter,
     ],
   );
 
@@ -722,14 +770,14 @@ export default function Chat() {
    * 口径,拿它的总数去配筛过的行,组头会写着「查看全部 3500」而下面只有两条。
    */
   const machineTotals = useMemo(() => {
-    if (filter !== "all") return {};
+    if (dataFilter !== "all") return {};
     const totals: Record<number, number> = {};
     for (const device of reach.onlineMachines) {
       const machine = reach.resolved[device.fingerprint];
       if (machine) totals[device.id] = machine.total;
     }
     return totals;
-  }, [filter, reach.onlineMachines, reach.resolved]);
+  }, [dataFilter, reach.onlineMachines, reach.resolved]);
 
   /**
    * 组键 → 这一组在当前范围下的真数（决策 6）。服务端按**它自己的**组身份说话
@@ -831,7 +879,7 @@ export default function Chat() {
               mirrorRows,
               fromMirrorRow,
               fromMachineRow,
-              filter,
+              filter: dataFilter,
             }),
             cursor: page.hasMore ? page.cursor : null,
             hasMore: page.hasMore,
@@ -849,7 +897,7 @@ export default function Chat() {
       fetchGroupPage,
       fromMirrorRow,
       fromMachineRow,
-      filter,
+      dataFilter,
       onlineMachines,
       resolvedMachines,
       loadMachinePage,
@@ -863,14 +911,14 @@ export default function Chat() {
         mirrorRows: sessionIndex.mirrorRows,
         fromMirrorRow,
         search: sessionIndex.debouncedSearch,
-        filter,
+        filter: dataFilter,
       }),
     [
       machineRowsByDevice,
       sessionIndex.mirrorRows,
       fromMirrorRow,
       sessionIndex.debouncedSearch,
-      filter,
+      dataFilter,
     ],
   );
 
@@ -959,18 +1007,7 @@ export default function Chat() {
     );
   }, [sessionIndex.pendingDelete, reach.devicesByFp]);
 
-  const empty = isAccountEmpty({
-    accountTotal: sessionIndex.accountTotal,
-    axis,
-    machineCount: reach.machines.length,
-    projectCount: projects.length,
-    agentCount: agentInfos.length,
-  });
-  // `empty` also accounts for authoritative empty groups so mobile does not hide
-  // them. The desktop detail copy answers the narrower account-level question.
   const accountEmpty = sessionIndex.accountTotal === 0;
-  const mobileTrueEmpty =
-    empty && sessionIndex.debouncedSearch === "" && filter === "all";
   /*
     没选中对话、也不在草稿时右栏自己那条顶带：与左列顶行同高（56px，与共享包
     SessionHeaderBand 同一档）。
@@ -987,13 +1024,6 @@ export default function Chat() {
   const chromeBand = (
     <div data-testid="chat-chrome" className="h-14 shrink-0" />
   );
-
-  /*
-    手机上草稿与「从项目里挑」各占一整屏，盖住了索引那条页头（语言/主题原本在那里），
-    手机上又没有侧栏接住它们——由这两屏自己的页头右端接住，与索引页头同一组控件。
-    桌面不摆：它们属于外框，在侧栏底部。
-  */
-  const mobileComposeControls = isMobile ? <AppControls /> : undefined;
 
   const composePick = (
     <NewConversationPane
@@ -1012,7 +1042,6 @@ export default function Chat() {
       onPick={(agent) => setCompose({ step: "draft", agent })}
       onBack={() => setCompose({ step: "pick" })}
       onNewProject={projectManagement.openCreate}
-      headerActions={mobileComposeControls}
       projectsSettled={projectsSettled}
       agentsSettled={agentsSettled}
     />
@@ -1027,7 +1056,7 @@ export default function Chat() {
         onStarted={(session) => onDraftStarted(session, compose.agent)}
         // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
         onBack={isMobile ? () => setCompose(null) : undefined}
-        headerActions={mobileComposeControls}
+        onChangeRecipient={beginCompose}
       />
     ) : null;
 
@@ -1040,13 +1069,177 @@ export default function Chat() {
     projectsSettled &&
     agentsSettled;
 
+  /*
+    手机首页（规格 2026-11-05「首页（对话列表）」）：不按轴分组，按 需要你 / 进行中 /
+    今天 / 更早 分段，所以要的是这一范围下**平铺的整份**行——机器那一档取每台机器
+    交出的整份（不是桌面每台先列几条的那一截）。
+  */
+  const phoneBaseRows = useMemo(
+    () =>
+      !isMobile
+        ? []
+        : machineRowsByDevice
+          ? [...machineRowsByDevice.values()].flat()
+          : view.rows,
+    [isMobile, machineRowsByDevice, view.rows],
+  );
+  const phoneRows = useMemo(
+    () => narrowPhoneRows(phoneBaseRows, filter),
+    [phoneBaseRows, filter],
+  );
+  // 机器那一档：范围刚换、或在线机器还没交出清单时，空列表说明不了「没有对话」。
+  const phoneSettled =
+    settled &&
+    !(
+      axis === "machine" &&
+      phoneBaseRows.length === 0 &&
+      ((sessionIndex.rangePending && !sessionIndex.loadError) ||
+        Object.values(reach.machineStates).some((s) => s === "connecting"))
+    );
+
+  /*
+    胶囊上的数。「需要你」「进行中」在端点那一档是「全部」或「运行中」时就数得出来
+    （两档都含全部在跑的行）；选到「未读」时手上只剩未读的行，数不出来，沿用同一范围
+    下最后数出来的那一份，免得点一下「未读」另外两枚的数就消失。「未读」在服务端那几
+    轴上是端点在完整集合上数的；机器那一档只有手上这一份，同理只在「全部」时数。
+  */
+  const localCounts = useMemo(
+    () => countPhoneRows(phoneBaseRows),
+    [phoneBaseRows],
+  );
+  const countsKey = `${phoneScopeKey(phoneScope)}|${sessionIndex.debouncedSearch}`;
+  const [heldCounts, setHeldCounts] = useState<{
+    key: string;
+    counts: PhoneCounts;
+  } | null>(null);
+  const held = heldCounts?.key === countsKey ? heldCounts.counts : null;
+  const statusCountsLive = phoneSettled && dataFilter !== "unread";
+  const phoneCounts: PhoneCounts = {
+    attention: statusCountsLive
+      ? localCounts.attention
+      : (held?.attention ?? 0),
+    running: statusCountsLive ? localCounts.running : (held?.running ?? 0),
+    unread:
+      axis !== "machine"
+        ? sessionIndex.unreadTotal
+        : phoneSettled && dataFilter === "all"
+          ? localCounts.unread
+          : (held?.unread ?? 0),
+  };
+  if (
+    isMobile &&
+    (held === null ||
+      held.attention !== phoneCounts.attention ||
+      held.running !== phoneCounts.running ||
+      held.unread !== phoneCounts.unread)
+  ) {
+    setHeldCounts({ key: countsKey, counts: phoneCounts });
+  }
+
+  /** 列表载入之后断网：副标题换成「没有网络 · HH:MM 的内容」，不加横幅。 */
+  const offlineSince = useOfflineSince();
+
+  /** 长按「停止这一轮」：只给在跑、且承载它的机器在线（停止发得出去）的那几行。 */
+  const onlineDeviceIds = useMemo(
+    () => new Set(devices.filter((d) => d.online).map((d) => d.id)),
+    [devices],
+  );
+  const stopTurnOf = useCallback(
+    (row: MirrorIndexRow) =>
+      row.lifecycleState === SessionLifecycle.running &&
+      row.deviceId !== undefined &&
+      onlineDeviceIds.has(row.deviceId)
+        ? () => void stopRowTurn(row)
+        : undefined,
+    [onlineDeviceIds],
+  );
+  const filterAgentOf = useCallback(
+    (row: MirrorIndexRow) =>
+      row.agentSyncId &&
+      !(
+        phoneScope.kind === "agent" &&
+        phoneScope.agentSyncId === row.agentSyncId
+      )
+        ? () => setPhoneScope({ kind: "agent", agentSyncId: row.agentSyncId })
+        : undefined,
+    [phoneScope, setPhoneScope],
+  );
+  const filterMachineOf = useCallback(
+    (row: MirrorIndexRow) => {
+      const deviceId = row.deviceId;
+      if (deviceId === undefined) return undefined;
+      if (phoneScope.kind === "machine" && phoneScope.deviceId === deviceId) {
+        return undefined;
+      }
+      return () => setPhoneScope({ kind: "machine", deviceId });
+    },
+    [phoneScope, setPhoneScope],
+  );
+  /*
+    范围弹层（规格 2026-11-05「首页」）：点标题「范围名 ⌄」升起，落在当前范围所在的那
+    一档（全部时从「项目」起）；空态「按机器看」落在「机器」。选中即换整页范围并关掉。
+  */
+  const [scopeSheet, setScopeSheet] = useState<{
+    open: boolean;
+    tab: ScopeTab;
+  }>({ open: false, tab: "project" });
+  const openScopeSheet = useCallback(
+    (tab?: ScopeTab) =>
+      setScopeSheet({
+        open: true,
+        tab: tab ?? (phoneScope.kind === "all" ? "project" : phoneScope.kind),
+      }),
+    [phoneScope.kind],
+  );
+  const closeScopeSheet = useCallback(
+    (open: boolean) => setScopeSheet((prev) => ({ ...prev, open })),
+    [],
+  );
+  const selectScope = useCallback(
+    (value: Parameters<typeof phoneScopeOf>[0]) => {
+      setPhoneScope(phoneScopeOf(value));
+      setScopeSheet((prev) => ({ ...prev, open: false }));
+    },
+    [setPhoneScope],
+  );
+  /*
+    每项的数：控制台没有逐项计数的端点，数的是已载入的行。换了范围之后手上只剩那一
+    范围的行，别的项会数成 0——所以只在「全部」、筛选为全部且没在搜索时刷新（搜索中
+    手上只剩命中行），其余时候沿用最后数出来的那一份（与上面胶囊的 held 同一个做法）；
+    一份都还没数过（直接打开某个范围）时是 null，清单不摆数。
+  */
+  const liveTally = useMemo(() => tallyRows(phoneBaseRows), [phoneBaseRows]);
+  const tallyFresh =
+    phoneScope.kind === "all" &&
+    dataFilter === "all" &&
+    sessionIndex.debouncedSearch === "" &&
+    phoneSettled;
+  const [heldTally, setHeldTally] = useState<typeof liveTally | null>(null);
+  if (isMobile && tallyFresh && heldTally !== liveTally) {
+    setHeldTally(liveTally);
+  }
+  const scopeTally = tallyFresh ? liveTally : heldTally;
+  const scopeProjects = useMemo(
+    () => buildScopeProjects(projects, scopeTally),
+    [projects, scopeTally],
+  );
+  const scopeAgentGroups = useMemo(
+    () =>
+      buildScopeAgentGroups(agents, scopeTally, t("chat.phone.noDepartment")),
+    [agents, scopeTally, t],
+  );
+  const scopeMachines = useMemo(
+    () => buildScopeMachines(devices, scopeTally),
+    [devices, scopeTally],
+  );
+
   const index = (
     <ChatIndexPanel
       sessionIndex={sessionIndex}
       reach={reach}
       axis={axis}
       onAxisChange={setAxis}
-      filter={filter}
+      filter={dataFilter}
       onFilterChange={setFilter}
       view={view}
       selectedKey={selectedKey}
@@ -1075,7 +1268,6 @@ export default function Chat() {
   // 在 JSX 之外先算好：i18next/no-literal-string 会把 JSX 里的
   // `renderSearchField("sm")` 当成一段裸文案报出来。
   const searchFieldSm = renderSearchField("sm");
-  const searchFieldMd = renderSearchField("md");
 
   /*
     桌面的会话列表列。它是索引列：交给壳的 `index` 槽，摆在外框上、内容页左侧
@@ -1122,23 +1314,113 @@ export default function Chat() {
 
   // 移动端单列：地址上开着一条会话时整屏就是它的详情，索引留在后退的那一格里。
   if (isMobile && openConversationId) {
+    /*
+      页头 ⋯ 里的「删除」（规格 2026-11-05：长按菜单的每一项在别处都有看得见的入口，
+      删除的那一处是对话页 ⋯）。与列表行同一个确认层、同一个删除；只给账号里存着的
+      那一行（未保存的会话没有可删的账号副本，列表行上同样不摆）。删掉之后
+      onSessionDeleted 收起详情、回到列表。
+    */
+    const deletableRow =
+      selectedRow && selectedRow.saved !== false ? selectedRow : undefined;
     return (
-      <ResolvedSessionDetail
-        conversationId={openConversationId}
-        deviceParam={deviceParam}
-        seed={detailSeed}
-        form="page"
-        backTo={chatIndexAddress(location.search)}
-        initialTitle={detailTitle}
-        initialUserText={openSeed?.userText}
-        initialAgent={openSeed?.agent}
-        initialModelNote={openSeed?.modelNote}
-        initialEffortNote={openSeed?.effortNote}
-        initialTurnStartedAt={openSeed?.turnStartedAt}
-        onMarkedRead={markRead}
-      />
+      <>
+        <ResolvedSessionDetail
+          conversationId={openConversationId}
+          deviceParam={deviceParam}
+          seed={detailSeed}
+          form="page"
+          backTo={chatIndexAddress(location.search)}
+          initialTitle={detailTitle}
+          initialUserText={openSeed?.userText}
+          initialAgent={openSeed?.agent}
+          initialModelNote={openSeed?.modelNote}
+          initialEffortNote={openSeed?.effortNote}
+          initialTurnStartedAt={openSeed?.turnStartedAt}
+          onMarkedRead={markRead}
+          onDelete={
+            deletableRow
+              ? () => sessionIndex.askDelete(deletableRow)
+              : undefined
+          }
+        />
+        <DeleteSessionDialog
+          open={sessionIndex.pendingDelete !== null}
+          onOpenChange={(open) => {
+            if (!open) sessionIndex.cancelDelete();
+          }}
+          machineName={deleteTargetMachine?.name}
+          machineOnline={deleteTargetMachine?.online}
+          machineKind={deleteTargetMachine?.kind}
+          pending={sessionIndex.deleting}
+          onConfirm={() => void sessionIndex.confirmDelete()}
+        />
+      </>
     );
   }
+
+  /*
+    手机页头：范围名 + 一句状态（规格「首页」页头）。全部范围写在线机器数；选了 Agent
+    或机器时写它的在线状态；本次打开后列表载入过、随后断网时换成「没有网络 · HH:MM
+    的内容」。
+  */
+  const sessionMachines = devices.filter(runsSessions);
+  const scopedAgent =
+    phoneScope.kind === "agent"
+      ? agents.find((a) => a.sync_id === phoneScope.agentSyncId)
+      : undefined;
+  const scopedDevice =
+    phoneScope.kind === "machine" && phoneScope.deviceId !== null
+      ? devices.find((d) => d.id === phoneScope.deviceId)
+      : undefined;
+  const phoneTitle =
+    phoneScope.kind === "agent"
+      ? (scopedAgent?.name ?? t("sessionIndex.group.unnamedAgent"))
+      : phoneScope.kind === "machine"
+        ? phoneScope.deviceId === null
+          ? t("chat.phone.scopeMachines")
+          : scopedDevice
+            ? deviceDisplayName(scopedDevice)
+            : t("chat.noMachine")
+        : phoneScope.kind === "project"
+          ? (projects.find((p) => p.syncId === phoneScope.projectSyncId)
+              ?.name ?? t("chat.phone.scopeAll"))
+          : t("chat.phone.scopeAll");
+  const presence = (online: boolean): PhoneSubtitle => ({
+    text: t(online ? "chat.phone.online" : "chat.phone.offline"),
+    dot: online ? "running" : "idle",
+  });
+  const onlineMachineCount = sessionMachines.filter((d) => d.online).length;
+  const phoneSubtitle: PhoneSubtitle =
+    offlineSince !== null && sessionIndex.loaded
+      ? {
+          text: t("chat.phone.offlineSince", {
+            time: new Date(offlineSince).toLocaleTimeString(i18n.language, {
+              hour: "2-digit",
+              minute: "2-digit",
+              hourCycle: "h23",
+            }),
+          }),
+          dot: "idle",
+        }
+      : phoneScope.kind === "agent"
+        ? presence(!!scopedAgent?.has_available_target)
+        : scopedDevice
+          ? presence(scopedDevice.online)
+          : {
+              text: t("chat.phone.machinesOnline", {
+                online: onlineMachineCount,
+                total: sessionMachines.length,
+              }),
+              dot: onlineMachineCount > 0 ? "running" : "idle",
+            };
+  /**
+   * 搜索框下「命中几条」。端点那几轴、且没有本地再收窄时，是端点在完整集合上数的；
+   * 机器那一档与「需要你 / 进行中」只能数手上这一份。
+   */
+  const phoneSearchCount =
+    axis !== "machine" && (filter === "all" || filter === "unread")
+      ? sessionIndex.indexGroups.reduce((n, g) => n + (g.total ?? 0), 0)
+      : phoneRows.length;
 
   return (
     <AppShell
@@ -1167,99 +1449,56 @@ export default function Chat() {
           {compose.step === "draft" ? composeDraft : composeProject}
         </div>
       ) : isMobile ? (
-        /* 移动形态（屏 20/32）：同一套四个轴（决策 5，不再有只属于移动端的状态分组）
-           + 屏 32 空态；可触达的真实搜索：加载完成后始终显示，过滤索引里的行。 */
-        <div className="flex h-full min-h-0 flex-col">
-          {/*
-            这一带由页面自己排（壳的 ownHeader）。此前是把桌面那一套 right 槽整个
-            塞进壳的 52px：标题被截成「对.」、「桌面端已连接」折成两行、「去设备上
-            找对话」也折成两行，整条被撑到 ~100px 还是挤的。窄屏上「标题 + 页面动作
-            + 账号 + 语言/主题」本来就不该抢同一行。
-
-            第一行只留**身份与全局控件**，搜索自成第二行。这一带 shrink-0，滚的是
-            它下面那一块：单列长表里滚到第 40 条想换个搜索词，不必先滚回去。
-          */}
-          <header
-            data-testid="chat-mobile-header"
-            /* 这一条顶栏由页面自己排（壳走 ownHeader，够不着它），所以安全区也得
-               自己让：viewport-fit=cover 之后内容会伸到状态栏底下，无刘海设备
-               env() 为 0、与改动前逐像素相同。
-
-               与壳在手机上的顶栏同一层：落在外框色上，和下面那张铺满的内容页靠
-               色阶分开，不画底线（规格 2026-10-15 决策 3）。 */
-            className="shrink-0 bg-chrome pt-[env(safe-area-inset-top,0px)]"
-          >
-            <div className="flex h-[52px] items-center gap-2 px-3">
-              <span className="shrink-0 text-prose font-bold text-foreground">
-                {t("nav.chat")}
-              </span>
-              <span className="flex-1" />
-              {me && <UserMenu me={me} compact />}
-              <AppControls />
-            </div>
-            {/* 同一真实搜索框在加载完成后始终可触达（含空态）：空态时不隐藏主空态、
-                不制造结果；有会话时继续真实过滤索引里的行。 */}
-            {settled && (
-              <div className="flex items-center gap-2 px-3 pb-2">
-                {searchFieldMd}
-              </div>
-            )}
-          </header>
-          <div
-            aria-busy={!settled || undefined}
-            className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5"
-          >
-            {!settled ? <SessionRowSkeleton /> : null}
-            {settled && mobileTrueEmpty ? (
-              /* 空态沿用屏 32（共享 EmptyState）：标题/正文/主按钮文案与桌面一致。 */
-              <EmptyState
-                icon={MessageCirclePlus}
-                title={t("chat.noSessions")}
-                body={t("chat.startFirstBody")}
-                testId="chat-empty-state"
-                action={
-                  <>
-                    <Button size="lg" onClick={openCompose}>
-                      {t("chat.startFirst")}
-                    </Button>
-                    {hasOnlineMachine ? (
-                      <Button
-                        variant="ghost"
-                        onClick={() => setAxis("machine")}
-                      >
-                        {t("chat.findOnMachine")}
-                      </Button>
-                    ) : (
-                      <Link
-                        to="/devices"
-                        className="text-sm font-medium text-primary-text hover:underline"
-                      >
-                        {t("chat.addDevice")}
-                      </Link>
-                    )}
-                  </>
-                }
-              />
-            ) : null}
-            {/* 一条会话都没有时由上面那个空态独自承接：移动端只有一列，索引再印一遍
-              「还没有对话」就是同一句话说两遍。桌面端两列各说各的，不受这一条管。 */}
-            {settled && !mobileTrueEmpty && index}
-            {/* 移动有会话时：新建入口（IC5sH 的 pen-line FAB），在底栏之上。它只在
-              有会话时出现，所以可访问名是「新对话」——「开始第一个对话」在这里
-              与事实相反，而屏幕阅读器上这个名字就是它的全部。 */}
-            {settled && !mobileTrueEmpty && (
-              <button
-                type="button"
-                aria-label={t("chat.startNew")}
-                className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-overlay"
-                style={{ bottom: MOBILE_TAB_BAR_CLEARANCE }}
-                onClick={openCompose}
-              >
-                <PenLine className="size-5" aria-hidden="true" />
-              </button>
-            )}
-          </div>
-        </div>
+        <>
+          <PhoneChatIndex
+            scopeKey={phoneScopeKey(phoneScope)}
+            scopeTitle={phoneTitle}
+            subtitle={phoneSubtitle}
+            onOpenScope={() => openScopeSheet()}
+            onCompose={openCompose}
+            searchQuery={sessionIndex.searchQuery}
+            onSearchChange={sessionIndex.setSearchQuery}
+            searchCount={phoneSearchCount}
+            settled={phoneSettled}
+            rows={phoneRows}
+            filter={filter}
+            onFilterChange={setFilter}
+            counts={phoneCounts}
+            accountTotal={sessionIndex.accountTotal ?? undefined}
+            agents={agentInfos}
+            projects={projects}
+            hideAgent={phoneScope.kind === "agent"}
+            sessionPath={sessionPath}
+            stopTurnOf={stopTurnOf}
+            filterAgentOf={filterAgentOf}
+            filterMachineOf={filterMachineOf}
+            onDelete={sessionIndex.askDelete}
+            onSave={sessionIndex.onSave}
+            hasOnlineMachine={hasOnlineMachine}
+            onFindOnMachine={() => openScopeSheet("machine")}
+            hasMore={sessionIndex.hasMore}
+            loadingMore={sessionIndex.loadingMore}
+            loadMoreFailed={sessionIndex.loadMoreFailed}
+            onLoadMore={sessionIndex.loadMore}
+            banners={
+              sessionIndex.loadError || sessionIndex.saveFailure ? (
+                <IndexBanners sessionIndex={sessionIndex} />
+              ) : undefined
+            }
+          />
+          <PhoneScopeSheet
+            open={scopeSheet.open}
+            onOpenChange={closeScopeSheet}
+            tab={scopeSheet.tab}
+            onTabChange={(tab) => setScopeSheet((prev) => ({ ...prev, tab }))}
+            allCount={sessionIndex.accountTotal ?? undefined}
+            selected={scopeValueOf(phoneScope)}
+            projects={scopeProjects}
+            agentGroups={scopeAgentGroups}
+            machines={scopeMachines}
+            onSelect={selectScope}
+          />
+        </>
       ) : (
         /* 桌面（屏 49b）：右侧详情区。左边那列会话列表是索引列，由壳摆在外框上
            （见上面的 desktopIndex）；这里只剩内容页里的详情。壳已经把整块主区交出来

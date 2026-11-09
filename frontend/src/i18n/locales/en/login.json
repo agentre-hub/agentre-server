@@ -20,5 +20,8 @@
     "passkey_origin_not_allowed": "This site is not on the passkey allow list. Ask an administrator to check the server configuration.",
     "passkey_credential_unknown": "This passkey does not belong to any usable account — it may have been removed. Sign in with GitHub instead.",
     "passkey_counter_rollback": "This passkey’s security counter looks wrong, so the sign-in was refused. Sign in with GitHub and remove it."
-  }
+  },
+  "consentHint": "Tick the box to agree first",
+  "deviceContinue": "Sign in to continue authorizing this device",
+  "tagline": "Follow conversations, approve actions and manage devices from your phone."
 }

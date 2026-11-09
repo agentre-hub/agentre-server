@@ -17,25 +17,9 @@ import { MemoryRouter } from "react-router-dom";
 
 import i18n from "@/i18n";
 import { ApiError } from "@/lib/api";
-import { MOBILE_TAB_BAR_HEIGHT } from "@/lib/mobileLayout";
 
-/**
- * jsdom 的 CSS 解析器会改写 `calc(... env(...))`（不是真浏览器行为），所以直接比
- * 字符串会误红。把常量同样喂给一个探针元素再读回，比较的是「同一个常量」。
- */
-function jsdomStyleOf(prop: "height" | "bottom", value: string): string {
-  const probe = document.createElement("div");
-  probe.style[prop] = value;
-  return probe.style[prop];
-}
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  Gauge,
-  Laptop,
-  LayoutDashboard,
-  ListFilter,
-  MessagesSquare,
-} from "lucide-react";
+import { Gauge, Laptop, LayoutDashboard, ListFilter } from "lucide-react";
 
 import { edgeClasses } from "./helpers/edge-classes";
 import {
@@ -44,7 +28,6 @@ import {
   EmptyState,
   InlineEmpty,
   Metric,
-  MobileTabBar,
   StatusMark,
 } from "@/components/console";
 
@@ -314,98 +297,6 @@ describe("ConsoleNavItem（ZC7pI）", () => {
     expect(screen.getByRole("link", { name: /Overview/ }).className).toContain(
       "relative",
     );
-  });
-});
-
-describe("MobileTabBar（A6Z3k）", () => {
-  const items = [
-    {
-      to: "/overview",
-      label: "Overview",
-      Icon: LayoutDashboard,
-    },
-    { to: "/chat", label: "Chat", Icon: MessagesSquare },
-  ];
-
-  it("渲染每个目的地为链接，整体是带 aria-label 的导航", () => {
-    render(
-      <MemoryRouter initialEntries={["/overview"]}>
-        <MobileTabBar items={items} ariaLabel="Primary" />
-      </MemoryRouter>,
-    );
-    const nav = screen.getByRole("navigation", { name: "Primary" });
-    expect(screen.getByRole("link", { name: "Overview" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Chat" })).toBeTruthy();
-    // 高度是「内容 52px + 上下内边距 + 安全区」：无刘海设备 env() 为 0。
-    expect(nav.style.height).toBe(
-      jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
-    );
-    expect(nav.className).toContain(
-      "pb-[calc(14px_+_env(safe-area-inset-bottom,0px))]",
-    );
-  });
-
-  it("落在外框上：外框色、上沿不画线——与内容页之间只靠色阶分开", () => {
-    render(
-      <MemoryRouter initialEntries={["/overview"]}>
-        <MobileTabBar items={items} ariaLabel="Primary" />
-      </MemoryRouter>,
-    );
-    const nav = screen.getByRole("navigation", { name: "Primary" });
-    expect(nav.className).toContain("bg-chrome");
-    expect(nav.className).not.toContain("bg-card");
-    expect(edgeClasses(nav)).toEqual([]);
-  });
-
-  it("当前 tab 高亮（primary-text + 600），其余用 subtle", () => {
-    render(
-      <MemoryRouter initialEntries={["/overview"]}>
-        <MobileTabBar items={items} />
-      </MemoryRouter>,
-    );
-    const active = screen.getByRole("link", { name: "Overview" });
-    const idle = screen.getByRole("link", { name: "Chat" });
-    expect(active.className).toContain("text-primary-text");
-    expect(idle.className).toContain("text-muted-foreground");
-    // 高亮 tab 的文案字重 600。
-    expect(within(active).getByText("Overview").className).toContain(
-      "font-semibold",
-    );
-    assertNoNarration(document.body, "MobileTabBar");
-  });
-
-  // 窄屏此前完全看不到「有多少条在等你」：外壳派生移动 tabs 时把 badge 丢掉了。
-  // 底部这条栏是移动端的主导航，那颗角标该在的地方就是这里。
-  it("角标与侧栏同一形状：>0 才画，带 title 说明它是什么", () => {
-    render(
-      <MemoryRouter initialEntries={["/overview"]}>
-        <MobileTabBar
-          items={[items[0], { ...items[1], badge: 3, badgeLabel: "3 unread" }]}
-        />
-      </MemoryRouter>,
-    );
-    const chat = screen.getByRole("link", { name: /Chat/ });
-    expect(within(chat).getByText("3")).toBeTruthy();
-    expect(within(chat).getByTitle("3 unread")).toBeTruthy();
-  });
-
-  it("0 与「没问出来」都不画——一个显示出来的 0 会被读成「都处理完了」", () => {
-    render(
-      <MemoryRouter initialEntries={["/overview"]}>
-        <MobileTabBar
-          items={[
-            { ...items[0], badge: 0 },
-            { ...items[1], badge: null },
-          ]}
-        />
-      </MemoryRouter>,
-    );
-    expect(
-      within(screen.getByRole("link", { name: /Overview/ })).queryByText("0"),
-    ).toBeNull();
-    expect(
-      within(screen.getByRole("link", { name: /Chat/ })).queryByText(/^\d+$/),
-    ).toBeNull();
   });
 });
 

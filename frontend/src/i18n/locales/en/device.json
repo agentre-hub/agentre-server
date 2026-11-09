@@ -25,7 +25,8 @@
     "allow": "Allow access",
     "deny": "Deny",
     "fineprint": "You can revoke this device's access at any time under Console → Devices.",
-    "actionFailedWhat": "That did not go through"
+    "actionFailedWhat": "That did not go through",
+    "mobileTitle": "Authorize device"
   },
   "kind": {
     "desktop": "Desktop",
@@ -93,7 +94,9 @@
       "desktopTitle": "No service to register",
       "desktopDesc": "The desktop app has agentred built in; it is online whenever the app is open.",
       "finish": "Done"
-    }
+    },
+    "close": "Close",
+    "share": "Send to computer"
   },
   "manage": {
     "loadError": "Could not load your devices. Please try again.",
@@ -131,7 +134,11 @@
     "renameLabel": "Device name",
     "renameSave": "Save",
     "renameCancel": "Cancel",
-    "renameError": "Could not rename this device. Please try again."
+    "renameError": "Could not rename this device. Please try again.",
+    "mobile": {
+      "onlineSummary": "{{online}} / {{total}} online",
+      "upgradable": "Upgrade available"
+    }
   },
   "upgrade": {
     "badge": "Upgradable to {{version}}",
@@ -190,5 +197,6 @@
     "actionFailedWhat": "That didn't go through",
     "openFailedWhat": "Couldn't open the forwarded address",
     "linkUnavailable": "This deployment can't offer port forwarding right now."
-  }
+  },
+  "eyebrowWithCode": "Device authorization · {{code}}"
 }

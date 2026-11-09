@@ -2502,6 +2502,45 @@ describe("会话详情页:插话之后的排队队列", () => {
     await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
   });
 
+  // agentred 的「取走了」只走预览帧（持久那一份是转录里的一行 user_message）。只认
+  // 持久帧的话 chip 留到轮末被当成「没送到」，同一句话既进了转录又挂上恢复横幅。
+  it("Given 排着一条 When 预览帧 steer_consumed 带同一个句柄 Then chip 消失，轮末也不挂恢复横幅", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() =>
+      capturedOpts.onPreviewEvent?.(
+        {
+          conversationId: "42",
+          event: {
+            kind: "steer_consumed",
+            steers: [{ queuedId: "q-remote-1", text: "先别动数据库" }],
+          },
+        } as never,
+        0,
+      ),
+    );
+    await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+
+    act(() =>
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        stopErrMsg: "interrupted",
+      } as never),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Restore as draft" }),
+    ).toBeNull();
+  });
+
   // Given 队列里排着一条 / When 用户点撤回 / Then 发 runtime.cancelSteer，并按对端
   // 返回的 removed 移除 —— 撤掉了哪几条由对端说了算，不是点一下就乐观清掉。
   it("Given 排着一条 When 点撤回 Then 发 cancelSteer 并按 removed 移除", async () => {

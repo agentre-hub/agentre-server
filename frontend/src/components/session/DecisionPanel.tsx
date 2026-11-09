@@ -1,5 +1,6 @@
 import {
   CanonicalToolRouter,
+  ShortcutHintsProvider,
   TranscriptPortsProvider,
   TranscriptUIStateProvider,
   type AnswerToolPermissionInput,
@@ -9,6 +10,7 @@ import {
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useIsMobile } from "@/components/use-is-mobile";
 import { waiterBlocks } from "@/lib/waiterBlocks";
 
 /**
@@ -75,6 +77,9 @@ export default function DecisionPanel({
   ports,
 }: DecisionPanelProps) {
   const { t } = useTranslation();
+  // 手机上卡片不画 ↵ / Esc 键帽：没有键盘可按。这些卡不在转录的渲染上下文里，
+  // 隐藏键帽的开关只能由面板自己给（不传 = 沿用外层，桌面照旧）。
+  const isMobile = useIsMobile();
   const blocks = useMemo(
     () => waiterBlocks({ toolPermissions, askUserQuestions }),
     [toolPermissions, askUserQuestions],
@@ -98,28 +103,30 @@ export default function DecisionPanel({
     // 早先挂在这里的是「没有待处理的请求」，辅助技术会把一屏等着人批的审批卡
     // 念成那句话。
     <TranscriptPortsProvider ports={transcriptPorts}>
-      <TranscriptUIStateProvider>
-        <div className="space-y-3">
-          {handledRequestId && (
-            <p
-              role="status"
-              className="rounded-lg bg-field-fill px-3 py-2 text-sm text-muted-foreground"
-            >
-              {t("session.decision.alreadyHandled")}
-            </p>
-          )}
-          {blocks.map(({ requestId, block }) => (
-            <CanonicalToolRouter
-              key={requestId}
-              toolBlock={block}
-              sessionId={sessionId}
-              // 折叠态按 requestId 记：刷新一次 waiters 不该把用户刚展开的
-              // 那张卡收回去。
-              uiStateKey={`waiter:${requestId}`}
-            />
-          ))}
-        </div>
-      </TranscriptUIStateProvider>
+      <ShortcutHintsProvider hidden={isMobile || undefined}>
+        <TranscriptUIStateProvider>
+          <div className="space-y-3">
+            {handledRequestId && (
+              <p
+                role="status"
+                className="rounded-lg bg-field-fill px-3 py-2 text-sm text-muted-foreground"
+              >
+                {t("session.decision.alreadyHandled")}
+              </p>
+            )}
+            {blocks.map(({ requestId, block }) => (
+              <CanonicalToolRouter
+                key={requestId}
+                toolBlock={block}
+                sessionId={sessionId}
+                // 折叠态按 requestId 记：刷新一次 waiters 不该把用户刚展开的
+                // 那张卡收回去。
+                uiStateKey={`waiter:${requestId}`}
+              />
+            ))}
+          </div>
+        </TranscriptUIStateProvider>
+      </ShortcutHintsProvider>
     </TranscriptPortsProvider>
   );
 }

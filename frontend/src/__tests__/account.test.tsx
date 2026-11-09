@@ -17,6 +17,7 @@ import {
   type ObservedCreationOptions,
 } from "@/test/webauthn";
 import Account from "@/pages/Account";
+import { signOut } from "@/lib/signOut";
 import { edgeClasses } from "./helpers/edge-classes";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -25,6 +26,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 const mockedApi = vi.mocked(api);
+
+vi.mock("@/lib/signOut", () => ({ signOut: vi.fn() }));
+const mockedSignOut = vi.mocked(signOut);
 
 /**
  * 规格「用户菜单与 /account」：三张卡（账号 / 通行密钥 / 登录会话），单列纵向
@@ -798,7 +802,7 @@ describe("Account page: mobile layout on 390px screen", () => {
     renderAccount();
 
     // Expand first session row to see the times
-    const desktopButton = (await screen.findByText(UA_DESKTOP)).closest(
+    const desktopButton = (await screen.findByText("Mac · Chrome")).closest(
       "button",
     ) as HTMLElement;
     fireEvent.click(desktopButton);
@@ -876,5 +880,158 @@ describe("Account page: no structural lines — sections are separated by space,
     const page = await screen.findByTestId("account-page");
     await screen.findAllByTestId("card-loading");
     expect(edgeClasses(page)).toEqual([]);
+  });
+});
+
+// 决策 13 只落在手机宽度（规格 Hard invariants：桌面不变）：桌面那一侧仍是原样的
+// UA 与完整时间，由上面那几组守。
+describe("Account page (phone): sessions read as device · browser with relative times", () => {
+  const HOUR = 60 * 60 * 1000;
+  const originalMatchMedia = window.matchMedia;
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    mockedApi.mockReset();
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    vi.restoreAllMocks();
+  });
+
+  it("names each session device · browser, marks the current one 「这台」, and keeps the raw UA out of the collapsed row", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    expect(await screen.findByText("Mac · Chrome")).toBeTruthy();
+    expect(screen.getByText("iPhone · Safari")).toBeTruthy();
+    expect(screen.getByText("This device")).toBeTruthy();
+    expect(screen.queryByText(UA_DESKTOP)).toBeNull();
+    expect(screen.queryByText(UA_MOBILE)).toBeNull();
+  });
+
+  it("expands only the clicked row to the verbatim UA", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    const row = (await screen.findByText("Mac · Chrome")).closest(
+      "button",
+    ) as HTMLElement;
+    fireEvent.click(row);
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(within(row).getByText(UA_DESKTOP).className).toContain("break-all");
+    expect(screen.queryByText(UA_MOBILE)).toBeNull();
+  });
+
+  it("falls back to the truncated raw UA when the parser cannot name the session", async () => {
+    markWebauthnSupported();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return ME;
+      if (path === "/v1/passkeys") return PASSKEYS;
+      if (path === "/v1/auth/sessions")
+        return {
+          sessions: [
+            {
+              user_agent: "curl/8.4.0",
+              ip: "198.51.100.9",
+              created_at: 1754000000000,
+              last_active_at: 1754100000000,
+              current: true,
+            },
+          ],
+        };
+      throw new Error(`unexpected call: ${path}`);
+    });
+    renderAccount();
+
+    const raw = await screen.findByText("curl/8.4.0");
+    expect(raw.className).toContain("truncate");
+  });
+
+  it("shows last activity as a relative phrase next to the IP", async () => {
+    markWebauthnSupported();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return ME;
+      if (path === "/v1/passkeys") return PASSKEYS;
+      if (path === "/v1/auth/sessions")
+        return {
+          sessions: [
+            {
+              user_agent: UA_DESKTOP,
+              ip: "203.0.113.24",
+              created_at: Date.now() - 5 * HOUR,
+              last_active_at: Date.now() - 3 * HOUR,
+              current: false,
+            },
+          ],
+        };
+      throw new Error(`unexpected call: ${path}`);
+    });
+    renderAccount();
+
+    const row = (await screen.findByText("Mac · Chrome")).closest(
+      "button",
+    ) as HTMLElement;
+    expect(within(row).getByText("3 hours ago")).toBeTruthy();
+    expect(within(row).getByText("203.0.113.24")).toBeTruthy();
+  });
+});
+
+describe("Account page: sign-out sits at the bottom on mobile only", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function setViewport(mobile: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: mobile && query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  beforeEach(() => {
+    mockedApi.mockReset();
+    mockedSignOut.mockReset();
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    vi.restoreAllMocks();
+  });
+
+  it("on mobile, signs out from the bottom button", async () => {
+    setViewport(true);
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    await screen.findByTestId("account-page");
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(mockedSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("on desktop, shows no bottom sign-out button", async () => {
+    setViewport(false);
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    await screen.findByTestId("account-page");
+    expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
   });
 });

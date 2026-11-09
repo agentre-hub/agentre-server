@@ -340,17 +340,50 @@ export function DeviceUpgradePanel({
   device,
   state,
   onDevices,
+  compact = false,
 }: {
   device: DeviceItem;
   state: AgentredVersionState;
   /** 轮询期间取到的新设备清单：交给页面，卡上的版本因此跟着变。 */
   onDevices?: (devices: DeviceItem[]) => void;
+  /**
+   * 手机详情页顶上的「一行动作」（规格 2026-11-05「设备 · 详情」）：可以一键升级时
+   * 只摆「有新版本 · 升级」一行，进行中的状态在它下面；人在手机上，到那台机器上去
+   * 执行的命令卡不摆。一键够不着（协议不匹配）时命令是唯一出口，仍是整张面板。
+   * 没有可升级的也没在升级时整块不画；点过升级之后留到这次有结论为止 —— 版本翻新的
+   * 那一刻状态就成了「已是最新」，「升级完成」那一行不能跟着消失。
+   * 省略即桌面展开区那一张，不变。
+   */
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const upgrade = useDeviceUpgrade(device.id, device.version, onDevices);
   const { phase } = upgrade;
+  if (
+    compact &&
+    phase.kind === "idle" &&
+    state.kind !== "upgradable" &&
+    state.kind !== "protocol-mismatch"
+  ) {
+    return null;
+  }
   const blocked = state.kind === "protocol-mismatch";
+  const oneRow = compact && !blocked;
   const action = actionLabel(state, phase, t);
+  const actionButton = (
+    <Button
+      size={oneRow ? "sm" : "xs"}
+      className={oneRow ? "h-11 shrink-0" : undefined}
+      variant={action.secondary ? "outline" : "default"}
+      disabled={action.disabled}
+      data-testid={`device-upgrade-action-${device.id}`}
+      onClick={
+        phase.kind === "active-turns" ? upgrade.requestForce : upgrade.start
+      }
+    >
+      {action.label}
+    </Button>
+  );
 
   return (
     <div
@@ -360,32 +393,31 @@ export function DeviceUpgradePanel({
         blocked ? "bg-destructive-soft" : "bg-field-fill",
       )}
     >
-      <UpgradeHeadline state={state} />
+      {oneRow ? (
+        <div className="flex items-center gap-3">
+          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+            {state.kind === "upgradable"
+              ? t("device.upgrade.availableTitle", { version: state.latest })
+              : null}
+          </span>
+          {actionButton}
+        </div>
+      ) : (
+        <UpgradeHeadline state={state} />
+      )}
       <UpgradeStatus phase={phase} deviceID={device.id} />
       {/* 一键升级够不着这台机器时不画按钮：画一个点了必然失败的按钮不是出口。 */}
-      {!blocked && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="xs"
-            variant={action.secondary ? "outline" : "default"}
-            disabled={action.disabled}
-            data-testid={`device-upgrade-action-${device.id}`}
-            onClick={
-              phase.kind === "active-turns"
-                ? upgrade.requestForce
-                : upgrade.start
-            }
-          >
-            {action.label}
-          </Button>
-        </div>
+      {!blocked && !oneRow && (
+        <div className="flex flex-wrap items-center gap-2">{actionButton}</div>
       )}
-      <CommandCard
-        label={t("device.upgrade.commandLabel")}
-        command={UPDATE_COMMAND}
-        testId={`device-upgrade-command-${device.id}`}
-        copyTestId={`device-upgrade-copy-${device.id}`}
-      />
+      {oneRow ? null : (
+        <CommandCard
+          label={t("device.upgrade.commandLabel")}
+          command={UPDATE_COMMAND}
+          testId={`device-upgrade-command-${device.id}`}
+          copyTestId={`device-upgrade-copy-${device.id}`}
+        />
+      )}
 
       {/* 二次确认（决策 8/21）：只有在这里点了「仍然升级」，force=true 才真的出现
           在请求里 —— 点主动作那一下只打开这个框。 */}

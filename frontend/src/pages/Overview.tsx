@@ -5,13 +5,19 @@ import {
   BarChart3,
   Bot,
   CalendarDays,
+  ChevronRight,
   Flame,
   FolderTree,
   MessagesSquare,
   Monitor,
 } from "lucide-react";
 
-import { CardLoadError, EmptyState, Metric } from "@/components/console";
+import {
+  CardLoadError,
+  EmptyState,
+  Metric,
+  MobileNavButton,
+} from "@/components/console";
 import {
   Button,
   SegmentedControl,
@@ -99,6 +105,33 @@ function RangeSwitch({
         </SegmentedControlItem>
       ))}
     </SegmentedControl>
+  );
+}
+
+/**
+ * 手机上「对话」「设备在线」两格是去对应页面的入口；桌面与另两格原样不动。
+ * Metric 在 components/console 里不能改，所以链接包在外面。
+ */
+function TileLink({
+  to,
+  children,
+}: {
+  to: string | null;
+  children: React.ReactNode;
+}) {
+  if (to === null) return <>{children}</>;
+  return (
+    <Link
+      to={to}
+      className="relative block min-w-0 rounded-md focus-visible:focus-outline"
+    >
+      {children}
+      <ChevronRight
+        data-tile-chevron
+        aria-hidden="true"
+        className="absolute top-3 right-3 size-4 text-muted-foreground"
+      />
+    </Link>
   );
 }
 
@@ -333,6 +366,7 @@ export default function Overview() {
 
   return (
     <AppShell
+      ownHeader={isMobile}
       title={t("nav.overview")}
       /*
         窄屏顶栏不摆页面自己的控件：390 宽的手机上「标题 + 三档范围 + 头像 +
@@ -346,9 +380,19 @@ export default function Overview() {
     >
       <div className="mx-auto w-full max-w-[1200px] space-y-4">
         {isMobile ? (
-          <div className="flex min-w-0 items-center justify-end">
-            <RangeSwitch value={range} onChange={setRange} />
-          </div>
+          /* 手机页头自己画（ownHeader）：☰ · 标题，范围分段是标题的副行。 */
+          <header
+            data-testid="overview-mobile-header"
+            className="-mt-1 flex min-w-0 items-center gap-2 pt-[env(safe-area-inset-top,0px)]"
+          >
+            <MobileNavButton />
+            <div className="flex min-w-0 flex-col gap-1.5 py-1">
+              <h1 className="truncate text-prose font-bold text-foreground">
+                {t("overview.stats.pageTitle")}
+              </h1>
+              <RangeSwitch value={range} onChange={setRange} />
+            </div>
+          </header>
         ) : null}
         {/* 范围收窄时页顶一条说明覆盖全页，不逐卡重复。 */}
         {stats?.scope === "saved" ? (
@@ -435,20 +479,22 @@ export default function Overview() {
                 <TileSkeletons />
               ) : (
                 <>
-                  <Metric
-                    testId="tile-conversations"
-                    label={t("overview.stats.tiles.conversations")}
-                    value={String(summary.conversations)}
-                    unit={rangeLabel}
-                    sub={
-                      freshAccount
-                        ? t("overview.stats.tiles.conversationsNone")
-                        : t("overview.stats.tiles.conversationsTotal", {
-                            count: summary.conversations_total,
-                          })
-                    }
-                    icon={MessagesSquare}
-                  />
+                  <TileLink to={isMobile ? "/chat" : null}>
+                    <Metric
+                      testId="tile-conversations"
+                      label={t("overview.stats.tiles.conversations")}
+                      value={String(summary.conversations)}
+                      unit={rangeLabel}
+                      sub={
+                        freshAccount
+                          ? t("overview.stats.tiles.conversationsNone")
+                          : t("overview.stats.tiles.conversationsTotal", {
+                              count: summary.conversations_total,
+                            })
+                      }
+                      icon={MessagesSquare}
+                    />
+                  </TileLink>
                   <Metric
                     testId="tile-streak"
                     label={t("overview.stats.tiles.streak")}
@@ -496,22 +542,24 @@ export default function Overview() {
                     }
                     icon={CalendarDays}
                   />
-                  <Metric
-                    testId="tile-online"
-                    label={t("overview.stats.tiles.online")}
-                    value={String(summary.devices_online)}
-                    unit={`/ ${summary.devices_total}`}
-                    sub={
-                      firstOffline
-                        ? t("overview.stats.tiles.onlineOffline", {
-                            device: firstOffline.name,
-                          })
-                        : summary.devices_total === 0
-                          ? t("overview.stats.tiles.onlineNone")
-                          : null
-                    }
-                    icon={Monitor}
-                  />
+                  <TileLink to={isMobile ? "/devices" : null}>
+                    <Metric
+                      testId="tile-online"
+                      label={t("overview.stats.tiles.online")}
+                      value={String(summary.devices_online)}
+                      unit={`/ ${summary.devices_total}`}
+                      sub={
+                        firstOffline
+                          ? t("overview.stats.tiles.onlineOffline", {
+                              device: firstOffline.name,
+                            })
+                          : summary.devices_total === 0
+                            ? t("overview.stats.tiles.onlineNone")
+                            : null
+                      }
+                      icon={Monitor}
+                    />
+                  </TileLink>
                 </>
               )}
             </div>

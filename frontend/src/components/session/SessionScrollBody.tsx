@@ -16,6 +16,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import DecisionPanel from "@/components/session/DecisionPanel";
+import { useIsMobile } from "@/components/use-is-mobile";
 import PendingSendBubble from "@/components/session/PendingSendBubble";
 import SendFailureBubble from "@/components/session/SendFailureBubble";
 import SessionStatusBanner from "@/components/session/SessionStatusBanner";
@@ -97,6 +98,11 @@ export interface SessionScrollBodyProps {
 
   decisions: SessionDecisionPorts;
   send: SessionSend;
+  /**
+   * 待决的工具权限请求此刻停靠在输入框的位置（手机，见 SessionComposerBand 的
+   * pickDockedPermission）：转录不再画那张卡。缺省 false = 照旧内联。
+   */
+  dockDecisions?: boolean;
 }
 
 /**
@@ -140,9 +146,11 @@ export default function SessionScrollBody({
   pendingAssistant,
   decisions,
   send,
+  dockDecisions = false,
 }: SessionScrollBodyProps) {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const isMobile = useIsMobile();
 
   /**
    * 视口下沿之后还开了几轮 —— 药丸靠它说出「你落后多少」，而不是只说「下面还有」。
@@ -339,6 +347,7 @@ export default function SessionScrollBody({
               // 通道断了就先说通道：此刻「还在不在生成」根本观察不到，继续转三个点
               // 是在替远端撒谎。这个顺序由共享包保证，本站只把两个事实交上去。
               reconnecting={relayState === "reconnecting"}
+              dockDecisions={dockDecisions}
               // 行虚拟化的滚动容器。取不到时转录整列渲染（见 Transcript 里那段
               // 「量不出视口高度就不开窗」的注释）。
               getScrollElement={getScrollElement}
@@ -424,6 +433,9 @@ export default function SessionScrollBody({
             onJump={jumpToBottom}
             turnsBelow={turnsBelow}
             pendingBelow={pendingBelow}
+            // 手机：下面有未决审批 / 提问时只写「↓ N 项待处理」（规格 2026-11-05
+            // 「待处理药丸」）；没有时仍是普通的回到底部。桌面不传，不变。
+            pendingOnly={isMobile}
           />
         )}
       </div>

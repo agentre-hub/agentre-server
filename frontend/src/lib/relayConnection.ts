@@ -126,6 +126,11 @@ export class RelayConnection {
   private readonly channels = new Map<string, Channel>();
   private readonly signalListeners = new Set<RelaySignalListener>();
   private closedByUser = false;
+  /**
+   * 主动关闭的次数。重连 / 重拨要先换票（await），换票期间被关掉的话票回来时不能再拨：
+   * `connect()` 会把 closedByUser 复位，拨出去的就是一条没人认领、自己退让重拨不止的连接。
+   */
+  private closeGeneration = 0;
   private readonly redial = new RedialTimer();
   private connectPromise: Promise<void> | null = null;
   private currentState: RelayState = "disconnected";
@@ -202,8 +207,10 @@ export class RelayConnection {
     // 人点的「重新连接」是一次全新的尝试：不该继承上一轮攒下来的退让，否则紧接着
     // 的一次失败要等满累积的那个时长才会再试。
     this.failures = 0;
+    const generation = this.closeGeneration;
     if (this.opts.refreshCredentials) {
       const credentials = await this.opts.refreshCredentials();
+      if (generation !== this.closeGeneration) return;
       this.opts.url = credentials.url;
       this.opts.jwt = credentials.jwt;
     }
@@ -220,6 +227,7 @@ export class RelayConnection {
   /** 主动关闭整条连接（登出），不再自动重连。 */
   close(): void {
     this.closedByUser = true;
+    this.closeGeneration += 1;
     this.redial.cancel();
     this.ws?.close();
     this.ws = null;
@@ -357,9 +365,11 @@ export class RelayConnection {
   }
 
   private async redialOnce(): Promise<void> {
+    const generation = this.closeGeneration;
     try {
       if (this.opts.refreshCredentials) {
         const credentials = await this.opts.refreshCredentials();
+        if (generation !== this.closeGeneration) return;
         this.opts.url = credentials.url;
         this.opts.jwt = credentials.jwt;
       }

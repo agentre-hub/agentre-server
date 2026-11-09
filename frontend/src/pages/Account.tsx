@@ -27,6 +27,9 @@ import {
   type RawCreationOptions,
 } from "@/lib/webauthn";
 import { passkeySupport, type PasskeySupport } from "@/lib/passkeySupport";
+import { parseUserAgent } from "@/lib/userAgent";
+import { formatRelativeTime } from "@/lib/sessionView";
+import { signOut } from "@/lib/signOut";
 
 /** 通行密钥清单里的一条（`GET /v1/passkeys`）。 */
 interface PasskeyRow {
@@ -85,6 +88,17 @@ function sessionTimes(t: Translate, s: SessionRow): string[] {
 function sessionTimesLine(t: Translate, s: SessionRow): string {
   return " · " + sessionTimes(t, s).join(" · ");
 }
+
+/** 登录记录的主文案：能认出「设备 · 浏览器」就用它，认不出回退原文（截断由调用方给）。 */
+function sessionLabel(s: SessionRow): string {
+  const parsed = parseUserAgent(s.user_agent);
+  return parsed ? `${parsed.device} · ${parsed.browser}` : s.user_agent;
+}
+
+/** 同一行里 IP 与相对时间之间的连接符：代码拼的，不是译文的一部分。 */
+const META_SEP = " · ";
+/** 没有活动时间时那一格：占位符，不是译文。 */
+const NO_TIME = "—";
 
 /**
  * 用不了通行密钥时那句话。**说的必须是真正的原因**：源不是安全上下文（本站有时
@@ -208,7 +222,8 @@ function CardListSkeleton({ rows }: { rows: number }) {
  * 三张卡纵向堆叠，桌面与移动同一条流，390 宽下不产生横向溢出。
  */
 export default function Account() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? "en";
   const { me } = useMe();
   const isMobile = useIsMobile();
 
@@ -217,6 +232,8 @@ export default function Account() {
   /** 手动重试用的一次性游标：改它即让对应的取数 effect 重跑一轮。 */
   const [passkeysReload, setPasskeysReload] = useState(0);
   const [sessions, setSessions] = useState<SessionRow[] | null>(null);
+  /** 清单取回的那一刻：相对时间以它为准算，渲染期不读时钟。 */
+  const [sessionsAsOf, setSessionsAsOf] = useState(0);
   const [sessionsError, setSessionsError] = useState<unknown>(null);
   const [sessionsReload, setSessionsReload] = useState(0);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
@@ -255,6 +272,7 @@ export default function Account() {
   function loadSessions() {
     return api<{ sessions: SessionRow[] }>("/v1/auth/sessions").then((r) => {
       setSessions(r.sessions);
+      setSessionsAsOf(Date.now());
       setSessionsError(null);
       return r.sessions;
     });
@@ -558,9 +576,11 @@ export default function Account() {
                     const isExpanded = expandedIndex === i;
                     return (
                       <li key={i}>
-                        {/* 整行可点展开：UA 原样、等宽，默认截断（决策 7）。不解析
-                            成「Chrome on macOS」——猜错会让人撤销掉正在用的那一个；
-                            展开态只属于这一行自己，不影响其它行。 */}
+                        {/* 整行可点展开，展开态只属于这一行自己。
+                            桌面：UA 原样、等宽，默认截断（决策 7）。
+                            手机：折叠态只给「设备 · 浏览器」与相对的最后活跃时间，原始
+                            UA 与完整时间收进展开的详情里（规格 2026-11-05 决策 13，只落在
+                            手机宽度——桌面不变）。 */}
                         <button
                           type="button"
                           aria-expanded={isExpanded}
@@ -570,7 +590,7 @@ export default function Account() {
                           className={cn(
                             "flex w-full cursor-pointer gap-3 px-4 py-3 text-left outline-none hover:bg-accent focus-visible:focus-outline-inset",
                             // 折叠态与通行密钥行同一套 items-center：16px 图标相对
-                            // 两行块垂直居中。展开后 UA 折成多行，改钉在顶部。
+                            // 两行块垂直居中。展开后详情折成多行，改钉在顶部。
                             isExpanded ? "items-start" : "items-center",
                           )}
                         >
@@ -580,37 +600,69 @@ export default function Account() {
                               isExpanded && "mt-0.5",
                             )}
                           />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span
-                                className={cn(
-                                  "min-w-0 flex-1 font-mono text-aux text-foreground",
-                                  isExpanded ? "break-all" : "truncate",
+                          {isMobile ? (
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="min-w-0 flex-1 truncate text-aux text-foreground">
+                                  {sessionLabel(s)}
+                                </span>
+                                {s.current && (
+                                  <StatusMark
+                                    tone="running"
+                                    label={t("account.signins.currentPhone")}
+                                  />
                                 )}
-                              >
-                                {s.user_agent}
-                              </span>
-                              {s.current && (
-                                <StatusMark
-                                  tone="running"
-                                  label={t("account.signins.current")}
-                                />
+                              </div>
+                              {isExpanded ? (
+                                <div className="mt-1 text-2xs text-muted-foreground">
+                                  <div className="break-all font-mono">
+                                    {s.user_agent}
+                                  </div>
+                                  <div className="font-mono">{s.ip}</div>
+                                  {sessionTimes(t, s).map((line) => (
+                                    <div key={line}>{line}</div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="mt-0.5 truncate text-2xs text-muted-foreground">
+                                  <span className="font-mono">{s.ip}</span>
+                                  {META_SEP}
+                                  <span>
+                                    {s.last_active_at
+                                      ? formatRelativeTime(
+                                          s.last_active_at,
+                                          locale,
+                                          sessionsAsOf,
+                                        )
+                                      : NO_TIME}
+                                  </span>
+                                </div>
                               )}
                             </div>
-                            {isMobile ? (
-                              <div className="mt-0.5 text-2xs text-muted-foreground">
-                                <div className="font-mono">{s.ip}</div>
-                                {sessionTimes(t, s).map((line) => (
-                                  <div key={line}>{line}</div>
-                                ))}
+                          ) : (
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={cn(
+                                    "min-w-0 flex-1 font-mono text-aux text-foreground",
+                                    isExpanded ? "break-all" : "truncate",
+                                  )}
+                                >
+                                  {s.user_agent}
+                                </span>
+                                {s.current && (
+                                  <StatusMark
+                                    tone="running"
+                                    label={t("account.signins.current")}
+                                  />
+                                )}
                               </div>
-                            ) : (
                               <div className="mt-0.5 truncate text-2xs text-muted-foreground">
                                 <span className="font-mono">{s.ip}</span>
                                 {sessionTimesLine(t, s)}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </button>
                       </li>
                     );
@@ -624,6 +676,17 @@ export default function Account() {
               </>
             )}
           </SectionCard>
+
+          {/* 手机端退出登录放页底；桌面端的登出在用户菜单里，这里不重复。 */}
+          {isMobile && (
+            <Button
+              variant="outline"
+              className="w-full text-destructive"
+              onClick={() => signOut()}
+            >
+              {t("account.signOut")}
+            </Button>
+          )}
         </div>
       ) : (
         <p className="text-muted-foreground">{t("common.loading")}</p>

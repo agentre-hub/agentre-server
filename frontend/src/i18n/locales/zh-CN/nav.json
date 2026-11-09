@@ -4,5 +4,7 @@
   "issues": "看板",
   "devices": "设备",
   "org": "组织",
-  "settings": "设置"
+  "settings": "设置",
+  "stats": "活跃统计",
+  "orgAgents": "Agent 与组织"
 }

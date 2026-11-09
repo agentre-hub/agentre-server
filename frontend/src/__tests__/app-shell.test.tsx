@@ -261,9 +261,8 @@ describe("账号菜单（任务 7）", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  // 窄屏与侧栏同源：同一个数、同一句说明。此前 mobileTabs 派生时把 badge 丢了，
-  // 手机上因此完全看不到有多少条在等你。
-  it("移动 TabBar 的对话项带着与侧栏同一个角标", async () => {
+  // 手机上它落在抽屉的「对话」项里：只数「需要你」，未读不并进去（规格 外壳与导航）。
+  it("手机抽屉的对话项只带「需要你」条数角标", async () => {
     mockMobileViewport();
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return me;
@@ -273,60 +272,29 @@ describe("账号菜单（任务 7）", () => {
       throw new Error("unexpected: " + path);
     });
     renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
     const chat = await screen.findByRole("link", { name: /Chat/ });
-    expect(await within(chat).findByText("3")).toBeTruthy();
-    expect(
-      within(chat).getByTitle("2 conversations need you · 1 unread"),
-    ).toBeTruthy();
+    expect(await within(chat).findByText("2")).toBeTruthy();
+    expect(within(chat).getByTitle("2 conversations need you")).toBeTruthy();
   });
 
-  it("移动 TabBar 固定为 5 项，不把桌面末项设置挤进去", async () => {
+  it("手机抽屉：主导航 4 项 + 更多 2 项（统计、设置），不含已下线的审计", async () => {
     mockMobileViewport();
     renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
-    const nav = screen.getByRole("navigation");
-    const links = within(nav).getAllByRole("link");
-    expect(links).toHaveLength(5);
-    expect(links.map((link) => link.textContent?.trim())).toEqual(
-      REAL_NAV.slice(0, 5),
-    );
-    expect(within(nav).queryByRole("link", { name: "Settings" })).toBeNull();
-  });
-
-  it("移动：TopBar 账号区用同一组件的紧凑形态，设置可从菜单进入、登出真调用端点并落地登录页", async () => {
-    mockMobileViewport();
-    mockedApi.mockImplementation(async (path: string) => {
-      if (path === "/v1/auth/me") return me;
-      if (path === "/v1/auth/logout") return {};
-      throw new Error("unexpected: " + path);
-    });
-    const assign = vi.fn();
-    Object.defineProperty(window, "location", {
-      value: { ...window.location, assign },
-      writable: true,
-    });
-
-    renderShell();
-    const trigger = await screen.findByRole("button", {
-      name: "Account menu",
-    });
-    fireEvent.keyDown(trigger, { key: "Enter" });
-
-    expect(
-      screen.getByRole("menuitem", { name: /Account & security/i }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("menuitem", { name: /Settings/i }).getAttribute("href"),
-    ).toBe("/settings");
-    fireEvent.click(screen.getByRole("menuitem", { name: /Sign out/i }));
-
-    await waitFor(() =>
-      expect(mockedApi).toHaveBeenCalledWith("/v1/auth/logout", {
-        method: "POST",
-      }),
-    );
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("/login"));
+    const drawer = await screen.findByRole("dialog");
+    const links = within(drawer).getAllByRole("link");
+    // 第一条是账号区（me 取不到时不画，此处无数据）。
+    expect(links.map((link) => link.textContent?.trim())).toEqual([
+      "Chat",
+      "Board",
+      "Agents & org",
+      "Devices",
+      "Activity stats",
+      "Settings",
+    ]);
   });
 });
 
@@ -723,14 +691,14 @@ describe("沉浸形态（immersive）", () => {
     expect(main.className).toContain("pb-[env(safe-area-inset-bottom,0px)]");
   });
 
-  it("移动端不传时底部 tab 照旧在（返回列表后恢复）", () => {
+  it("移动端不传时顶栏与 ☰ 照旧在（返回列表后恢复）", () => {
     mockMobileViewport();
     renderShell(<AppShell flush>page content</AppShell>);
 
     expect(screen.getByTestId("app-topbar")).toBeTruthy();
-    expect(
-      within(screen.getByRole("navigation")).getAllByRole("link"),
-    ).toHaveLength(5);
+    // 手机没有底部 tab；顶栏左侧的 ☰ 在，抽屉默认关着。
+    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open menu" })).toBeTruthy();
     expect(screen.getByRole("main").className).not.toContain("safe-area");
   });
 });
@@ -835,7 +803,7 @@ describe("外框 + 内容页", () => {
     expect(screen.getByRole("navigation").contains(sheet())).toBe(false);
   });
 
-  it("手机：内容页铺满宽度，不留缝、不圆角；顶栏与底部 Tab 在外框上", () => {
+  it("手机：内容页铺满宽度，不留缝、不圆角；顶栏在外框上、没有底部 Tab", () => {
     mockMobileViewport();
     renderShell();
 
@@ -845,7 +813,7 @@ describe("外框 + 内容页", () => {
     expect(sheet().parentElement!.className).not.toMatch(/(^|\s)p[tx]?-\d/);
 
     expect(screen.getByTestId("app-topbar").className).toContain("bg-chrome");
-    expect(screen.getByRole("navigation").className).toContain("bg-chrome");
+    expect(screen.queryByRole("navigation")).toBeNull();
     // 「页面本身不滚、只有 main 滚」照旧。
     expect(screen.getByRole("main").className).toContain("overflow-y-auto");
   });

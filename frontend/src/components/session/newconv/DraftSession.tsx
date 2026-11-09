@@ -16,15 +16,23 @@ import {
   SessionHeaderBand,
   cn,
   normalizePermissionMode,
+  resolveProviderPillState,
+  StatusDot,
   type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
-import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronDown,
+  FolderTree,
+  Monitor,
+  Sparkles,
+} from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { FailureNotice } from "@/components/console";
 import type { ComposerSubmitHandle } from "@/components/session/SessionComposer";
-import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import Transcript from "@/components/session/Transcript";
@@ -54,11 +62,15 @@ import { rememberAgent } from "@/lib/recentAgents";
 import { toAgentStatus } from "@/lib/sessionView";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 
+import { FactRow, PhoneDraftBody, useComposerHasDraft } from "./PhoneDraft";
 import {
   availabilityReasonKey,
   type NewConvAgent,
   type NewConvProject,
 } from "./types";
+
+/** meta 行各段之间的点：排版符号不是文案，不进 i18n（与 AgentPickList 的 COUNT_SEPARATOR 同理）。 */
+const META_SEPARATOR = "·";
 
 /** 两格皆空 = 跟随 Agent 绑定。模块级常量：稳定的引用，不让 start 回调每次渲染换身份。 */
 const EMPTY_MODEL_TARGET: ModelTarget = { providerKey: "", modelKey: "" };
@@ -82,7 +94,7 @@ export function DraftSession({
   initialProjectSyncId,
   onStarted,
   onBack,
-  headerActions,
+  onChangeRecipient,
 }: {
   agent: NewConvAgent;
   /** 账号里全部 Agent，供输入框的 @ 菜单用（第一句同样能提及别人）。 */
@@ -98,10 +110,10 @@ export function DraftSession({
   /** 移动端的返回；桌面右栏里不给（左栏一直都在，没有「返回」这一说）。 */
   onBack?: () => void;
   /**
-   * 顶带右端那一组控件。移动端这一屏盖住了索引的页头、也没有侧栏，语言/主题由宿主
-   * 摆到这里；桌面不给（它们在侧栏底部）。
+   * 手机页头点收件人：回到「选 Agent」。由宿主就地切回挑选态——走 `?compose=1`
+   * 的话那条 effect 会用只剩 compose 的地址替掉当前地址，列表的范围随之丢掉。
    */
-  headerActions?: ReactNode;
+  onChangeRecipient?: () => void;
 }) {
   const { t } = useTranslation();
   /**
@@ -110,6 +122,10 @@ export function DraftSession({
    * 只截断不收起；标题只写「新对话」，Agent 名已经在副行上。
    */
   const oneRow = useIsMobile();
+  const nav = useNavigate();
+  /** 输入框外面那一格：手机上靠它观察「有没有字」，决定空态收不收（见 useComposerHasDraft）。 */
+  const composerAreaRef = useRef<HTMLDivElement>(null);
+  const hasDraft = useComposerHasDraft(composerAreaRef);
   const composerModule = useSessionComposerModule();
   /**
    * 输入框整条草稿的句柄（那句话 + 贴的图）。
@@ -424,16 +440,34 @@ export function DraftSession({
     端空会话态同此：机器在 NewSessionExecTargetLine 上，不在头部）。移动端这一层就是
     整屏唯一的头部，副行与详情同样说到机器（选中的那一档必然可用，即在线）。
   */
+  const phoneMeta: SessionHeaderMetaPart[] = [
+    {
+      key: "status",
+      node: (
+        <span
+          data-testid="draft-header-status"
+          className="inline-flex min-w-0 items-center gap-1.5"
+        >
+          {chosen && <StatusDot status="idle" size="xs" />}
+          <span className="truncate">
+            {chosen
+              ? t("chat.draftOnline")
+              : planError || (settled && plan)
+                ? t("overview.noAvailableTarget")
+                : t("common.loading")}
+          </span>
+        </span>
+      ),
+    },
+    { key: "kind", node: <span>{t("chat.draftTitle")}</span> },
+  ];
   const metaParts: SessionHeaderMetaPart[] = [
     {
       key: "agent",
       node: (
         <span
           data-testid="draft-header-status"
-          className={cn(
-            "inline-flex items-center gap-1.5",
-            oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
-          )}
+          className="inline-flex shrink-0 items-center gap-1.5"
         >
           {/* 小头像 + 角上的状态点，与详情那条同形。交出去那一刻就转绿：转录里三点
               已经在转了，两处说的是同一件事；还没交出去是空闲，角上不挂点。 */}
@@ -446,7 +480,7 @@ export function DraftSession({
             })}
             badgeTestId="draft-header-status-badge"
           />
-          {oneRow ? <span className="truncate">{agent.name}</span> : agent.name}
+          {agent.name}
         </span>
       ),
     },
@@ -455,20 +489,198 @@ export function DraftSession({
     metaParts.push({
       key: "project",
       // 与详情那条同一个断点：项目在别处（下面那枚 chip、左栏的行上）还说得出。
-      hideAt: oneRow ? undefined : "@max-[420px]/header:hidden",
-      node: (
-        <span className={cn("truncate", oneRow && "min-w-0")}>
-          {projectName}
+      hideAt: "@max-[420px]/header:hidden",
+      node: <span className="truncate">{projectName}</span>,
+    });
+  }
+
+  /*
+    手机的收件人页头（规格「新对话」）：与对话页页头同一副形（56px、顶带底色、返回在左），
+    中间是一颗按钮「头像 · 名字 ⌄ / 在线 · 新对话」，点开重新挑 Agent。
+    共享包的 SessionHeaderBand 标题只收字符串、装不下可点的收件人，所以这一副手摆。
+    重挑走已有的 `/chat?compose=1` 出口（Chat 按它直接进「选 Agent」弹层），不在这一层
+    另起一套：Chat 那边的落地种子认的是它自己手里挑中的那个 Agent。
+  */
+  const phoneHeader = (
+    <div
+      data-testid="draft-header"
+      className="flex h-14 shrink-0 items-center gap-1 bg-sheet-header px-5"
+    >
+      {onBack && (
+        <button
+          type="button"
+          aria-label={t("chat.back")}
+          className="-ml-2 flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+          onClick={onBack}
+        >
+          <ArrowLeft aria-hidden="true" className="size-4" />
+        </button>
+      )}
+      <button
+        type="button"
+        data-testid="draft-recipient"
+        aria-label={t("chat.changeAgentAria", { name: agent.name })}
+        onClick={onChangeRecipient}
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 text-left"
+      >
+        <AgentAvatar
+          name={agent.name}
+          color={agent.avatar_color}
+          iconKey={agent.avatar_icon}
+          size="md"
+        />
+        <span className="flex min-w-0 flex-col">
+          <span className="flex min-w-0 items-center gap-1 text-sm font-semibold leading-snug">
+            <span className="truncate">{agent.name}</span>
+            <ChevronDown
+              aria-hidden="true"
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+          </span>
+          <span
+            data-testid="draft-header-meta"
+            className="mt-0.5 flex min-w-0 items-center gap-x-1.5 overflow-hidden font-mono text-2xs whitespace-nowrap text-muted-foreground"
+          >
+            {phoneMeta.map((part, i) => (
+              <span
+                key={part.key}
+                className="inline-flex min-w-0 items-center gap-x-1.5"
+              >
+                {i > 0 && (
+                  <span aria-hidden="true" className="text-border-strong">
+                    {META_SEPARATOR}
+                  </span>
+                )}
+                {part.node}
+              </span>
+            ))}
+          </span>
         </span>
-      ),
-    });
-  }
-  if (oneRow && chosen) {
-    metaParts.push({
-      key: "machine",
-      node: <SessionMachineMeta name={chosen.device_name} online truncate />,
-    });
-  }
+      </button>
+    </div>
+  );
+
+  /**
+   * 计划走不下去的三种情形，桌面那一带与手机三行事实下面摆的是同一份：取不到计划给
+   * 重试（这条 effect 只在 agent/项目/执行档变化时重跑，没有这颗按钮的话用户唯一的
+   * 出路是去换个项目再换回来）；问到了但没挑出机器时，挑定的那台跑不了给「交回自动
+   * 挑」，一档都不可用逐档给原因。
+   */
+  const planFailed = planError ? (
+    <Alert variant="destructive" data-testid="draft-plan-failed">
+      <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
+        <FailureNotice
+          failure={describeFailure(planError, {
+            t,
+            what: t("chat.planFailedWhat"),
+          })}
+          onRetry={() => setPlanAttempt((k) => k + 1)}
+        />
+      </AlertDescription>
+    </Alert>
+  ) : null;
+  const targetUnavailable =
+    plan && !chosen ? (
+      targetBackendSyncId ? (
+        <PickedTargetUnavailable
+          plan={plan}
+          targetBackendSyncId={targetBackendSyncId}
+          onAuto={() => setTargetBackendSyncId(null)}
+        />
+      ) : (
+        <AllTargetsUnavailable agentName={agent.name} tiers={plan.tiers} />
+      )
+    ) : null;
+
+  /** 手机的三行事实：每一行都可点，选择语义与桌面那两枚 chip 同一份。 */
+  const modelPill = resolveProviderPillState({
+    boundProviderKey: engineBackend?.provider_key,
+    boundModelKey: engineBackend?.model_key,
+    catalog,
+    target: effectiveTarget,
+  });
+  const modelLabel =
+    (effectiveTarget.providerKey ? undefined : cli.pillState?.modelLabel) ||
+    modelPill.modelLabel ||
+    modelPill.providerLabel ||
+    chosen?.backend_type ||
+    t("chat.draftModelDefault");
+  const phoneFacts = (
+    <>
+      {plan && chosen ? (
+        <ProjectChip
+          plan={plan}
+          projectSyncId={projectSyncId}
+          projectName={projectName}
+          onPick={setProjectSyncId}
+          trigger={
+            <FactRow
+              data-testid="draft-fact-project"
+              icon={<FolderTree aria-hidden="true" className="size-4" />}
+              label={t("chat.draftFactProject")}
+              value={projectName ?? t("chat.noProject")}
+            />
+          }
+        />
+      ) : (
+        <FactRow
+          data-testid="draft-fact-project"
+          disabled
+          icon={<FolderTree aria-hidden="true" className="size-4" />}
+          label={t("chat.draftFactProject")}
+          value={projectName ?? t("chat.noProject")}
+        />
+      )}
+      {plan && chosen ? (
+        <ExecTargetPopover
+          plan={plan}
+          overridden={!!targetBackendSyncId}
+          onPick={(tier) =>
+            setTargetBackendSyncId(tier.backend_sync_id ?? null)
+          }
+          onAuto={() => setTargetBackendSyncId(null)}
+          trigger={
+            <FactRow
+              data-testid="draft-fact-target"
+              icon={<Monitor aria-hidden="true" className="size-4" />}
+              label={t("chat.draftFactTarget")}
+              value={
+                <>
+                  <StatusDot status="idle" size="xs" />
+                  <span className="truncate">{chosen.device_name}</span>
+                </>
+              }
+            />
+          }
+        />
+      ) : (
+        <FactRow
+          data-testid="draft-fact-target"
+          disabled
+          icon={<Monitor aria-hidden="true" className="size-4" />}
+          label={t("chat.draftFactTarget")}
+          value={t(
+            plan && settled ? "overview.noAvailableTarget" : "common.loading",
+          )}
+        />
+      )}
+      <FactRow
+        data-testid="draft-fact-model"
+        disabled={!chosen}
+        icon={<Sparkles aria-hidden="true" className="size-4" />}
+        label={t("chat.draftFactModel")}
+        value={<span className="truncate">{modelLabel}</span>}
+        // 模型选择器就是输入框底栏那颗 pill：这一行只是把它递到拇指够得着的地方。
+        onClick={() =>
+          composerAreaRef.current
+            ?.querySelector<HTMLElement>(
+              '[data-testid="composer-model-target"]',
+            )
+            ?.click()
+        }
+      />
+    </>
+  );
 
   return (
     <div
@@ -483,43 +695,67 @@ export function DraftSession({
         24px 头像），右栏顶上还另叠着一条 chat-chrome，第一句一发出去两条塌成一条，
         转录整体上跳。草稿这条带**就是**右栏的顶带，与详情落地后那条同一个位置。
       */}
-      <SessionHeaderBand
-        testId="draft-header"
-        metaTestId="draft-header-meta"
-        className="px-5"
-        leading={
-          onBack && (
-            <button
-              type="button"
-              aria-label={t("chat.back")}
-              className="-ml-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
-              onClick={onBack}
-            >
-              <ArrowLeft aria-hidden="true" className="size-4" />
-            </button>
-          )
-        }
-        /*
+      {oneRow ? (
+        phoneHeader
+      ) : (
+        <SessionHeaderBand
+          testId="draft-header"
+          metaTestId="draft-header-meta"
+          className="px-5"
+          leading={
+            onBack && (
+              <button
+                type="button"
+                aria-label={t("chat.back")}
+                className="-ml-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                onClick={onBack}
+              >
+                <ArrowLeft aria-hidden="true" className="size-4" />
+              </button>
+            )
+          }
+          /*
           标题：还没交出去时是「新对话 · <Agent>」（与桌面端 newSessionTitle 同一句），
           交出去之后就换成**那句话本身**。第一句的标题由 deriveTitle 算，派发送过线
           的、账号里落库的、以及右栏落地后详情显示的都是同一个值 —— 所以这一刻换上
           去，右栏换成真详情时标题一个字都不动。
         */
-        title={
-          // 只贴图不打字那一档没有「第一句话」可派生（`deriveTitle("")` 是空串），
-          // 照着它写的话标题槽整个空掉。这条对话此刻还没有别的名字,就还叫它开头
-          // 那个名字 —— 摆一个空标题不是更诚实,只是更少信息。
-          starting?.text.trim()
-            ? deriveTitle(starting.text)
-            : oneRow
-              ? t("chat.draftTitle")
+          title={
+            // 只贴图不打字那一档没有「第一句话」可派生（`deriveTitle("")` 是空串），
+            // 照着它写的话标题槽整个空掉。这条对话此刻还没有别的名字,就还叫它开头
+            // 那个名字 —— 摆一个空标题不是更诚实,只是更少信息。
+            starting?.text.trim()
+              ? deriveTitle(starting.text)
               : t("chat.newSessionTitle", { name: agent.name })
-        }
-        meta={metaParts}
-        actions={headerActions}
-      />
+          }
+          meta={metaParts}
+        />
+      )}
 
-      {starting ? (
+      {oneRow && !starting ? (
+        <PhoneDraftBody
+          agent={agent}
+          sentence={
+            projectName
+              ? t("chat.startWithAgentInProject", {
+                  agent: agent.name,
+                  project: projectName,
+                })
+              : t("chat.startWithAgent", { agent: agent.name })
+          }
+          hasDraft={hasDraft}
+          facts={phoneFacts}
+          notice={planFailed ?? targetUnavailable}
+          busy={!settled}
+          onContinueRecent={() => {
+            // 先收掉草稿再改地址：Chat 的草稿态不随地址变，留着它会盖住列表。
+            onBack?.();
+            void nav(
+              `/chat?${new URLSearchParams({ axis: "agent", agent: agent.sync_id })}`,
+            );
+          }}
+        />
+      ) : starting ? (
         <DraftPending
           agent={agent}
           text={starting.text}
@@ -541,54 +777,38 @@ export function DraftSession({
               : t("chat.startWithAgent", { agent: agent.name })}
           </p>
 
-          {planError ? (
-            // 这条 effect 只在 agent/项目/执行档变化时重跑：没有这颗按钮的话，用户
-            // 唯一的出路是去换个项目再换回来。
-            <Alert variant="destructive" data-testid="draft-plan-failed">
-              <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-                <FailureNotice
-                  failure={describeFailure(planError, {
-                    t,
-                    what: t("chat.planFailedWhat"),
-                  })}
-                  onRetry={() => setPlanAttempt((k) => k + 1)}
+          {planFailed ??
+            (!plan ? (
+              <p className="text-xs text-muted-foreground">
+                {t("common.loading")}
+              </p>
+            ) : chosen ? (
+              <>
+                <ExecTargetLine
+                  plan={plan}
+                  overridden={!!targetBackendSyncId}
+                  onPick={(tier) =>
+                    setTargetBackendSyncId(tier.backend_sync_id ?? null)
+                  }
+                  onAuto={() => setTargetBackendSyncId(null)}
                 />
-              </AlertDescription>
-            </Alert>
-          ) : !plan ? (
-            <p className="text-xs text-muted-foreground">
-              {t("common.loading")}
-            </p>
-          ) : chosen ? (
-            <>
-              <ExecTargetLine
-                plan={plan}
-                overridden={!!targetBackendSyncId}
-                onPick={(tier) =>
-                  setTargetBackendSyncId(tier.backend_sync_id ?? null)
-                }
-                onAuto={() => setTargetBackendSyncId(null)}
-              />
-              <ProjectChip
-                plan={plan}
-                projectSyncId={projectSyncId}
-                projectName={projectName}
-                onPick={setProjectSyncId}
-              />
-            </>
-          ) : targetBackendSyncId ? (
-            <PickedTargetUnavailable
-              plan={plan}
-              targetBackendSyncId={targetBackendSyncId}
-              onAuto={() => setTargetBackendSyncId(null)}
-            />
-          ) : (
-            <AllTargetsUnavailable agentName={agent.name} tiers={plan.tiers} />
-          )}
+                <ProjectChip
+                  plan={plan}
+                  projectSyncId={projectSyncId}
+                  projectName={projectName}
+                  onPick={setProjectSyncId}
+                />
+              </>
+            ) : (
+              targetUnavailable
+            ))}
         </div>
       )}
 
-      <div className="shrink-0 px-5 py-3">
+      <div
+        ref={composerAreaRef}
+        className={cn("shrink-0 px-5 py-3", oneRow && "px-3")}
+      >
         <div className="mx-auto flex w-full max-w-measure flex-col gap-2.5">
           {/* 与会话详情**同一个**输入框组件：第一句和第二句该是同一件事 ——
               @ 提及、/ 命令、快捷键提示、发送键的启停规则，一份实现。
@@ -604,6 +824,8 @@ export function DraftSession({
               agents={mentionAgents}
               composerHandleRef={composerRef}
               submitHandleRef={submitRef}
+              // 手机用触屏档（回车换行、空时胶囊），与对话页底部停靠区同一个输入框形态。
+              touch={oneRow}
               // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧
               // 摆着（它们是同一台机器的答案），但这一句要发到哪儿还没定。
               disabled={!readyPlan?.chosen || starting !== null}
@@ -747,6 +969,72 @@ function DraftPending({
   );
 }
 
+/**
+ * 「在哪台机器上跑」的选择浮层。触发器由调用点给（桌面是一枚 chip，手机是一行事实），
+ * 浮层内容与选择语义只此一份。
+ */
+function ExecTargetPopover({
+  plan,
+  overridden,
+  onPick,
+  onAuto,
+  trigger,
+}: {
+  plan: DispatchPlan;
+  overridden: boolean;
+  onPick: (tier: DispatchTier) => void;
+  onAuto: () => void;
+  /**
+   * 触发器走 prop 而不是 children：它要被放进 `<Trans components>`，而 react-i18next 只认
+   * 「全是元素的数组」当作可原样保留的子节点，单个元素会被当成空译文丢掉。
+   */
+  trigger: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent align="center" className="w-72 p-1">
+        <div className="px-2 pb-1.5 pt-1">
+          <p className="text-xs font-semibold text-foreground">
+            {t("chat.pickTargetTitle")}
+          </p>
+          <p className="text-[10.5px] text-muted-foreground">
+            {t("chat.pickTargetScope")}
+          </p>
+        </div>
+        <ul className="flex flex-col">
+          {plan.tiers.map((tier) => (
+            <li key={`${tier.rank}-${tier.backend_sync_id ?? ""}`}>
+              <TierOption
+                tier={tier}
+                onPick={() => {
+                  onPick(tier);
+                  setOpen(false);
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+        {overridden && (
+          <button
+            type="button"
+            data-testid="draft-exec-target-auto"
+            className="mt-1 w-full px-2 py-1.5 text-left text-2xs text-primary-text hover:bg-accent"
+            onClick={() => {
+              onAuto();
+              setOpen(false);
+            }}
+          >
+            {t("chat.useAutoTarget")}
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** 「将在 [chip] 上运行」。chip 可点，打开「在哪台机器上跑」。 */
 function ExecTargetLine({
   plan,
@@ -760,7 +1048,6 @@ function ExecTargetLine({
   onAuto: () => void;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
   const chosen = plan.chosen;
   if (!chosen) return null;
   return (
@@ -775,8 +1062,12 @@ function ExecTargetLine({
         i18nKey="chat.willRunOn"
         components={{
           1: (
-            <Popover open={open} onOpenChange={setOpen}>
-              <PopoverTrigger asChild>
+            <ExecTargetPopover
+              plan={plan}
+              overridden={overridden}
+              onPick={onPick}
+              onAuto={onAuto}
+              trigger={
                 <button
                   type="button"
                   data-testid="draft-exec-target-chip"
@@ -794,44 +1085,8 @@ function ExecTargetLine({
                   )}
                   <ChevronDown aria-hidden="true" className="size-3" />
                 </button>
-              </PopoverTrigger>
-              <PopoverContent align="center" className="w-72 p-1">
-                <div className="px-2 pb-1.5 pt-1">
-                  <p className="text-xs font-semibold text-foreground">
-                    {t("chat.pickTargetTitle")}
-                  </p>
-                  <p className="text-[10.5px] text-muted-foreground">
-                    {t("chat.pickTargetScope")}
-                  </p>
-                </div>
-                <ul className="flex flex-col">
-                  {plan.tiers.map((tier) => (
-                    <li key={`${tier.rank}-${tier.backend_sync_id ?? ""}`}>
-                      <TierOption
-                        tier={tier}
-                        onPick={() => {
-                          onPick(tier);
-                          setOpen(false);
-                        }}
-                      />
-                    </li>
-                  ))}
-                </ul>
-                {overridden && (
-                  <button
-                    type="button"
-                    data-testid="draft-exec-target-auto"
-                    className="mt-1 w-full px-2 py-1.5 text-left text-2xs text-primary-text hover:bg-accent"
-                    onClick={() => {
-                      onAuto();
-                      setOpen(false);
-                    }}
-                  >
-                    {t("chat.useAutoTarget")}
-                  </button>
-                )}
-              </PopoverContent>
-            </Popover>
+              }
+            />
           ),
         }}
       />
@@ -887,26 +1142,31 @@ function ProjectChip({
   projectSyncId,
   projectName,
   onPick,
+  trigger,
 }: {
   plan: DispatchPlan;
   projectSyncId: string | null;
   projectName: string | null;
   onPick: (syncId: string | null) => void;
+  /** 手机的事实行替换默认那枚 chip；浮层内容与选择语义不变。 */
+  trigger?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-testid="draft-project-chip"
-          className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-2 py-1 text-[11.5px] font-medium text-muted-foreground transition-colors hover:bg-accent"
-        >
-          <FolderTree aria-hidden="true" className="size-3" />
-          {projectName ?? t("chat.noProject")}
-          <ChevronDown aria-hidden="true" className="size-3" />
-        </button>
+        {trigger ?? (
+          <button
+            type="button"
+            data-testid="draft-project-chip"
+            className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-2 py-1 text-[11.5px] font-medium text-muted-foreground transition-colors hover:bg-accent"
+          >
+            <FolderTree aria-hidden="true" className="size-3" />
+            {projectName ?? t("chat.noProject")}
+            <ChevronDown aria-hidden="true" className="size-3" />
+          </button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="center" className="w-72 p-1">
         <p className="px-2 pb-1.5 pt-1 text-xs font-semibold text-foreground">

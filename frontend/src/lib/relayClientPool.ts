@@ -136,6 +136,9 @@ export class RelayClientPool {
   /** 正在建的那一条通道。并发 acquire 共用它，不抢建第二条。 */
   private readonly pending = new Map<string, Promise<Entry>>();
   private readonly signalSubscribers = new Set<RelaySignalSubscriber>();
+  /** 前台恢复那一次重连正在途中：两个事件接连到达不重复重连。 */
+  private resuming = false;
+  private stopForegroundWatch: (() => void) | null = null;
 
   constructor(deps: RelayClientPoolDeps = {}) {
     this.idleGraceMs = deps.idleGraceMs ?? DEFAULT_IDLE_GRACE_MS;
@@ -242,6 +245,8 @@ export class RelayClientPool {
     this.connection = null;
     this.connectionTicket = null;
     this.connecting = null;
+    this.stopForegroundWatch?.();
+    this.stopForegroundWatch = null;
   }
 
   /**
@@ -300,6 +305,7 @@ export class RelayClientPool {
         onStateChange: (state) => this.fanOutSignalState(state),
       });
       this.connection = connection;
+      this.watchForeground();
       connection.subscribeSignals({
         onSignal: (payload) => {
           for (const s of [...this.signalSubscribers]) s.onSignal?.(payload);
@@ -323,6 +329,39 @@ export class RelayClientPool {
     });
     this.connecting = building;
     return building;
+  }
+
+  /**
+   * 前台恢复：页面切回可见（`visibilitychange` 变可见）或 `pageshow`（含 bfcache 恢复）
+   * 时，不是 open 的连接立即重连，不等退避——后台里 socket 多半已死、定时器也被节流。
+   * 各通道在新 socket 上走原有的 onOpen 补齐路径；已连着的连接不动。
+   * 只在连接建出来时装一次，`closeAll` 时拆掉。
+   */
+  private watchForeground(): void {
+    if (this.stopForegroundWatch || typeof document === "undefined") return;
+    const onForeground = () => {
+      if (document.visibilityState === "hidden") return;
+      const connection = this.connection;
+      if (!connection || this.resuming) return;
+      // connecting：首次握手 / 一次重连已在途中。
+      if (connection.state === "connected" || connection.state === "connecting")
+        return;
+      this.resuming = true;
+      connection
+        .reconnect()
+        .catch(() => {
+          // 取票失败：原有的退避计时器还在，由它接着重试。
+        })
+        .finally(() => {
+          this.resuming = false;
+        });
+    };
+    document.addEventListener("visibilitychange", onForeground);
+    window.addEventListener("pageshow", onForeground);
+    this.stopForegroundWatch = () => {
+      document.removeEventListener("visibilitychange", onForeground);
+      window.removeEventListener("pageshow", onForeground);
+    };
   }
 
   /**

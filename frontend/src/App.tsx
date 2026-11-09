@@ -21,9 +21,9 @@ import Org from "./pages/Org";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import ComingSoon from "./pages/ComingSoon";
+import { useIsMobile } from "./components/use-is-mobile";
 import RequireAuth from "./components/RequireAuth";
 import { lazyPage, warmPages } from "./lib/lazyPage";
-import { MOBILE_TAB_BAR_CLEARANCE } from "./lib/mobileLayout";
 
 // 对话页背后是整套转录渲染，切出入口 chunk（见 lazyPage）。导出是给
 // app-routes 的接线用例认预热这条线用的，路由本身只用它当 element。
@@ -46,6 +46,15 @@ function DeviceSessionsRedirect() {
   return <Navigate to={`/chat?${params.toString()}`} replace />;
 }
 
+/**
+ * 入口落点：手机是对话列表（规格 2026-11-05：手机 App 以对话为中心），桌面是总览。
+ * PWA 的 start_url 仍是 `/`，由这里按视口分流。
+ */
+function HomeRedirect() {
+  const isMobile = useIsMobile();
+  return <Navigate to={isMobile ? "/chat" : "/overview"} replace />;
+}
+
 export default function App() {
   const { effectiveTheme } = useTheme();
 
@@ -60,7 +69,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/" element={<HomeRedirect />} />
         <Route path="/login" element={<Login />} />
         <Route
           path="/device"
@@ -71,7 +80,10 @@ export default function App() {
           }
         />
         <Route
-          path="/devices"
+          // 设备号是**可选段**（与 /org 同一条做法）：手机上点一行逐层进入独立详情页
+          // （规格 2026-11-05 决策 15），列表与详情是同一个 Devices 实例，返回列表时
+          // 不重拉、不闪 loading。桌面宽度仍是原地展开，带设备号的地址回落到列表。
+          path="/devices/:deviceId?"
           element={
             <RequireAuth>
               <Devices />
@@ -152,16 +164,17 @@ export default function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
       {/*
-        `mobileOffset` 让开移动端底栏：sonner 在窄视口下把 bottom-* 拍成贴底全宽，
-        而 MobileTabBar 是 74px + 安全区的正常流元素、就贴在同一条边上（Chat 页那颗
-        FAB 也用同一个让开量，见 lib/mobileLayout.ts）。默认 16px 会把导航整条盖掉 ——
-        而出错时用户最需要的正是换个地方看看。让开量 = 74 + 16 + 安全区。
+        `mobileOffset`：sonner 在窄视口下把 bottom-* 拍成贴底全宽。手机上已经没有底栏
+        （导航进了左抽屉），这里只让开 16px 呼吸空间与底部安全区——主屏幕 App 里那条
+        横条不能压在 toast 上。
       */}
       <Toaster
         position="bottom-right"
         richColors
         theme={effectiveTheme}
-        mobileOffset={{ bottom: MOBILE_TAB_BAR_CLEARANCE }}
+        mobileOffset={{
+          bottom: "calc(16px + env(safe-area-inset-bottom, 0px))",
+        }}
       />
     </BrowserRouter>
   );

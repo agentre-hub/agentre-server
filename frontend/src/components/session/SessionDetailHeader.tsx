@@ -1,5 +1,5 @@
 import type { SessionSummary } from "@agentre-hub/agentre-wire";
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Monitor, MoreHorizontal, Square } from "lucide-react";
@@ -9,12 +9,17 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DialogShell,
+  DialogShellBody,
+  DialogShellFooter,
+  DialogShellHeader,
   ProjectGlyph,
   SessionHeaderAgentMark,
   SessionHeaderBand,
   StatusDot,
   Button,
   cn,
+  useUiTranslation,
   type ProjectGlyphInfo,
   type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
@@ -97,6 +102,13 @@ export interface SessionDetailHeaderProps {
   onStop?: () => void;
   /** 已经点了停止、这一轮还没结束：停止键禁用（与输入框那颗同一格）。 */
   stopping: boolean;
+  /**
+   * 这条对话的模型 id（手机「对话信息」弹层里那一行）。宿主已经解好的那一份
+   * （`fallbackModel`）；解不出为空串。
+   */
+  model?: string;
+  /** 手机「对话信息」弹层里的删除（见 SessionDetailView 的同名 prop）。桌面不读。 */
+  onDelete?: () => void;
 }
 
 /** meta 行小头像要的那三样：与账号 Agent 清单（/v1/workspace/agents）同名同形。 */
@@ -209,9 +221,255 @@ export function SessionPageStateShell({
   );
 }
 
-export default function SessionDetailHeader({
+/**
+ * 把会话号交给剪贴板。
+ *
+ * 交的是**裸号**，不带 `#`：复制出来是要拿去搜 daemon 日志、查 `agent_sessions`、
+ * 或者贴给别人的，多一个字符每次都得手动删掉。
+ *
+ * 回执只能是 toast —— 菜单一选就关，内联的「已复制」没有地方留（设备指引那处
+ * 的按钮一直在屏上，所以那边才用得起内联态）。所以走共享包的 `copyTextWithToast`
+ * 而不是自己拼一遍：复制不成时它给的说明恰好是本站最常撞上的那一种 ——
+ * `http://<局域网 IP>:port` 不是安全上下文，`navigator.clipboard` 整个对象都不
+ * 存在，`execCommand` 也兜不住。谎报成功比复制失败更糟：用户会带着一个空剪贴板
+ * 去粘贴，而屏幕刚说过复制好了。
+ */
+async function copySessionId(
+  sid: string,
+  t: (key: string) => string,
+): Promise<void> {
+  await copyTextWithToast(String(sid), {
+    successTitle: t("session.menu.sessionIdCopied"),
+    errorTitle: t("session.menu.copySessionIdFailed"),
+  });
+}
+
+/** 手机页头状态字落在哪一档（与 toAgentStatus 的点色是两件事：这里只管说哪句话）。 */
+function phoneStatusWord(
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  input: {
+    status: SessionViewStatus;
+    running: boolean;
+    stopping: boolean;
+    decisionPending: boolean;
+    lifecycleState: string | undefined;
+    lastMessageAt: number | undefined;
+    language: string;
+  },
+): string {
+  const { status } = input;
+  // 通道正在（重）连：此刻其余各维都观察不到，先说通道。
+  if (status === "connecting" || status === "reconnecting")
+    return t("session.phoneHeader.status.connecting");
+  if (
+    status === "machineOffline" ||
+    status === "desktopAppNotRunning" ||
+    status === "pinnedAgentredUnavailable"
+  ) {
+    return input.lastMessageAt
+      ? t("session.phoneHeader.status.offline", {
+          time: formatRelativeTime(input.lastMessageAt, input.language),
+        })
+      : t("session.phoneHeader.status.offlineNoTime");
+  }
+  if (input.running && input.stopping)
+    return t("session.phoneHeader.status.stopping");
+  if (input.decisionPending) return t("session.phoneHeader.status.waiting");
+  if (input.lifecycleState === "failed")
+    return t("session.phoneHeader.status.failed");
+  if (input.running) return t("session.phoneHeader.status.running");
+  if (!input.lifecycleState || input.lifecycleState === "idle")
+    return t("session.phoneHeader.status.idle");
+  // interrupted 等：沿用共享的生命周期词，不在这里另造。
+  return sessionStatusLabel({ lifecycleState: input.lifecycleState }, t);
+}
+
+/**
+ * 手机页头（规格 2026-11-05 对话页）：一行「返回 · 标题 · ⋯」，标题下副标题
+ * 「● 状态 · Agent · 机器」。不放停止（停止留在输入框，两处共用 `useTurnStop`）；
+ * 项目、模型、最后活动与复制对话号收进 ⋯ 打开的底部弹层「对话信息」。
+ */
+function PhoneSessionHeader({
+  backTo,
+  sid,
+  identity,
+  agent,
+  project,
+  displayTitle,
+  machineName,
+  status,
+  running,
+  decisionPending,
+  stopping,
+  model,
+  onDelete,
+}: SessionDetailHeaderProps) {
+  const { t, i18n } = useTranslation();
+  const { t: uiT } = useUiTranslation();
+  const [infoOpen, setInfoOpen] = useState(false);
+
+  const statusKnown = Boolean(
+    identity?.lifecycleState || running || decisionPending,
+  );
+  const agentStatus = toAgentStatus({
+    lifecycleState: running ? "running" : (identity?.lifecycleState ?? "idle"),
+    waitingForInput: decisionPending,
+  });
+  const word = phoneStatusWord(t, {
+    status,
+    running,
+    stopping,
+    decisionPending,
+    lifecycleState: identity?.lifecycleState,
+    lastMessageAt: identity?.lastMessageAt,
+    language: i18n.language,
+  });
+  const connecting = status === "connecting" || status === "reconnecting";
+
+  const metaParts: SessionHeaderMetaPart[] = [
+    {
+      key: "status",
+      node: (
+        <span
+          role={connecting ? "status" : undefined}
+          aria-live={connecting ? "polite" : undefined}
+          data-testid="session-detail-status"
+          className="inline-flex min-w-0 items-center gap-1.5"
+        >
+          {statusKnown && <StatusDot status={agentStatus} size="xs" />}
+          <span className="truncate">{word}</span>
+        </span>
+      ),
+    },
+  ];
+  // 名字还在路上或解不出时这一段不画：副标题里状态字已经说了该说的。
+  if (agent?.name) {
+    metaParts.push({
+      key: "agent",
+      node: <span className="min-w-0 truncate">{agent.name}</span>,
+    });
+  }
+  if (machineName) {
+    metaParts.push({
+      key: "machine",
+      node: <span className="min-w-0 truncate">{machineName}</span>,
+    });
+  }
+
+  // 与列表行长按菜单里的「删除」同一句（共享包的行菜单词）。
+  const deleteLabel = uiT("sessionRow.menu.delete");
+  const empty = t("session.phoneHeader.info.empty");
+  const rows: { key: string; label: string; value: string }[] = [
+    {
+      key: "project",
+      label: t("session.phoneHeader.info.project"),
+      value: project?.name ?? empty,
+    },
+    {
+      key: "machine",
+      label: t("session.phoneHeader.info.machine"),
+      value: machineName ?? empty,
+    },
+    {
+      key: "model",
+      label: t("session.phoneHeader.info.model"),
+      value: model || empty,
+    },
+    {
+      key: "lastActive",
+      label: t("session.phoneHeader.info.lastActive"),
+      value: identity?.lastMessageAt
+        ? formatRelativeTime(identity.lastMessageAt, i18n.language)
+        : empty,
+    },
+  ];
+
+  return (
+    <div
+      data-testid="session-detail-header"
+      // relative：连接指示器的进度条按头部定位，铺满它的底边。
+      className="relative flex h-14 shrink-0 flex-col bg-sheet-header px-5"
+    >
+      <SessionHeaderBand
+        testId="session-detail-identity"
+        metaTestId="session-detail-meta"
+        leading={<SessionBackLink to={backTo} className="-ml-2 size-11" />}
+        title={displayTitle}
+        meta={metaParts}
+        actions={
+          <>
+            <SessionConnectionIndicator status={status} barOnly />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="-mr-2 size-11"
+              aria-label={t("session.menu.more")}
+              data-testid="session-detail-menu-trigger"
+              onClick={() => setInfoOpen(true)}
+            >
+              <MoreHorizontal aria-hidden="true" className="size-5" />
+            </Button>
+          </>
+        }
+      />
+      <DialogShell open={infoOpen} onOpenChange={setInfoOpen} size="sm">
+        <DialogShellHeader
+          title={t("session.phoneHeader.info.title")}
+          onClose={() => setInfoOpen(false)}
+        />
+        <DialogShellBody>
+          <dl className="flex flex-col gap-3 text-sm">
+            {rows.map((row) => (
+              <div
+                key={row.key}
+                className="flex items-baseline justify-between gap-4"
+              >
+                <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
+                <dd className="min-w-0 truncate text-right text-foreground">
+                  {row.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </DialogShellBody>
+        <DialogShellFooter stack>
+          <Button
+            variant="outline"
+            className="h-11 w-full"
+            onClick={() => {
+              void copySessionId(sid, t);
+              setInfoOpen(false);
+            }}
+          >
+            {t("session.menu.copySessionId")}
+          </Button>
+          {onDelete ? (
+            // 与列表行长按菜单里的「删除」同一句、同一个确认层（宿主给的 onDelete）。
+            <Button
+              variant="outline"
+              className="h-11 w-full text-destructive"
+              onClick={() => {
+                setInfoOpen(false);
+                onDelete();
+              }}
+            >
+              {deleteLabel}
+            </Button>
+          ) : null}
+        </DialogShellFooter>
+      </DialogShell>
+    </div>
+  );
+}
+
+export default function SessionDetailHeader(props: SessionDetailHeaderProps) {
+  // 手机整屏（沉浸）形态是另一副页头；桌面与嵌入形态走下面这一副，不变。
+  if (props.isPage && props.immersive) return <PhoneSessionHeader {...props} />;
+  return <DesktopSessionHeader {...props} />;
+}
+
+function DesktopSessionHeader({
   isPage,
-  immersive = false,
   backTo,
   sid,
   identity,
@@ -228,26 +486,6 @@ export default function SessionDetailHeader({
   stopping,
 }: SessionDetailHeaderProps) {
   const { t, i18n } = useTranslation();
-
-  /**
-   * 把会话号交给剪贴板。
-   *
-   * 交的是**裸号**，不带 `#`：复制出来是要拿去搜 daemon 日志、查 `agent_sessions`、
-   * 或者贴给别人的，多一个字符每次都得手动删掉。
-   *
-   * 回执只能是 toast —— 菜单一选就关，内联的「已复制」没有地方留（设备指引那处
-   * 的按钮一直在屏上，所以那边才用得起内联态）。所以走共享包的 `copyTextWithToast`
-   * 而不是自己拼一遍：复制不成时它给的说明恰好是本站最常撞上的那一种 ——
-   * `http://<局域网 IP>:port` 不是安全上下文，`navigator.clipboard` 整个对象都不
-   * 存在，`execCommand` 也兜不住。谎报成功比复制失败更糟：用户会带着一个空剪贴板
-   * 去粘贴，而屏幕刚说过复制好了。
-   */
-  async function copySessionId() {
-    await copyTextWithToast(String(sid), {
-      successTitle: t("session.menu.sessionIdCopied"),
-      errorTitle: t("session.menu.copySessionIdFailed"),
-    });
-  }
 
   /**
    * 头部认这条对话此刻是什么状态。三个**输入**各有自己的来路，判定与文案仍各自只有
@@ -277,24 +515,16 @@ export default function SessionDetailHeader({
   /** mono meta 行的各段。只有拿得出来的才进来（分隔符由顶带夹在两段之间）。 */
   /** `hideAt` = 窄档先收哪一段（决策 4）。收起的那一段在别处还说得出。 */
   const metaParts: SessionHeaderMetaPart[] = [];
-  /*
-    沉浸形态的副行：窄屏上**截断而不收起**。容器查询那几档 `hidden` 会把项目与机器
-    从可访问树里整段拿掉，而这一层就是它们在这一屏唯一的出处（返回行没了）。每一段
-    的内容都 min-w-0 + 自己截断：此前内层是 shrink-0，外层那一格收窄时内容顶出去，
-    压到下一段上（Agent 名与「19分钟前」互相盖住）。顺序照规格：Agent → 项目 →
-    机器与在线，时间殿后、最先被截。
-  */
-  const oneRow = isPage && immersive;
   const machinePart: SessionHeaderMetaPart | null = machineName
     ? {
         key: "machine",
-        // 桌面最先收：机器名在返回行与设备页里都还在，这一行不是它唯一的出处。
-        hideAt: oneRow ? undefined : "@max-[560px]/header:hidden",
+        // 最先收：机器名在返回行与设备页里都还在，这一行不是它唯一的出处。
+        hideAt: "@max-[560px]/header:hidden",
         node: (
           <SessionMachineMeta
             name={machineName}
             online={machineOnline !== false}
-            truncate={oneRow}
+            truncate={false}
           />
         ),
       }
@@ -310,10 +540,7 @@ export default function SessionDetailHeader({
       node: (
         <span
           data-testid="session-detail-status"
-          className={cn(
-            "inline-flex items-center gap-1.5",
-            oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
-          )}
+          className="inline-flex shrink-0 items-center gap-1.5"
         >
           {/* 认得出 Agent：共享包的小头像 + 角上的状态点（与桌面端同一份，空闲不挂点）；
               认不出：只剩那枚状态点。 */}
@@ -331,15 +558,8 @@ export default function SessionDetailHeader({
           {/* 状态不只靠颜色：四个态都有可见文字（session.list.*）。Agent 名**问过之后**
               仍认不出来时（老会话没有 agentSyncId、或它已不在账号里）退回状态文字，
               不填占位名；还没问出来（agentPending）则闭嘴等，见那个 prop 的说明。 */}
-          {oneRow ? (
-            <span className="truncate">
-              {agent?.name ??
-                (agentPending ? "" : sessionStatusLabel(statusNow, t))}
-            </span>
-          ) : (
-            (agent?.name ??
-            (agentPending ? "" : sessionStatusLabel(statusNow, t)))
-          )}
+          {agent?.name ??
+            (agentPending ? "" : sessionStatusLabel(statusNow, t))}
         </span>
       ),
     });
@@ -349,14 +569,9 @@ export default function SessionDetailHeader({
       key: "project",
       // 机器之后收（决策 4）：项目在左栏索引的行上还说得出（RowSecondaryLine 的
       // project 那一段），断点与桌面端 chat-panel-header 的 topline 取同一个。
-      hideAt: oneRow ? undefined : "@max-[420px]/header:hidden",
+      hideAt: "@max-[420px]/header:hidden",
       node: (
-        <span
-          className={cn(
-            "inline-flex min-w-0 items-center gap-1",
-            oneRow && "overflow-hidden",
-          )}
-        >
+        <span className="inline-flex min-w-0 items-center gap-1">
           {/* 项目在索引里只有**一枚**字形（组头 24px、行首 14px、时间轴第二行
               那一半都是它）。头部是第四处，画一枚通用文件夹就会让同一个项目在
               左栏与这里长成两个样子。尺寸取行里那一档，与旁边的 mono 小字齐。 */}
@@ -371,21 +586,20 @@ export default function SessionDetailHeader({
       ),
     });
   }
-  if (oneRow && machinePart) metaParts.push(machinePart);
   if (identity?.lastMessageAt) {
     metaParts.push({
       key: "updated",
       node: (
         <time
           dateTime={new Date(identity.lastMessageAt).toISOString()}
-          className={oneRow ? "min-w-0 truncate" : "shrink-0"}
+          className="shrink-0"
         >
           {formatRelativeTime(identity.lastMessageAt, i18n.language)}
         </time>
       ),
     });
   }
-  if (!oneRow && machinePart) metaParts.push(machinePart);
+  if (machinePart) metaParts.push(machinePart);
 
   return (
     <div
@@ -403,10 +617,10 @@ export default function SessionDetailHeader({
       // 与转录分开，不是一条内缩的色带。
       className={cn(
         "relative flex shrink-0 flex-col bg-sheet-header px-5",
-        isPage && !oneRow ? "gap-2 py-2.5" : "h-14",
+        isPage ? "gap-2 py-2.5" : "h-14",
       )}
     >
-      {isPage && !oneRow && (
+      {isPage && (
         /* 整屏形态的返回行（屏 22）：返回列表 + 机器名与在线状态。 */
         <nav
           aria-label={t("session.breadcrumb.back")}
@@ -454,12 +668,8 @@ export default function SessionDetailHeader({
       <SessionHeaderBand
         testId="session-detail-identity"
         metaTestId="session-detail-meta"
-        leading={
-          oneRow ? <SessionBackLink to={backTo} className="-ml-2" /> : undefined
-        }
-        // 桌面的页面形态标题由 AppShell TopBar 呈现，不在这里重复；沉浸形态没有顶栏，
-        // 标题就在这一层（一行，全文在 title 上）。
-        title={isPage && !oneRow ? undefined : displayTitle}
+        // 桌面的页面形态标题由 AppShell TopBar 呈现，不在这里重复。
+        title={isPage ? undefined : displayTitle}
         meta={metaParts}
         actions={
           <>
@@ -501,7 +711,7 @@ export default function SessionDetailHeader({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[160px]">
-                <DropdownMenuItem onSelect={() => void copySessionId()}>
+                <DropdownMenuItem onSelect={() => void copySessionId(sid, t)}>
                   {t("session.menu.copySessionId")}
                 </DropdownMenuItem>
               </DropdownMenuContent>

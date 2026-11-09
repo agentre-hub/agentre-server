@@ -6,7 +6,7 @@ import {
   rpcMethods,
   type DurableNotification,
 } from "@agentre-hub/agentre-wire";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyDurableFrames,
@@ -1071,6 +1071,76 @@ describe("RelayConnection 的重连退让", () => {
     // 半幅抖动：random=0 取下界。定值实现在这里会给出 1000。
     expect(delays).toEqual([500]);
     connection.close();
+  });
+});
+
+/**
+ * 主动关闭（登出 / 池子 closeAll）要打断一次还在换票的重连：票回来之后再拨号，就是
+ * 一条池子已经不认的连接在后台自己连上、断了又一直退让重拨下去。前台恢复那一下
+ * （切回页面立即重连）让「关闭时恰好有一次重连在途」不再罕见。
+ */
+describe("RelayConnection：关闭打断在途的重连", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function connectionWithPendingTicket() {
+    const sockets: BinarySocket[] = [];
+    const releases: Array<() => void> = [];
+    const connection = new RelayConnection({
+      url: "ws://relay.test/v1/relay/client",
+      jwt: "jwt",
+      refreshCredentials: () =>
+        new Promise((resolve) => {
+          releases.push(() =>
+            resolve({ url: "ws://relay.test/v1/relay/client", jwt: "jwt-2" }),
+          );
+        }),
+      createWebSocket: () => {
+        const socket = new BinarySocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    return { sockets, releases, connection };
+  }
+
+  it("手动重连换票途中被关闭：票回来之后不再拨号，停在 disconnected", async () => {
+    const { sockets, releases, connection } = connectionWithPendingTicket();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+
+    const reconnecting = connection.reconnect();
+    connection.close();
+    releases.shift()?.();
+    await reconnecting;
+
+    expect(sockets).toHaveLength(1);
+    expect(connection.state).toBe("disconnected");
+  });
+
+  it("断线退让后的重拨换票途中被关闭：同样不再拨号", async () => {
+    const timers: Array<() => void> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => {
+      timers.push(fn);
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const { sockets, releases, connection } = connectionWithPendingTicket();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+    sockets[0].close();
+    timers.shift()?.();
+
+    connection.close();
+    releases.shift()?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sockets).toHaveLength(1);
+    expect(connection.state).toBe("disconnected");
   });
 });
 

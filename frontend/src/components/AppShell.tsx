@@ -14,7 +14,13 @@ import {
 import AppControls from "@/components/AppControls";
 import { ConnectionEscape } from "@/components/ConnectionStatus";
 import { ConsoleNavItem } from "@/components/console";
-import { MobileTabBar, type MobileTab } from "@/components/console";
+import {
+  DrawerAccount,
+  DrawerSectionLabel,
+  MobileDrawer,
+  MobileDrawerProvider,
+  MobileNavButton,
+} from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { UserMenu } from "@/components/UserMenu";
 import { useAccountChannel } from "@/hooks/use-account-channel";
@@ -32,6 +38,11 @@ import {
 } from "@/lib/attentionCount";
 import { agentreLogoUrl, cn } from "@agentre-hub/agentre-ui";
 
+/** 手机抽屉里的两组目的地（规格 2026-11-05「外壳与导航」），顺序即显示顺序。 */
+const CHAT_PATH = "/chat";
+const DRAWER_MAIN = ["/chat", "/issues", "/org", "/devices"];
+const DRAWER_MORE = ["/overview", "/settings"];
+
 /** /v1/devices 只取算设备 Meta 需要的字段。 */
 interface DeviceMeta {
   online: number;
@@ -44,6 +55,8 @@ interface NavItem {
   Icon: typeof LayoutDashboard;
   /** 设备：/v1/devices 在线/全部，与总览 tile 同一口径（取到才渲染 Meta）。 */
   meta?: DeviceMeta | null;
+  /** 手机抽屉里换用的名字（「Agent 与组织」「活跃统计」）；不写就沿用 labelKey。 */
+  drawerLabelKey?: string;
   /** 对话：账号里此刻需要你的条数（取到且 > 0 才渲染角标）。 */
   badge?: number | null;
   /** 那个数是怎么来的（「N 条等你处理 · M 条未读」）。 */
@@ -53,7 +66,7 @@ interface NavItem {
 /**
  * 账号级控制台的外壳：桌面 224px SideNav（R969Y：Brand / 6 导航项 /
  * 账号区）+ 52px TopBar（title 槽 + right 槽 + AppControls）+ 主区；移动（≤767px）
- * 主导航改为 5 项的 A6Z3k 底部 TabBar，设置从账号菜单进入。
+ * 主导航改为页头 ☰ 打开的左抽屉（规格 2026-11-05），没有底部 TabBar。
  *
  * 侧栏可以收成 56px 的图标栏，选择记在这台机器上（navCollapsed）。收起的是
  * **文字**不是导航：六个目的地一个不少，可访问名、等你处理的角标都还在，
@@ -121,6 +134,8 @@ export default function AppShell({
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const { me } = useMe();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const [deviceMeta, setDeviceMeta] = useState<DeviceMeta | null>(null);
   // 需要你的对话条数，按理由分开。null = 还没取到 / 取不到，那时角标整个不画——一个
   // 停在旧值上的数字比没有数字更糟：它会让人以为没有新的东西在等自己。
@@ -217,7 +232,12 @@ export default function AppShell({
   // 用户菜单进入（与 /account 同一条可达路径）。移动 TabBar 由这个数组派生（见
   // 下方 mobileTabs）。
   const NAV_ITEMS: NavItem[] = [
-    { to: "/overview", labelKey: "nav.overview", Icon: LayoutDashboard },
+    {
+      to: "/overview",
+      labelKey: "nav.overview",
+      drawerLabelKey: "nav.stats",
+      Icon: LayoutDashboard,
+    },
     {
       to: "/chat",
       labelKey: "nav.chat",
@@ -234,7 +254,12 @@ export default function AppShell({
       Icon: Monitor,
       meta: deviceMeta,
     },
-    { to: "/org", labelKey: "nav.org", Icon: Building2 },
+    {
+      to: "/org",
+      labelKey: "nav.org",
+      drawerLabelKey: "nav.orgAgents",
+      Icon: Building2,
+    },
     { to: "/settings", labelKey: "nav.settings", Icon: SettingsIcon },
   ];
 
@@ -339,24 +364,51 @@ export default function AppShell({
   // （只读）、账号与安全（去 /account）、登出。
   const account = me ? <UserMenu me={me} compact={navCollapsed} /> : null;
 
-  // 移动端账号进 TopBar：抽屉已移除，账号仍需可达，用紧凑形态（只有头像）。
-  const mobileAccount = me ? <UserMenu me={me} compact /> : null;
-
-  // 桌面 SideNav 最后一项是设置，移动 TabBar 不要它：窄屏留给高频目的地，
-  // 设置从 TopBar 的用户菜单进入。
-  //
-  // 角标跟着一起过去：不搬的话「有多少条在等你」在窄屏上完全看不到——而底部这条栏
-  // 正是移动端的主导航。设备那格 meta 仍不搬：一行 mono
-  // 数字在 tab 底下排不下，那一维在移动端本来就由设备页自己说。
-  const mobileTabs: MobileTab[] = NAV_ITEMS.filter(
-    (item) => item.to !== "/settings",
-  ).map((item) => ({
-    to: item.to,
-    label: t(item.labelKey),
-    Icon: item.Icon,
-    badge: item.badge,
-    badgeLabel: item.badgeLabel,
-  }));
+  /*
+    手机的左抽屉（规格 2026-11-05「外壳与导航」）：账号区 → 主导航（对话、看板、
+    Agent 与组织、设备）→ 更多（活跃统计、设置）→ 底部主题与语言。角标与设备在线/
+    总数用的就是桌面侧栏那两份数据（attention / deviceMeta），不另取一遍。
+  */
+  // 抽屉的「对话」角标只数「需要你」，未读不并进去（规格「外壳与导航」）；侧栏的
+  // 角标是两者之和，两处各自说清自己数的是什么。
+  const needsYou = attention?.needsAttention ?? null;
+  const needsYouLabel =
+    attention && attention.needsAttention > 0
+      ? t("appShell.nav.chatBadge.needsAttention", {
+          count: attention.needsAttention,
+        })
+      : null;
+  const drawerItem = (to: string) => {
+    const item = NAV_ITEMS.find((i) => i.to === to)!;
+    return (
+      <ConsoleNavItem
+        key={item.to}
+        to={item.to}
+        label={t(item.drawerLabelKey ?? item.labelKey)}
+        Icon={item.Icon}
+        meta={item.meta ? `${item.meta.online}/${item.meta.total}` : null}
+        badge={to === CHAT_PATH ? needsYou : item.badge}
+        badgeLabel={to === CHAT_PATH ? needsYouLabel : item.badgeLabel}
+        touch
+      />
+    );
+  };
+  const mobileDrawer = isMobile ? (
+    <MobileDrawer
+      open={drawerOpen}
+      onOpenChange={setDrawerOpen}
+      title={t("appShell.drawer.title")}
+      account={
+        me ? <DrawerAccount name={me.display_name} email={me.email} /> : null
+      }
+    >
+      <div className="flex flex-col gap-0.5">{DRAWER_MAIN.map(drawerItem)}</div>
+      <DrawerSectionLabel>{t("appShell.drawer.more")}</DrawerSectionLabel>
+      <div className="flex flex-col gap-0.5">{DRAWER_MORE.map(drawerItem)}</div>
+      <div className="flex-1" />
+      <AppControls />
+    </MobileDrawer>
+  ) : null;
 
   /*
     没有顶栏的页（ownHeader）在桌面上把语言 / 主题交给侧栏底部：它们属于外框，
@@ -376,104 +428,100 @@ export default function AppShell({
     被浏览器自己的底栏盖住。100dvh 跟着当前可视高度变，TabBar 始终在可视区内。
   */
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row">
-      {!isMobile && (
-        <nav
-          aria-label={t("common.appName")}
-          className={cn(
-            "group/nav relative flex shrink-0 flex-col gap-3 bg-chrome transition-[width]",
-            navCollapsed ? "w-[56px] p-2" : "w-[224px] p-3",
-          )}
-        >
-          {brand}
-          {navToggle}
-          {navItems}
-          {/* 账号区与导航之间不画线：这段留白就是分隔。 */}
-          <div className="flex-1" />
-          {navControls}
-          {/* 断线时的出路挨着账号块：那颗痣就在这里，说的是同一件事的两面
+    <MobileDrawerProvider value={{ open: openDrawer }}>
+      <div className="flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row">
+        {!isMobile && (
+          <nav
+            aria-label={t("common.appName")}
+            className={cn(
+              "group/nav relative flex shrink-0 flex-col gap-3 bg-chrome transition-[width]",
+              navCollapsed ? "w-[56px] p-2" : "w-[224px] p-3",
+            )}
+          >
+            {brand}
+            {navToggle}
+            {navItems}
+            {/* 账号区与导航之间不画线：这段留白就是分隔。 */}
+            <div className="flex-1" />
+            {navControls}
+            {/* 断线时的出路挨着账号块：那颗痣就在这里，说的是同一件事的两面
               （见 ConnectionStatus 的 ConnectionEscape）。稳态下它整个不渲染。 */}
-          <ConnectionEscape variant={navCollapsed ? "icon" : "bar"} />
-          {account}
-        </nav>
-      )}
+            <ConnectionEscape variant={navCollapsed ? "icon" : "bar"} />
+            {account}
+          </nav>
+        )}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {!ownHeader && !immersive && (
-          <header
-            data-testid="app-topbar"
-            /* 高度按内容 52px 算，多出来的 env(safe-area-inset-top) 只是把整条往下
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {!ownHeader && !immersive && (
+            <header
+              data-testid="app-topbar"
+              /* 高度按内容 52px 算，多出来的 env(safe-area-inset-top) 只是把整条往下
                推开（box-sizing: border-box，pt 与 +inset 的高度同步）。无刘海设备
                env() 为 0，这条与改动前逐像素相同。 */
-            className="flex h-[calc(52px_+_env(safe-area-inset-top,0px))] shrink-0 items-center gap-3 bg-chrome px-4 pt-[env(safe-area-inset-top,0px)]"
-          >
-            {title ? (
-              <span className="truncate text-prose font-bold text-foreground">
-                {title}
-              </span>
-            ) : null}
-            <span className="flex-1" />
-            {right}
-            {/* 移动端没有侧栏，这一枚就落在 TopBar 上：断线在窄屏上一样要有出路。 */}
-            {isMobile && <ConnectionEscape variant="icon" />}
-            {isMobile && mobileAccount}
-            <AppControls />
-          </header>
-        )}
-        {/*
+              className="flex h-[calc(52px_+_env(safe-area-inset-top,0px))] shrink-0 items-center gap-3 bg-chrome px-4 pt-[env(safe-area-inset-top,0px)]"
+            >
+              {isMobile && <MobileNavButton />}
+              {title ? (
+                <span className="truncate text-prose font-bold text-foreground">
+                  {title}
+                </span>
+              ) : null}
+              <span className="flex-1" />
+              {right}
+              {/* 移动端没有侧栏，这一枚就落在 TopBar 上：断线在窄屏上一样要有出路。
+                账号、主题与语言都进了抽屉，页头不再有。 */}
+              {isMobile && <ConnectionEscape variant="icon" />}
+              {!isMobile && <AppControls />}
+            </header>
+          )}
+          {/*
           索引列与内容页同在这一行。没有顶栏的页上沿也得离开外框，这 8px 由这一行的
           pt-2 给，索引列与内容页一起让：对话页左列顶行与右栏顶带（同为 56px）因此仍在
           同一条水平线上，只把内容页往下推会让两条带错开 8px。也不去覆写
           content-sheet 自己的 margin，那要赌两条工具类的先后。
         */}
-        <div
-          className={cn(
-            "flex min-h-0 min-w-0 flex-1",
-            !isMobile && ownHeader && "pt-2",
-          )}
-        >
-          {!isMobile && index ? (
-            <div data-testid="app-index" className="flex min-h-0 shrink-0">
-              {index}
-            </div>
-          ) : null}
-          {/*
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1",
+              !isMobile && ownHeader && "pt-2",
+            )}
+          >
+            {!isMobile && index ? (
+              <div data-testid="app-index" className="flex min-h-0 shrink-0">
+                {index}
+              </div>
+            ) : null}
+            {/*
             内容页。缝与圆角只在桌面宽度：content-sheet 自带右、下 8px 缝和 12px
             圆角（上沿贴顶栏或上面那 8px 缝、左沿贴侧栏或索引列）。手机上铺满：只取
             内容页的底色。
 
             content-sheet 带 overflow-hidden 裁圆角，所以滚动放在里面的 main。
           */}
-          <div
-            data-testid="app-sheet"
-            className={cn(
-              "flex min-h-0 min-w-0 flex-1 flex-col",
-              isMobile ? "bg-sheet" : "content-sheet",
-            )}
-          >
-            <main
+            <div
+              data-testid="app-sheet"
               className={cn(
-                "min-h-0 min-w-0 flex-1",
-                flush
-                  ? "overflow-hidden"
-                  : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
-                immersive &&
-                  "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]",
+                "flex min-h-0 min-w-0 flex-1 flex-col",
+                isMobile ? "bg-sheet" : "content-sheet",
               )}
             >
-              {children}
-            </main>
+              <main
+                className={cn(
+                  "min-h-0 min-w-0 flex-1",
+                  flush
+                    ? "overflow-hidden"
+                    : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
+                  immersive &&
+                    "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]",
+                )}
+              >
+                {children}
+              </main>
+            </div>
           </div>
         </div>
-        {/* 移动主导航：A6Z3k 底部 TabBar，只含真实目的地。固定在视口底部，
-            不与页面操作争夺顶栏位置。 */}
-        {isMobile && !immersive && (
-          /* 外层已经不滚了，sticky 没有意义：shrink-0 就够把它按在视口底上。 */
-          <div className="shrink-0">
-            <MobileTabBar ariaLabel={t("common.appName")} items={mobileTabs} />
-          </div>
-        )}
       </div>
-    </div>
+      {mobileDrawer}
+    </MobileDrawerProvider>
   );
 }

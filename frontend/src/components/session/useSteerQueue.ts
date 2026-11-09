@@ -11,7 +11,14 @@ import {
   type QueuedItem,
   type SteerQueueState,
 } from "@agentre-hub/agentre-ui";
-import { useCallback, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import type { ChatComposerHandle } from "@agentre-hub/agentre-ui";
 
 /**
  * 这一轮里排着的那几条插话（规格 2026-09-08-console-steer-queue）。
@@ -177,4 +184,66 @@ export function consumedSteerRefs(event: unknown): ConsumedSteerRef[] {
       text: typeof s.text === "string" ? s.text : undefined,
     };
   });
+}
+
+/**
+ * 手机上轮末没送到的插话：不挂「恢复为草稿 / 丢弃」条，而是按「恢复为草稿」同一条规矩
+ * （appendDraft：空行分隔、接在后面不覆盖）自动放回输入框，由一行说明告知（规格
+ * 2026-11-05 对话页「排队与放回」）。
+ *
+ * - 每一批 `dropped`（按数组身份）放回一次；换会话时队列整份重置，dropped 随之清空，
+ *   不会把上一条的字放进新会话的输入框。
+ * - 输入框不在树上（只读带、审批停靠）时 dropped 原样留着，等它回来再放；放回之后
+ *   输入框被摘下又装回（那段字随旧的输入框一起没了）时重新放一次 —— 说明还写着
+ *   「已放回」，输入框里就得真有。
+ * - 放回之后用户动了输入框（包里的 `onAppendEdited`，交给输入框接上），说明就收起，
+ *   从此没有「清掉」。清掉与收起都是把 dropped 清空，说明由 `dropped` 是否为空推出。
+ *
+ * `notice.onClear` 只撤掉这次放回的那一段（输入框自那次追加后没变才撤得动）。
+ */
+export function usePutBackUndelivered({
+  enabled,
+  composerMounted,
+  dropped,
+  clearDropped,
+  composerHandleRef,
+}: {
+  enabled: boolean;
+  /** 输入框此刻在树上。不在（只读带、审批停靠）时 dropped 原样留着，等它回来再放回。 */
+  composerMounted: boolean;
+  dropped: QueuedItem[];
+  clearDropped: () => void;
+  composerHandleRef?: RefObject<ChatComposerHandle | null>;
+}): {
+  notice: { count: number; onClear: () => void } | null;
+  /** 接到输入框的 `onAppendEdited` 上；桌面（未启用）不接。 */
+  onAppendEdited: (() => void) | undefined;
+} {
+  const putBack = useRef<QueuedItem[] | null>(null);
+  useEffect(() => {
+    if (!enabled || !composerMounted) {
+      // 输入框不在：下次装回来的是一只空的，那一批要重新放。
+      putBack.current = null;
+      return;
+    }
+    if (dropped.length === 0) return;
+    const handle = composerHandleRef?.current;
+    if (!handle || putBack.current === dropped) return;
+    putBack.current = dropped;
+    handle.appendDraft(dropped.map((q) => q.text).join("\n\n"));
+  }, [enabled, composerMounted, dropped, composerHandleRef]);
+
+  const shown = enabled && composerMounted && dropped.length > 0;
+  return {
+    notice: shown
+      ? {
+          count: dropped.length,
+          onClear: () => {
+            composerHandleRef?.current?.removeLastAppend();
+            clearDropped();
+          },
+        }
+      : null,
+    onAppendEdited: enabled ? clearDropped : undefined,
+  };
 }

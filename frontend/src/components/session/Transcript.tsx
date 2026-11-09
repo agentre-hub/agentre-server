@@ -21,6 +21,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useIsMobile } from "@/components/use-is-mobile";
 
 import type { LiveTurnTiming } from "@/components/session/liveTurnTiming";
 import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
@@ -74,6 +75,7 @@ export default function Transcript({
   reconnecting = false,
   cwd,
   backendType,
+  dockDecisions = false,
   getScrollElement,
 }: {
   messages: TranscriptMessage[];
@@ -172,9 +174,15 @@ export default function Transcript({
   cwd?: string;
   /** 会话的后端类型：登录过期的失败卡凭它给出登录命令。控制台没有重新生成 RPC，故不传 onRetryTurn / onRerun。 */
   backendType?: string;
+  /**
+   * 待决的工具权限请求由宿主停靠在输入框的位置（手机，见 SessionComposerBand），
+   * 转录这一处就不再画那张卡。只在手机宽度生效；提问与计划审批不受影响。
+   */
+  dockDecisions?: boolean;
   getScrollElement?: () => HTMLElement | null;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
 
   const fallbackName = t("session.transcript.assistant");
   const renderCtx = useMemo<TranscriptRenderContextValue>(
@@ -195,8 +203,20 @@ export default function Transcript({
       sessionId,
       cwd,
       backendType,
+      // 手机：统计行一行紧凑档、用户消息排到右侧、卡上不画键帽（触屏没有键盘
+      // 可按）；审批停靠时转录不再画待决的那张卡（桌面不传 = 与以前一致）。
+      ...(isMobile
+        ? ({
+            metaDensity: "compact",
+            userMessageAlign: "end",
+            hideShortcutHints: true,
+            decisionPlacement: dockDecisions ? "docked" : "inline",
+          } as const)
+        : null),
     }),
     [
+      isMobile,
+      dockDecisions,
       sessionId,
       cwd,
       backendType,

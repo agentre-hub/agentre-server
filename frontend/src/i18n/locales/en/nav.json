@@ -4,5 +4,7 @@
   "issues": "Board",
   "devices": "Devices",
   "org": "Org",
-  "settings": "Settings"
+  "settings": "Settings",
+  "stats": "Activity stats",
+  "orgAgents": "Agents & org"
 }

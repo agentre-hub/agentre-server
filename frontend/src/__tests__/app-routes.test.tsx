@@ -118,6 +118,27 @@ describe("App shell wiring", () => {
       expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
     });
 
+    it("手机宽度下 / 落在对话列表 /chat（桌面仍是 /overview，见上一条）", async () => {
+      await i18n.changeLanguage("en");
+      mockSignedIn();
+      const original = window.matchMedia;
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes("max-width: 767px"),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as typeof window.matchMedia;
+      onTestFinished(() => {
+        window.matchMedia = original;
+      });
+      renderAt("/");
+      await waitFor(() => expect(window.location.pathname).toBe("/chat"));
+    });
+
     it("serves /chat/:conversationId as the chat page with that conversation open", async () => {
       await i18n.changeLanguage("en");
       mockSignedIn();

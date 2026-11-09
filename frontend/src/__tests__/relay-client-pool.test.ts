@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RelayClient, RelayClientOptions } from "@/lib/relayClient";
 import { RelayClientPool } from "@/lib/relayClientPool";
@@ -394,5 +394,99 @@ describe("RelayClientPool", () => {
     // 别人的通道不受牵连：换 socket 之后它们由连接自己重新声明。
     expect(built[1].reopens).toBe(0);
     expect(built[1].closed).toBe(0);
+  });
+
+  /*
+    前台恢复：手机把页面切到后台后 socket 多半已死、退避计时器也被节流。回到前台
+    （visibilitychange 可见 / pageshow，含 bfcache 恢复）时，不是 open 的连接立即重连，
+    各通道在新 socket 上走原有的补齐路径；open 的不动；两个事件同到只重连一次。
+  */
+  describe("前台恢复", () => {
+    const setVisibility = (state: "visible" | "hidden") =>
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    const becomeVisible = () => {
+      setVisibility("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+
+    afterEach(() => setVisibility("visible"));
+
+    it("切回可见时，没连着的连接立即重连", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "reconnecting";
+
+      becomeVisible();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(1);
+      pool.closeAll();
+    });
+
+    it("pageshow（bfcache 恢复）同样触发重连", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "reconnecting";
+
+      window.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(1);
+      pool.closeAll();
+    });
+
+    it("连着的连接不动", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "connected";
+
+      becomeVisible();
+      window.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(0);
+      pool.closeAll();
+    });
+
+    it("隐藏时不重连", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "reconnecting";
+
+      setVisibility("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(0);
+      pool.closeAll();
+    });
+
+    it("两个事件接连到达只重连一次", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "reconnecting";
+
+      becomeVisible();
+      window.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(1);
+      pool.closeAll();
+    });
+
+    it("closeAll 之后不再响应", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "reconnecting";
+      pool.closeAll();
+
+      becomeVisible();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(0);
+    });
   });
 });

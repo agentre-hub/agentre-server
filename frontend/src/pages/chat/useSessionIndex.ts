@@ -36,6 +36,12 @@ export interface SessionIndexInput {
   devices: DeviceItem[];
   /** 筛选 chip：同样是范围的一部分。它归索引外壳管，因此是借的。 */
   filter: SessionFilter;
+  /**
+   * 把整份索引收到端点上的**一组**（`agent:<同步标识>` 这类 scope，须与 `axis` 相符）。
+   * 手机首页「只看这个 Agent」用它：那一页要的是这一组按时间平铺、能往下翻的整份，
+   * 而不是组骨架里每组先给的那几条。不给就是今天的组骨架。
+   */
+  scope?: string;
   /** 删掉一条之后：右栏正开着它的话要收起来——那是右栏的事，不是索引的事。 */
   onDeleted: (row: MirrorIndexRow) => void;
   /**
@@ -180,6 +186,7 @@ export function useSessionIndex({
   axis,
   devices,
   filter,
+  scope,
   onDeleted,
   onSaved,
 }: SessionIndexInput): SessionIndexData {
@@ -272,10 +279,11 @@ export function useSessionIndex({
       if (axis !== "machine" && filter !== "all") {
         params.set("filter", filter);
       }
+      if (scope) params.set("scope", scope);
       for (const [k, v] of Object.entries(extra ?? {})) params.set(k, v);
       return params;
     },
-    [axis, debouncedSearch, filter],
+    [axis, debouncedSearch, filter, scope],
   );
 
   /**
@@ -293,7 +301,9 @@ export function useSessionIndex({
    */
   const appliedRangeRef = useRef<string | null>(null);
   const [appliedRangeKey, setAppliedRangeKey] = useState<string | null>(null);
-  const rangeKey = `${axis}|${debouncedSearch}|${filter}`;
+  const rangeKey = `${axis}|${scope ?? ""}|${debouncedSearch}|${filter}`;
+  /** 平铺那一档的组身份：收了 scope 就是那一组，否则是时间轴那唯一的一组。 */
+  const flatScope = scope ?? "time";
   // pending 必须与这一次 render 的范围同步，不能等 passive effect 再补一拍；否则
   // 新控件会短暂配上旧行，A→B→A 也可能被 B 留下的布尔状态永久卡住。
   const rangePending = appliedRangeKey !== rangeKey;
@@ -318,17 +328,35 @@ export function useSessionIndex({
     (alive) => {
       // 「未读」那个数要的是完整集合上的真数，因此单独问一次：它跟当前选中哪个
       // chip 无关，本地在已加载的行里数只会随滚动往上爬。
+      // 收了 scope 时数的是那一组里的未读（端点要求 axis 与 scope 相符）。
       const unreadParams = new URLSearchParams({
-        axis: "time",
+        axis: scope ? axis : "time",
         filter: "unread",
         per_group: "1",
       });
+      if (scope) unreadParams.set("scope", scope);
       if (debouncedSearch && axis !== "machine") {
         unreadParams.set("q", debouncedSearch);
       }
       const pagePromise = api<IndexResponse>(
         `/v1/agent-sessions?${rangeParams().toString()}`,
       ).then(async (page) => {
+        // 带 scope 时端点给的是那一组的行而不是组骨架：包成唯一的一组，下游
+        // （合并、平铺翻页、组计数）因此与时间轴那一档走同一条路。
+        if (scope) {
+          return {
+            ...page,
+            groups: [
+              {
+                scope,
+                total: page.total ?? 0,
+                items: page.items ?? [],
+                cursor: page.cursor,
+                has_more: page.has_more,
+              },
+            ],
+          };
+        }
         if (axis !== "machine") return page;
 
         // 机器清单与账号镜像的排序和生命周期来自不同快照。无论选了哪个 chip，
@@ -369,8 +397,9 @@ export function useSessionIndex({
         );
         return { ...page, groups };
       });
+      // 账号总数：只有不带搜索、筛选与 scope 的那一页本身就是它，其余另问一次。
       const accountTotalPromise =
-        !debouncedSearch && filter === "all"
+        !debouncedSearch && filter === "all" && !scope
           ? pagePromise
           : api<IndexResponse>("/v1/agent-sessions?axis=time&per_group=1");
       Promise.all([
@@ -409,7 +438,7 @@ export function useSessionIndex({
           setUnreadTotal(unread.total ?? 0);
           // 平铺那一档（时间轴只有一个组）才有「接着往下翻」这回事。
           const flat =
-            groups.length === 1 && groups[0].scope === "time"
+            groups.length === 1 && groups[0].scope === flatScope
               ? groups[0]
               : null;
           // 游标同理：翻过页之后它指的是「已经翻到哪儿了」，而这一遍报的是第一页
@@ -443,7 +472,16 @@ export function useSessionIndex({
           setLoadError(e);
         });
     },
-    [rangeParams, debouncedSearch, filter, axis, indexNonce, rangeKey],
+    [
+      rangeParams,
+      debouncedSearch,
+      filter,
+      axis,
+      scope,
+      flatScope,
+      indexNonce,
+      rangeKey,
+    ],
   );
 
   /**
@@ -458,7 +496,7 @@ export function useSessionIndex({
     setLoadingMore(true);
     setLoadMoreFailed(false);
     api<IndexResponse>(
-      `/v1/agent-sessions?${rangeParams({ scope: "time", cursor: nextCursor }).toString()}`,
+      `/v1/agent-sessions?${rangeParams({ scope: flatScope, cursor: nextCursor }).toString()}`,
     )
       .then((page) => {
         if (!sameRange()) return;
@@ -470,7 +508,7 @@ export function useSessionIndex({
       // 「在飞」这一格**不**守：它是这只 hook 唯一的一份，而 loadMore 自己按它上
       // 闩。守住的话换范围之后没人再放它下来，那颗「加载更多」就此按不动了。
       .finally(() => setLoadingMore(false));
-  }, [nextCursor, loadingMore, rangeParams, guardRange]);
+  }, [nextCursor, loadingMore, rangeParams, guardRange, flatScope]);
 
   /**
    * 翻某一组的下一页（「查看全部 N」那条路）。范围参数一并带上——弹层里翻的必须

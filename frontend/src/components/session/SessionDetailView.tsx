@@ -40,7 +40,10 @@ import { useIsMobile } from "@/components/use-is-mobile";
 import SessionDetailHeader, {
   SessionPageStateShell,
 } from "@/components/session/SessionDetailHeader";
-import SessionComposerBand from "@/components/session/SessionComposerBand";
+import SessionComposerBand, {
+  isComposeReadonly,
+  pickDockedPermission,
+} from "@/components/session/SessionComposerBand";
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
 import {
@@ -245,6 +248,12 @@ export interface SessionDetailViewProps {
    * 不必再凑一个。
    */
   onMarkedRead?: (conversationId: string, lastReadAt: number) => void;
+  /**
+   * 手机整屏：页头 ⋯「对话信息」弹层里的「删除」（规格 2026-11-05：长按菜单的每一项
+   * 在别处都有看得见的入口，删除的那一处是对话页 ⋯）。确认层与删除本身归宿主（与
+   * 列表行同一个）；不给就不摆。桌面页头不读它。
+   */
+  onDelete?: () => void;
 }
 
 /**
@@ -274,6 +283,7 @@ export default function SessionDetailView({
   initialAgent,
   initialRow,
   onMarkedRead,
+  onDelete,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
   const sid = conversationId;
@@ -635,6 +645,21 @@ export default function SessionDetailView({
       turn.setPendingAssistant(false);
   };
 
+  /**
+   * 后端取走了排着的那几条:它们此刻已经进转录了,chip 该消失。按句柄消费,对不上的
+   * (别的端排的)归约会原样放过。
+   *
+   * 预览与持久两路都要认:agentred 的「取走了」**只走预览帧**(fanout 一律
+   * Preview: true,持久那一份落成转录里的一行 user_message,不再是 steer_consumed),
+   * 只认持久帧的话 chip 永远消不掉,轮末就被当成「没送到」放回输入框 —— 同一句话
+   * 既进了转录又回到输入框。同一帧两路各到一次时,重复消费是空操作。
+   */
+  const consumeSteerFrame = (f: { event?: unknown }) => {
+    const kind = (f.event as { kind?: string } | undefined)?.kind;
+    if (kind === EventSteerConsumed)
+      steerQueue.consume(consumedSteerRefs(f.event));
+  };
+
   const {
     client,
     relayState,
@@ -677,15 +702,11 @@ export default function SessionDetailView({
         }
         noteFrameArrived(frame);
       }
+      // 后端取走了排着的那几条:见 consumeSteerFrame。
+      if (f.conversationId === sid) consumeSteerFrame(f);
       // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,
       // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
       // run 不会结束,onRunResultDone 那一条刷新路径到不了;R10)。
-      // 后端取走了排着的那几条:它们此刻已经进转录了,chip 该消失。按句柄消费,
-      // 对不上的(别的端排的)归约会原样放过。同一帧可能以预览与持久两种形态各到
-      // 一次,重复消费是空操作。
-      if (kind === EventSteerConsumed && f.conversationId === sid) {
-        steerQueue.consume(consumedSteerRefs(f.event));
-      }
       if (kind === "tool_permission_request" || kind === "ask_user_question") {
         decisions.requestWaitersRefresh();
       }
@@ -699,6 +720,7 @@ export default function SessionDetailView({
      */
     onPreviewEvent: (f, at) => {
       if (f.conversationId !== sid) return;
+      consumeSteerFrame(f);
       const frame = toTranscriptFrame(f, at);
       setPreviewTail((prev) => nextPreviewTail(prev, true, frame));
       noteFrameArrived(frame);
@@ -2000,8 +2022,20 @@ export default function SessionDetailView({
       decisionPending={decisionPending}
       onStop={onStop}
       stopping={turnStop.stopping}
+      model={fallbackModel}
+      onDelete={onDelete}
     />
   );
+
+  /**
+   * 手机上停靠到输入框位置的那条审批（规格 2026-11-05 决策 7）。转录与停靠区读的是
+   * 同一个结果：一处画了，另一处就不画。只读条占着那一位时（机器离线等）不停靠，
+   * 待决照旧留在转录里看得见。
+   */
+  const dockedPermission =
+    isMobile && !isComposeReadonly(status)
+      ? pickDockedPermission(messages)
+      : null;
 
   /** 滚的只有这一带。转录、状态横幅与审批卡都在里面，头部与 Composer 都不在。 */
   const scrollBody = (
@@ -2040,6 +2074,7 @@ export default function SessionDetailView({
       pendingAssistant={pendingAssistant}
       decisions={decisions}
       send={send}
+      dockDecisions={dockedPermission !== null}
     />
   );
 
@@ -2085,6 +2120,8 @@ export default function SessionDetailView({
       onRestoreDropped={restoreDropped}
       onDiscardDropped={steerQueue.clearDropped}
       composerHandleRef={composerHandleRef}
+      dockedPermission={dockedPermission}
+      decisionPorts={decisions.transcriptPorts}
     />
   );
 

@@ -13,57 +13,87 @@ import AppControls from "@/components/AppControls";
  * 主区双向居中且只设 min-h-screen（不是 h-screen），
  * 内容比视口高时页面自然从顶部往下排、整页滚动，不会被裁掉。
  */
-export default function AuthLayout({ children }: { children: ReactNode }) {
+export default function AuthLayout({
+  children,
+  pinned,
+  header,
+}: {
+  children: ReactNode;
+  /**
+   * 手机整屏形态：主操作区钉在屏幕底部拇指区（安全区之上），主区改为顶部起排，
+   * 并去掉页脚。只由手机形态的页面传入；不传则与桌面原样一致。
+   */
+  pinned?: ReactNode;
+  /** 换掉品牌顶栏（手机的授权确认页用「✕ · 授权设备」）。 */
+  header?: ReactNode;
+}) {
   const { t } = useTranslation();
   const year = new Date().getFullYear();
 
   return (
-    <div className="flex min-h-screen flex-col bg-chrome">
-      <header className="flex items-center px-8 py-5">
-        <div className="flex items-center gap-[9px]">
-          {/* 跟侧边栏 Brand 带同一份共享 mark，不套底板：登录页是没登录的人第一眼
+    <div className="flex min-h-dvh flex-col bg-chrome">
+      {header ?? (
+        <header className="flex items-center px-8 py-5">
+          <div className="flex items-center gap-[9px]">
+            {/* 跟侧边栏 Brand 带同一份共享 mark，不套底板：登录页是没登录的人第一眼
               看到的界面，摆个通用终端图标等于第一眼就不是这个产品；而那块实心底色
               在这一页会成为仅次于主按钮的第二亮元素，跟 CTA 抢。 */}
-          <img
-            src={agentreLogoUrl}
-            alt=""
-            aria-hidden="true"
-            className="size-7 shrink-0 object-contain"
-            draggable={false}
-          />
-          <span className="text-prose font-semibold text-foreground">
-            {t("authLayout.brand")}
-          </span>
-        </div>
-        <div className="flex-1" />
-        <AppControls />
-      </header>
+            <img
+              src={agentreLogoUrl}
+              alt=""
+              aria-hidden="true"
+              className="size-7 shrink-0 object-contain"
+              draggable={false}
+            />
+            <span className="text-prose font-semibold text-foreground">
+              {t("authLayout.brand")}
+            </span>
+          </div>
+          <div className="flex-1" />
+          <AppControls />
+        </header>
+      )}
 
-      <main className="flex flex-1 items-center justify-center px-6">
+      <main
+        className={
+          pinned == null
+            ? "flex flex-1 items-center justify-center px-6"
+            : "flex flex-1 flex-col px-6 pt-4"
+        }
+      >
         {children}
       </main>
 
-      <footer className="flex flex-wrap items-center justify-center gap-[18px] px-8 py-5 text-xs text-muted-foreground">
-        <span>{t("authLayout.footer.copyright", { year })}</span>
-        <Link
-          to="/terms"
-          className="underline-offset-4 hover:text-foreground hover:underline"
+      {pinned != null ? (
+        <div
+          data-testid="auth-pinned"
+          className="sticky bottom-0 flex flex-col gap-3 bg-chrome px-6 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]"
         >
-          {t("authLayout.footer.terms")}
-        </Link>
-        <Link
-          to="/privacy"
-          className="underline-offset-4 hover:text-foreground hover:underline"
-        >
-          {t("authLayout.footer.privacy")}
-        </Link>
-        <Link
-          to="/status"
-          className="underline-offset-4 hover:text-foreground hover:underline"
-        >
-          {t("authLayout.footer.status")}
-        </Link>
-      </footer>
+          {pinned}
+        </div>
+      ) : (
+        <footer className="flex flex-wrap items-center justify-center gap-[18px] px-8 py-5 text-xs text-muted-foreground">
+          <span>{t("authLayout.footer.copyright", { year })}</span>
+          <Link
+            to="/terms"
+            className="underline-offset-4 hover:text-foreground hover:underline"
+          >
+            {t("authLayout.footer.terms")}
+          </Link>
+          <Link
+            to="/privacy"
+            className="underline-offset-4 hover:text-foreground hover:underline"
+          >
+            {t("authLayout.footer.privacy")}
+          </Link>
+          <Link
+            to="/status"
+            className="underline-offset-4 hover:text-foreground hover:underline"
+          >
+            {t("authLayout.footer.status")}
+          </Link>
+        </footer>
+      )}
     </div>
   );
 }

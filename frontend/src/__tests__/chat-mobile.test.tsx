@@ -7,6 +7,7 @@
  *   - 头部搜索是真实过滤（屏 20），空态时也一样可触达、且不制造结果。
  */
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -14,32 +15,56 @@ import {
   within,
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { api } from "@/lib/api";
 import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
-import { edgeClasses } from "./helpers/edge-classes";
-import { MOBILE_TAB_BAR_CLEARANCE } from "@/lib/mobileLayout";
-
-/**
- * jsdom 的 CSS 解析器会改写 `calc(... env(...))`（不是真浏览器行为），所以直接比
- * 字符串会误红。把常量同样喂给一个探针元素再读回，比较的是「同一个常量」。
- */
-function jsdomStyleOf(prop: "height" | "bottom", value: string): string {
-  const probe = document.createElement("div");
-  probe.style[prop] = value;
-  return probe.style[prop];
-}
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
+// 长按「停止这一轮」走中继池借一条通道发 runtime.abort；这里只认它借的是哪条通道、
+// 发了什么。
+const { abortRequest } = vi.hoisted(() => ({
+  abortRequest: vi.fn(async (..._args: unknown[]) => ({})),
+}));
+vi.mock("@/lib/relayClientPool", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/relayClientPool")>();
+  return {
+    ...actual,
+    withRelayClient: vi.fn(
+      async (
+        target: string,
+        fn: (client: {
+          request: (...args: unknown[]) => Promise<unknown>;
+        }) => Promise<unknown>,
+      ) =>
+        fn({
+          request: (...args: unknown[]) => abortRequest(target, ...args),
+        }),
+    ),
+  };
+});
 // 会话详情本身由 session-detail*.test.tsx 守；这里只认 Chat 在移动端把哪一条、以什么
 // 形态、带着哪条返回地址交给它。
 vi.mock("@/components/session/SessionDetailView", () => ({
@@ -48,6 +73,7 @@ vi.mock("@/components/session/SessionDetailView", () => ({
     conversationId: string;
     form?: string;
     backTo?: string;
+    onDelete?: () => void;
   }) => (
     <div
       data-testid="mobile-session-detail"
@@ -55,7 +81,13 @@ vi.mock("@/components/session/SessionDetailView", () => ({
       data-session-id={props.conversationId}
       data-form={props.form ?? "page"}
       data-back-to={props.backTo ?? ""}
-    />
+    >
+      {props.onDelete ? (
+        <button type="button" onClick={props.onDelete}>
+          stub delete
+        </button>
+      ) : null}
+    </div>
   ),
 }));
 
@@ -151,14 +183,30 @@ function stubApi(
       // running 生命周期集合（包含 waiting_for_input）。
       const q = params.get("q") ?? "";
       const filter = params.get("filter") ?? "";
+      const scope = params.get("scope") ?? "";
       const rows = (saved as Record<string, unknown>[]).filter((row) => {
         if (q && !String(row.title ?? "").includes(q)) return false;
+        if (
+          scope.startsWith("agent:") &&
+          row.agent_sync_id !== scope.slice("agent:".length)
+        )
+          return false;
+        if (
+          scope.startsWith("project:") &&
+          row.project_sync_id !== scope.slice("project:".length)
+        )
+          return false;
         if (filter === "unread")
-          return Number(row.updated_at ?? 0) > Number(row.last_read_at ?? 0);
+          return (
+            row.lifecycle_state !== "running" &&
+            Number(row.last_message_at ?? 0) > Number(row.last_read_at ?? 0)
+          );
         if (filter === "running") return row.lifecycle_state === "running";
         return true;
       });
       if (params.get("per_group") === "1") return { total: rows.length };
+      // 带 scope 时端点给的是那一组的行，不是组骨架（chatRows 的 IndexResponse）。
+      if (scope) return { total: rows.length, items: rows, has_more: false };
       return {
         total: rows.length,
         groups: rows.length
@@ -230,11 +278,26 @@ function LocationProbe() {
   );
 }
 
+/** 浏览器的后退键：详情被替身顶掉了，它自己那颗返回不在屏上。 */
+function HistoryBack() {
+  const navigate = useNavigate();
+  return (
+    <button
+      type="button"
+      data-testid="history-back"
+      onClick={() => navigate(-1)}
+    >
+      history back
+    </button>
+  );
+}
+
 function renderChat(entry = "/chat") {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <ThemeProvider>
         <LocationProbe />
+        <HistoryBack />
         <Routes>
           <Route path="/chat/:conversationId?" element={<Chat />} />
         </Routes>
@@ -258,181 +321,12 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
   });
 
-  /**
-   * 同一条判据的另一半：机器**答不出**的时候这一轴上仍然有东西可说——那台机器
-   * 自己（规格 2026-08-21「机器轴列什么」：「组头标「离线」/「连不上」，这一组
-   * 一行都不列」，以及用户故事 3「我要那台机器仍然在列表上、并如实说它离线」）。
-   * 拿「有没有行」当判据的话，账号又是空的时候整个索引会被主空态吞掉，屏幕上
-   * 写着「你还没有对话」——而那台机器在不在、是什么状态，一个字都读不到。
-   */
-  it("机器轴:账号空、机器又离线,组头照样在并如实说离线", async () => {
-    stubApi([], [offlineMachine]);
-    mockUseRelay.mockReturnValue(connectedRelay());
-    renderChat("/chat?axis=machine");
-
-    const box = await screen.findByTestId("group-device-2");
-    expect(within(box).getByText("公司 Mac mini")).toBeTruthy();
-    expect(screen.getByTestId("group-offline-device-2")).toBeTruthy();
-    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
-  });
-
-  /**
-   * 在线、清单交出来了、里面是空的：共享组保留组头，并使用统一空组文案。
-   * 账号也空的时候这一句同样不能被主空态换成「你还没有对话」——后者说的是账号，
-   * 而这一轴问的是机器。
-   */
-  it("机器轴:账号空、机器交出的清单也是空的,组头与那句说明都还在", async () => {
-    stubApi([], [agentred]);
-    mockUseRelay.mockReturnValue({
-      ...connectedRelay(),
-      client: {
-        request: vi.fn(async () => ({
-          sessions: [],
-        })),
-        attach: vi.fn(async () => ({})),
-        catchUp: vi.fn(async () => {}),
-        close: vi.fn(),
-      } as never,
-    });
-    renderChat("/chat?axis=machine");
-
-    const box = await screen.findByTestId("group-device-1");
-    expect(
-      await within(box).findByText("No conversations on this machine yet"),
-    ).toBeTruthy();
-    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
-  });
-
-  it("项目轴:账号空但项目名单有项目时保留项目组、随手对话与新建入口", async () => {
-    stubApi([], [agentred], {
-      projects: [
-        {
-          sync_id: "p-known",
-          name: "Known project",
-          sort_order: 0,
-          members: [],
-        },
-      ],
-    });
-    renderChat("/chat?axis=project");
-
-    const group = await screen.findByTestId("group-p-known");
-    expect(within(group).getByText("Known project")).toBeTruthy();
-    expect(within(group).getByText("No sessions")).toBeTruthy();
-    expect(screen.getByText("Quick chats")).toBeTruthy();
-    expect(screen.getByTestId("index-new-project")).toBeTruthy();
-    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
-  });
-
-  it("Agent 轴:账号空但 Agent 名单有 Agent 时保留空组与组头新建入口", async () => {
-    stubApi([], [agentred]);
-    renderChat("/chat?axis=agent");
-
-    const group = await screen.findByTestId("group-ag-1");
-    expect(within(group).getByText("后端 Agent")).toBeTruthy();
-    expect(within(group).getByText("No sessions")).toBeTruthy();
-    expect(within(group).getByTestId("group-header-plus")).toBeTruthy();
-    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
-  });
-
-  it("与桌面同一套四个轴:轴选择器在,没有只属于移动端的状态分组", async () => {
-    stubApi([waitingMirrored, runningMirrored]);
-    renderChat();
-
-    expect(await screen.findByText("等你批")).toBeTruthy();
-    expect(screen.getByTestId("axis-picker")).toBeTruthy();
-    // 「等你处理 / 运行中」不再是移动端独有的一套分组维度（决策 5）。
-    const headings = Array.from(document.querySelectorAll("h2")).map(
-      (h) => h.textContent ?? "",
-    );
-    expect(headings.some((h) => /Waiting for you/.test(h))).toBe(false);
-    expect(headings.some((h) => /Running/.test(h))).toBe(false);
-    // 判不出项目的会话进「随手对话」（默认落在项目轴上）。
-    expect(screen.getByText("Quick chats")).toBeTruthy();
-  });
-
-  // 决策 5 的另一半：移动端不再有自己的状态分组，正是因为「未读 / 运行中」
-  // 已经是筛选 chip —— 那套 chip 因此必须在移动端也够得着。
-  it("「未读 / 运行中」在移动端是筛选 chip，点了真收窄", async () => {
-    stubApi([waitingMirrored, runningMirrored]);
-    renderChat();
-
-    expect(await screen.findByText("等你批")).toBeTruthy();
-    expect(screen.getByText("跑着呢")).toBeTruthy();
-
-    fireEvent.click(screen.getByTestId("filter-chip-running"));
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("filter-chip-running").getAttribute("aria-pressed"),
-      ).toBe("true"),
-    );
-    // waiting_for_input 是运行期叠加事实，不把会话移出 running 生命周期。
-    expect(screen.getByText("等你批")).toBeTruthy();
-    expect(screen.getByText("跑着呢")).toBeTruthy();
-  });
-
   it("账号镜像里的行行尾不摆动作(它们都已经保存过了)", async () => {
     stubApi([waitingMirrored]);
     renderChat();
 
     expect(await screen.findByText("等你批")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-  });
-
-  it("行的第二行补齐当前轴没说的那一维(项目轴上是机器)", async () => {
-    stubApi([waitingMirrored]);
-    renderChat();
-
-    expect(await screen.findByText("等你批")).toBeTruthy();
-    expect(screen.getByTestId("row-secondary-42").textContent).toContain(
-      "书房小主机",
-    );
-  });
-
-  it("空态沿用屏 32:文案与「开始第一个对话」主按钮原样不动", async () => {
-    stubApi([], []);
-    renderChat();
-
-    expect(
-      await screen.findByRole("button", {
-        name: "Start your first conversation",
-      }),
-    ).toBeTruthy();
-    // 空态**只有一个**——索引交白卷时由它承接，而不是自己再印一遍同一句话。
-    expect(screen.getAllByText("No conversations yet.").length).toBe(1);
-    expect(screen.getByText("Pick an agent to get started.")).toBeTruthy();
-    // 主按钮升起「挑一个 Agent」的底部弹层（屏 23）。
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start your first conversation" }),
-    );
-    expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
-  });
-
-  it("移动端有会话时也有新建入口(FAB)升起挑 Agent 的底部弹层(IC5sH)", async () => {
-    stubApi([waitingMirrored]);
-    renderChat();
-
-    expect(await screen.findByText("等你批")).toBeTruthy();
-    // FAB 只在有会话时才渲染，所以它的可访问名不能是「开始第一个对话」——
-    // 屏幕阅读器上那就是一句与事实相反的话。
-    expect(
-      screen.queryByRole("button", { name: "Start your first conversation" }),
-    ).toBeNull();
-    const fab = screen.getByRole("button", { name: "New conversation" });
-    fireEvent.click(fab);
-    expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
-  });
-
-  it("FAB 的底部让开量与底栏共用 MOBILE_TAB_BAR_CLEARANCE（74px+16px+安全区）", async () => {
-    stubApi([waitingMirrored]);
-    renderChat();
-
-    expect(await screen.findByText("等你批")).toBeTruthy();
-    const fab = screen.getByRole("button", { name: "New conversation" });
-    expect(fab.style.bottom).toBe(
-      jsdomStyleOf("bottom", MOBILE_TAB_BAR_CLEARANCE),
-    );
-    expect(fab.className).not.toContain("bottom-24");
   });
 
   it("底部弹层是 flex 列：Agent 清单那一格被限高、能滚，不被 grid 行撑出屏外", async () => {
@@ -473,14 +367,13 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     stubApi([], []);
     renderChat();
 
-    expect(
-      await screen.findByRole("button", {
-        name: "Start your first conversation",
-      }),
-    ).toBeTruthy();
+    expect(await screen.findByTestId("chat-empty-state")).toBeTruthy();
 
+    fireEvent.click(
+      screen.getByRole("button", { name: "Search conversation titles" }),
+    );
     const search = screen.getByRole("searchbox", {
-      name: i18n.t("chat.searchSessions"),
+      name: "Search conversation titles",
     });
     fireEvent.change(search, { target: { value: "跑着呢" } });
 
@@ -527,19 +420,6 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     ).toBeTruthy();
   });
 
-  // 规格「已知的可见变化」3：共享行的状态点可访问名收敛成英文状态码，移动端行尾
-  // 因此保留本地化文字徽标兜底——状态不能只剩颜色。
-  it("移动行尾保留本地化状态徽标（不只靠颜色）", async () => {
-    stubApi([waitingMirrored]);
-    renderChat();
-
-    expect(await screen.findByText("等你批")).toBeTruthy();
-    // 徽标说的是**这一行为什么需要你**（共享包的 attention 文案），不再是生命周期
-    // 的原话：一条正等着审批的对话，「审批」比「运行中」更接近用户要知道的事。
-    // 守的那一条没变——行上仍有一处看得见的本地化状态，不只靠颜色。
-    expect(screen.getByText("Approval")).toBeTruthy();
-  });
-
   // 搜索与筛选同一条口径：只收窄行。搜不到不等于账号里没有对话——把整页翻成
   // 「还没有对话 / 开始第一个对话」等于替用户否认了那些还在的会话。
   it("搜不到时不谎报「还没有对话」：主空态不出现，说的是这次搜索没有匹配", async () => {
@@ -547,8 +427,11 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     renderChat();
 
     expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Search conversation titles" }),
+    );
     const search = screen.getByRole("searchbox", {
-      name: i18n.t("chat.searchSessions"),
+      name: "Search conversation titles",
     });
     fireEvent.change(search, { target: { value: "查无此条" } });
 
@@ -562,31 +445,11 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
     expect(empty.textContent).toContain("No matching sessions");
   });
-
-  it("移动端也有可触达的真实搜索（屏 20 头部搜索）：输入词过滤索引里的行", async () => {
-    stubApi([waitingMirrored, runningMirrored]);
-    renderChat();
-
-    expect(await screen.findByText("等你批")).toBeTruthy();
-    expect(screen.getByText("跑着呢")).toBeTruthy();
-    const search = screen.getByRole("searchbox", {
-      name: i18n.t("chat.searchSessions"),
-    });
-    fireEvent.change(search, { target: { value: "跑着呢" } });
-    await waitFor(() => expect(screen.queryByText("等你批")).toBeNull());
-    expect(await screen.findByText("跑着呢")).toBeTruthy();
-  });
 });
 
 /**
- * 移动端顶部（2026-08-20 对话页 UI/UX 改版）。
- *
- * 此前是把桌面那一套 `right` 槽整个塞进壳的 52px 顶栏：标题被截成「对.」、
- * 「桌面端已连接」折成两行、「去设备上找对话」也折成两行，整条被撑到 ~100px
- * 还是挤的。窄屏上「标题 + 页面动作 + 账号 + 语言/主题」本来就不该抢同一行。
- *
- * 重画之后这一带由页面自己排（壳的 ownHeader）：第一行只留身份与全局控件
- * （标题 + 一枚带文字的连接 chip + 账号 + 语言/主题），搜索自成第二行。
+ * 移动端顶部：这一带由页面自己排（壳的 ownHeader），手机上是「☰ · 范围名 · ⌕ · ✎」
+ * 一行（规格 2026-11-05「首页」）；账号、语言与主题都进了抽屉。
  */
 describe("移动端对话页：顶部", () => {
   it("页面自己画顶栏，壳不再另画一条——整页只有一条 header", async () => {
@@ -595,43 +458,9 @@ describe("移动端对话页：顶部", () => {
 
     await screen.findByText("等你批");
     expect(container.querySelectorAll("header")).toHaveLength(1);
-    expect(screen.getByTestId("chat-mobile-header")).toBeTruthy();
-  });
-
-  it("顶栏这一带装的是身份与全局控件 + 搜索，搜索不与标题抢同一行", async () => {
-    stubApi([waitingMirrored]);
-    renderChat();
-
-    await screen.findByText("等你批");
     const head = screen.getByTestId("chat-mobile-header");
-    expect(
-      head.contains(
-        screen.getByRole("searchbox", { name: "Search conversations" }),
-      ),
-    ).toBe(true);
-    // 语言/主题这一组全局控件也在这一带里（它们此前住在壳的顶栏）。
-    expect(head.querySelectorAll("button").length).toBeGreaterThan(1);
     // 这一条顶栏不走壳，安全区得自己让：少了它，刘海机上内容会伸到状态栏底下。
     expect(head.className).toContain("pt-[env(safe-area-inset-top,0px)]");
-  });
-
-  /*
-    无边框改版（规格 2026-10-15 决策 3）：手机上顶栏落在外框色上，与下面那张铺满的
-    内容页靠色阶分开，不画底线。语言 / 主题仍在这一带里——手机上没有侧栏接住它们。
-  */
-  it("顶栏在外框色上、不画线，语言/主题仍够得着", async () => {
-    stubApi([waitingMirrored]);
-    renderChat();
-
-    await screen.findByText("等你批");
-    const head = screen.getByTestId("chat-mobile-header");
-    expect(edgeClasses(head)).toEqual([]);
-    expect(head.className).toContain("bg-chrome");
-    expect(head.className).not.toMatch(/bg-card/);
-    expect(
-      within(head).getByRole("button", { name: /Language/i }),
-    ).toBeTruthy();
-    expect(within(head).getByRole("button", { name: /Theme/i })).toBeTruthy();
   });
 });
 
@@ -641,18 +470,13 @@ describe("移动端对话页：顶部", () => {
   它们落在各自页头的右端，与索引页头同一组（AppControls），整屏只有一份。
 */
 describe("移动端新建对话：语言/主题", () => {
-  function expectAppControlsIn(head: HTMLElement) {
+  function expectNoAppControlsIn(head: HTMLElement) {
     expect(
-      within(head).getByRole("button", { name: /Language/i }),
-    ).toBeTruthy();
-    expect(within(head).getByRole("button", { name: /Theme/i })).toBeTruthy();
-    // 索引那条页头此刻不在：屏上只有这一份，不是两份叠着。
-    expect(screen.getAllByRole("button", { name: /Language/i })).toHaveLength(
-      1,
-    );
+      within(head).queryAllByRole("button", { name: /Language|Theme/i }),
+    ).toHaveLength(0);
   }
 
-  it("草稿那一屏的页头带着语言/主题", async () => {
+  it("草稿那一屏的页头不带语言/主题（只在抽屉底部）", async () => {
     stubApi([waitingMirrored]);
     mockUseRelay.mockReturnValue(connectedRelay());
     renderChat();
@@ -663,10 +487,10 @@ describe("移动端新建对话：语言/主题", () => {
     fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
     await screen.findByTestId("draft-session");
 
-    expectAppControlsIn(screen.getByTestId("draft-header"));
+    expectNoAppControlsIn(screen.getByTestId("draft-header"));
   });
 
-  it("「从项目里挑」那一屏的页头带着语言/主题", async () => {
+  it("「从项目里挑」那一屏的页头不带语言/主题（只在抽屉底部）", async () => {
     stubApi([waitingMirrored]);
     renderChat();
 
@@ -682,7 +506,7 @@ describe("移动端新建对话：语言/主题", () => {
 
     const head = pane.querySelector("header");
     expect(head).not.toBeNull();
-    expectAppControlsIn(head as HTMLElement);
+    expectNoAppControlsIn(head as HTMLElement);
   });
 });
 
@@ -815,6 +639,36 @@ describe("移动端对话页：会话地址", () => {
     expect(screen.queryByTestId("chat-mobile-header")).toBeNull();
   });
 
+  it("对话页 ⋯ 里的删除走与列表同一个确认层，删掉后回到列表", async () => {
+    stubApi([waitingMirrored]);
+    const listApi = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/saved-sessions/delete") return {};
+      return listApi(path, init);
+    });
+    renderChat("/chat?axis=agent");
+
+    fireEvent.click(await screen.findByRole("link", { name: /等你批/ }));
+    const detail = await screen.findByTestId("mobile-session-detail");
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "stub delete" }),
+    );
+
+    fireEvent.click(await screen.findByTestId("delete-session-confirm"));
+
+    await waitFor(() =>
+      expect(mockedApi).toHaveBeenCalledWith(
+        "/v1/saved-sessions/delete",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toMatch(
+        /^\/chat(\?|$)/,
+      ),
+    );
+  });
+
   it("未保存的会话从外部链接直接打开：返回键回到 /chat，不带 device", async () => {
     stubApi([]);
     renderChat("/chat/11111111-1111-7111-8111-111111111111?device=1");
@@ -882,24 +736,21 @@ describe("移动端新对话草稿：一层头部", () => {
     ).toBeNull();
   });
 
-  it("还没有标题时叫「新对话」，副行是 Agent · 机器", async () => {
+  it("还没有标题时页头是收件人：返回 · 名字，副行是 在线 · 新对话", async () => {
     const band = await openMobileDraft();
 
-    expect(
-      within(band).getByRole("heading", { name: "New chat" }),
-    ).toBeTruthy();
     expect(within(band).getByRole("button", { name: "Back" })).toBeTruthy();
-    const meta = within(band).getByTestId("draft-header-meta");
-    expect(
-      within(meta).getByTestId("draft-header-meta-agent").textContent,
-    ).toContain("后端 Agent");
-    const machine = await within(meta).findByTestId(
-      "draft-header-meta-machine",
+    expect(within(band).getByTestId("draft-recipient").textContent).toContain(
+      "后端 Agent",
     );
-    expect(machine.textContent).toContain("书房小主机");
-    for (const part of meta.querySelectorAll("[data-part]")) {
-      expect(part.className).not.toMatch(/hidden/);
-    }
+    await waitFor(() =>
+      expect(
+        within(band).getByTestId("draft-header-meta").textContent,
+      ).toContain("Online"),
+    );
+    expect(within(band).getByTestId("draft-header-meta").textContent).toContain(
+      "New chat",
+    );
   });
 });
 
@@ -918,9 +769,11 @@ describe("移动端对话页:空态 W8 页内切机器轴", () => {
         name: "Browse conversations by machine",
       }),
     );
-    expect(screen.getByTestId("chat-location").textContent).toBe(
-      "/chat?axis=machine",
-    );
+    // 手机上「按机器分组」并入范围弹层：这个出口升起它，并落在「机器」那一档。
+    const sheet = await screen.findByRole("dialog");
+    expect(
+      within(sheet).getByTestId("scope-item-machine-1").textContent,
+    ).toContain("书房小主机");
   });
 
   it("账号空且没有在线机器:出口是「添加设备」，指向 /devices", async () => {
@@ -938,5 +791,459 @@ describe("移动端对话页:空态 W8 页内切机器轴", () => {
         .getByRole("link", { name: "Add a device" })
         .getAttribute("href"),
     ).toBe("/devices");
+  });
+});
+
+/**
+ * 手机首页（规格 2026-11-05-mobile-pwa-shell「首页（对话列表）」）：页头
+ * ☰ · 范围名 ⌄（副标题）· ⌕ · ✎；筛选胶囊；按 需要你 / 进行中 / 今天 / 更早 分段；
+ * 手机行；搜索与高亮；长按菜单；空态出口；离线副标题；返回恢复。
+ */
+describe("手机首页：对话列表", () => {
+  const now = Date.now();
+  /** 今天早些时候结束、还没读过的一条（未读点）。 */
+  const unreadToday = {
+    peer_fingerprint: "fp-1",
+    device_fingerprint: "fp-1",
+    conversation_id: "44",
+    title: "读一下迁移",
+    agent_sync_id: "ag-1",
+    backend_type: "claudecode",
+    lifecycle_state: "idle",
+    last_message_at: now - 60_000,
+    last_read_at: 0,
+  };
+  /** 很早以前的一条，读过了。 */
+  const oldRead = {
+    peer_fingerprint: "fp-1",
+    device_fingerprint: "fp-1",
+    conversation_id: "45",
+    title: "老对话",
+    agent_sync_id: "ag-1",
+    backend_type: "claudecode",
+    lifecycle_state: "idle",
+    last_message_at: 1754000000000,
+    last_read_at: 1754000001000,
+  };
+  const all = [waitingMirrored, runningMirrored, unreadToday, oldRead];
+
+  it("页头：☰ · 范围名 ⌄ 与「N / M 台机器在线」· ⌕ · ✎，没有浮动按钮", async () => {
+    stubApi(all, [agentred, offlineMachine]);
+    renderChat();
+
+    await screen.findByText("等你批");
+    const head = screen.getByTestId("chat-mobile-header");
+    expect(
+      within(head).getByRole("button", { name: "Open menu" }),
+    ).toBeTruthy();
+    const scope = within(head).getByRole("button", {
+      name: "Switch scope, current: All",
+    });
+    expect(
+      within(scope).getByTestId("chat-phone-subtitle").textContent,
+    ).toContain("1 / 2 machines online");
+    expect(
+      within(head).getByRole("button", { name: "Search conversation titles" }),
+    ).toBeTruthy();
+    // ✎ 在页头里，整页只有这一颗新对话入口（不再有右下角的浮动按钮）。
+    const compose = screen.getAllByRole("button", { name: "New conversation" });
+    expect(compose).toHaveLength(1);
+    expect(head.contains(compose[0])).toBe(true);
+    fireEvent.click(compose[0]);
+    expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
+  });
+
+  it("「只看这个 Agent」换整页范围：地址、标题与取数都收到这个 Agent", async () => {
+    stubApi(all);
+    renderChat();
+
+    fireEvent.contextMenu((await screen.findByText("跑着呢")).closest("a")!);
+    fireEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Only this agent",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=agent&agent=ag-1",
+      ),
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Switch scope, current: 后端 Agent",
+      }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        mockedApi.mock.calls.some(([path]) =>
+          String(path).includes("scope=agent%3Aag-1"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("「只看这台机器」换到机器范围", async () => {
+    stubApi(all);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    fireEvent.contextMenu((await screen.findByText("跑着呢")).closest("a")!);
+    fireEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Only this machine",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=machine&machine=1",
+      ),
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Switch scope, current: 书房小主机",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("空态：主按钮「新对话」撑满宽", async () => {
+    stubApi([], [agentred]);
+    renderChat();
+
+    const empty = await screen.findByTestId("chat-empty-state");
+    const primary = within(empty).getByRole("button", {
+      name: "New conversation",
+    });
+    expect(primary.className).toContain("w-full");
+    // 空态**只有一个**——索引交白卷时由它承接，而不是自己再印一遍同一句话。
+    expect(screen.getAllByText("No conversations yet.").length).toBe(1);
+    expect(screen.getByText("Pick an agent to get started.")).toBeTruthy();
+    fireEvent.click(primary);
+    expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
+  });
+
+  describe("离线副标题", () => {
+    const onLine = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(navigator),
+      "onLine",
+    );
+    function goOffline() {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        get: () => false,
+      });
+      window.dispatchEvent(new Event("offline"));
+    }
+    afterEach(() => {
+      delete (navigator as { onLine?: boolean }).onLine;
+      if (onLine)
+        Object.defineProperty(
+          Object.getPrototypeOf(navigator),
+          "onLine",
+          onLine,
+        );
+    });
+
+    it("列表载入后断网：副标题换成「没有网络 · HH:MM 的内容」，列表照常可读", async () => {
+      stubApi(all);
+      renderChat();
+
+      await screen.findByText("等你批");
+      act(() => goOffline());
+      const subtitle = await screen.findByTestId("chat-phone-subtitle");
+      await waitFor(() =>
+        expect(subtitle.textContent).toMatch(
+          /No network · content from \d{2}:\d{2}/,
+        ),
+      );
+      expect(screen.getByText("等你批")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      act(() => {
+        delete (navigator as { onLine?: boolean }).onLine;
+        window.dispatchEvent(new Event("online"));
+      });
+      await waitFor(() =>
+        expect(subtitle.textContent).toContain("machines online"),
+      );
+    });
+
+    it("还没载入就断网：不换副标题", async () => {
+      stubApi(all);
+      const listing = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, ...rest) => {
+        if (String(path).startsWith("/v1/agent-sessions?"))
+          return new Promise(() => {});
+        return listing(path, ...rest);
+      });
+      renderChat();
+
+      const subtitle = await screen.findByTestId("chat-phone-subtitle");
+      act(() => goOffline());
+      expect(subtitle.textContent).not.toMatch(/No network/);
+    });
+  });
+
+  it("从对话返回列表：同一范围下恢复滚动位置与筛选", async () => {
+    stubApi(all);
+    renderChat();
+
+    await screen.findByText("等你批");
+    fireEvent.click(screen.getByTestId("filter-chip-attention"));
+    await waitFor(() => expect(screen.queryByText("跑着呢")).toBeNull());
+    const list = screen.getByTestId("chat-phone-list");
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+
+    fireEvent.click(screen.getByRole("link", { name: /等你批/ }));
+    await screen.findByTestId("mobile-session-detail");
+    fireEvent.click(screen.getByTestId("history-back"));
+
+    const restored = await screen.findByTestId("chat-phone-list");
+    expect(
+      screen.getByTestId("filter-chip-attention").getAttribute("aria-pressed"),
+    ).toBe("true");
+    await waitFor(() => expect(restored.scrollTop).toBe(120));
+  });
+});
+
+/**
+ * 范围弹层（规格 2026-11-05「首页」·范围弹层）：点标题升起底部弹层，三档 项目 / Agent /
+ * 机器 + 搜索 + 置顶「全部对话」；选中即换整页范围并关闭。
+ */
+describe("手机首页：范围弹层", () => {
+  const projectRoster = [
+    { sync_id: "p-1", name: "官网", parent_sync_id: "" },
+    { sync_id: "p-2", name: "官网前端", parent_sync_id: "p-1" },
+  ];
+  const agentRoster = [
+    {
+      ...agents[0],
+      department_name: "研发部",
+    },
+    {
+      sync_id: "ag-2",
+      name: "运维 Agent",
+      department_name: "平台部",
+      has_available_target: false,
+      exec_targets: [
+        { rank: 1, device_name: "公司 Mac mini", availability: "offline" },
+      ],
+    },
+  ];
+  const inProject = (row: object, project: string) => ({
+    ...row,
+    project_sync_id: project,
+  });
+  const rows = [
+    inProject(waitingMirrored, "p-2"),
+    inProject(runningMirrored, "p-1"),
+    { ...runningMirrored, conversation_id: "46", title: "另一条" },
+  ];
+  const stub = () =>
+    stubApi(rows, [agentred, offlineMachine], {
+      agents: agentRoster,
+      projects: projectRoster,
+    });
+  const open = async (entry = "/chat") => {
+    renderChat(entry);
+    await screen.findByText("等你批");
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Switch scope, current:/ }),
+    );
+    return await screen.findByRole("dialog");
+  };
+
+  it("点标题升起弹层：置顶「全部对话」带总数，项目是树、有事等你的项带琥珀点", async () => {
+    stub();
+    const sheet = await open();
+
+    expect(within(sheet).getByTestId("scope-all").textContent).toContain("3");
+    const parent = within(sheet).getByTestId("scope-item-project-p-1");
+    // 父项的数含子项：1 条自己的 + 子项里的 1 条等你。
+    expect(parent.textContent).toContain("2");
+    expect(within(parent).getByTestId("scope-needs-you")).toBeTruthy();
+    const child = within(sheet).getByTestId("scope-item-project-p-2");
+    expect(child.textContent).toContain("1");
+    expect(within(child).getByTestId("scope-needs-you")).toBeTruthy();
+  });
+
+  it("选项目：换整页范围（地址、标题、取数）并关闭弹层", async () => {
+    stub();
+    const sheet = await open();
+
+    fireEvent.click(within(sheet).getByTestId("scope-item-project-p-2"));
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=project&project=p-2",
+      ),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      await screen.findByRole("button", {
+        name: "Switch scope, current: 官网前端",
+      }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        mockedApi.mock.calls.some(([path]) =>
+          String(path).includes("scope=project%3Ap-2"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("Agent 档：按部门分组，带所在机器与在线点；选中换到这个 Agent", async () => {
+    stub();
+    const sheet = await open();
+
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Agent" }));
+    const item = within(sheet).getByTestId("scope-item-agent-ag-1");
+    expect(within(sheet).getByText("研发部")).toBeTruthy();
+    expect(within(sheet).getByText("平台部")).toBeTruthy();
+    expect(item.textContent).toContain("书房小主机");
+    expect(item.textContent).toContain("3");
+    expect(within(item).getByTestId("scope-online").dataset.online).toBe(
+      "true",
+    );
+    expect(
+      within(within(sheet).getByTestId("scope-item-agent-ag-2")).getByTestId(
+        "scope-online",
+      ).dataset.online,
+    ).toBe("false");
+
+    fireEvent.click(item);
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=agent&agent=ag-1",
+      ),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("机器档：在线 / 离线两段，显示备注名，离线的半透明不隐藏；选中换到这台机器", async () => {
+    stubApi(rows, [{ ...agentred, display_name: "书房" }, offlineMachine], {
+      agents: agentRoster,
+      projects: projectRoster,
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    const sheet = await open();
+
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Machine" }));
+    const on = within(sheet).getByTestId("scope-item-machine-1");
+    expect(on.textContent).toContain("书房");
+    expect(on.textContent).not.toContain("书房小主机");
+    const off = within(sheet).getByTestId("scope-item-machine-2");
+    expect(off.className).toContain("opacity-50");
+
+    fireEvent.click(on);
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=machine&machine=1",
+      ),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("「全部对话」清掉范围；弹层从当前范围所在的那一档打开", async () => {
+    stub();
+    const sheet = await open("/chat?axis=agent&agent=ag-1");
+
+    expect(
+      within(sheet)
+        .getByTestId("scope-item-agent-ag-1")
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    fireEvent.click(within(sheet).getByTestId("scope-all"));
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe("/chat"),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("换到别的范围后，清单里别的项的数不归零（沿用「全部」时数到的那一份）", async () => {
+    stub();
+    const sheet = await open();
+    fireEvent.click(within(sheet).getByTestId("scope-item-project-p-2"));
+    await screen.findByRole("button", {
+      name: "Switch scope, current: 官网前端",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Switch scope, current:/ }),
+    );
+    const again = await screen.findByRole("dialog");
+    expect(
+      within(again).getByTestId("scope-item-project-p-1").textContent,
+    ).toContain("2");
+  });
+
+  it("直接打开一个范围：「全部对话」仍是账号总数，别的项数不出来就不摆数（不写成 0）", async () => {
+    stub();
+    renderChat("/chat?axis=project&project=p-2");
+    await screen.findByText("等你批");
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Switch scope, current:/ }),
+    );
+    const sheet = await screen.findByRole("dialog");
+
+    expect(within(sheet).getByTestId("scope-all").textContent).toContain("3");
+    expect(
+      within(sheet).getByTestId("scope-item-project-p-1").textContent,
+    ).not.toMatch(/\d/);
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Agent" }));
+    expect(
+      within(sheet).getByTestId("scope-item-agent-ag-2").textContent,
+    ).not.toMatch(/\d/);
+  });
+
+  it("搜索中数到的只是命中行：带着搜索换了范围，清单沿用的仍是「全部」时的数", async () => {
+    stub();
+    renderChat();
+    await screen.findByText("等你批");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Search conversation titles" }),
+    );
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search conversation titles" }),
+      { target: { value: "跑着呢" } },
+    );
+    await waitFor(() => expect(screen.queryByText("等你批")).toBeNull());
+    // 长按命中行「只看这个 Agent」：范围换了，搜索还在。
+    fireEvent.contextMenu((await screen.findByText("跑着呢")).closest("a")!);
+    fireEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Only this agent",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=agent&agent=ag-1",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Switch scope, current:/ }),
+    );
+    const sheet = await screen.findByRole("dialog");
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Project" }));
+
+    // p-2 里那一条（等你批）没被搜到，它的数仍是「全部」时数到的 1，不是 0。
+    expect(
+      within(sheet).getByTestId("scope-item-project-p-2").textContent,
+    ).toContain("1");
+  });
+
+  it("名单里的 Agent 没带执行目标也不崩：弹层照常列出，没有机器副标题", async () => {
+    stubApi(rows, [agentred], {
+      agents: [
+        { sync_id: "ag-9", name: "裸 Agent", has_available_target: true },
+      ],
+    });
+    const sheet = await open();
+
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Agent" }));
+    expect(
+      within(sheet).getByTestId("scope-item-agent-ag-9").textContent,
+    ).toContain("裸 Agent");
   });
 });

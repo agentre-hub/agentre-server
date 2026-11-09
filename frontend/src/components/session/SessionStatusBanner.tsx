@@ -21,6 +21,7 @@ import {
   readProtocolRejection,
   type ProtocolRejection,
 } from "@/lib/protocolMismatch";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { formatRelativeTime, type SessionViewStatus } from "@/lib/sessionView";
 
 /**
@@ -128,9 +129,13 @@ export default function SessionStatusBanner({
   onStartNew: () => void;
 }) {
   const { t, i18n } = useTranslation();
+  const isMobile = useIsMobile();
   const tier = tierOf(status);
   // 正常态与瞬态都不占内容区（决策 1 / 2）。
   if (tier === null || tier === "transient") return null;
+  // 手机上离线不挂横幅（规格 2026-11-05 决策 8）：页头写「离线 · 时间」，输入框
+  // 那一位换成只读带——默认停在底部时顶上的横幅本来就看不到。
+  if (isMobile && status === "machineOffline") return null;
 
   /**
    * 「最后在线」走全站的相对时间口径（`formatRelativeTime`，与索引行、详情头部

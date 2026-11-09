@@ -97,6 +97,8 @@ export default function SessionComposer({
   reasoningEffortControl,
   composerHandleRef,
   submitHandleRef,
+  touch = false,
+  onAppendEdited,
 }: {
   backendType?: string;
   /**
@@ -188,6 +190,14 @@ export default function SessionComposer({
   composerHandleRef?: RefObject<ChatComposerHandle | null>;
   /** 想在输入框之外触发一次「按发送」时给（见 ComposerSubmitHandle）。 */
   submitHandleRef?: RefObject<ComposerSubmitHandle | null>;
+  /**
+   * 触屏档（手机）：回车只换行、只有按钮发送，空时是胶囊（共享包 `inputMode="touch"`）。
+   * 软键盘的回车键因此标成「换行」—— 标成「发送」就是按下去做不到的事。
+   * 不给 = 桌面档，与以前一致。
+   */
+  touch?: boolean;
+  /** 最近一次 `appendDraft` 放进去的字被改动过（见包的 `onAppendEdited`）。 */
+  onAppendEdited?: () => void;
 }) {
   const { t } = useTranslation();
   // 发送按钮走输入框自己的 submit：只有它知道富文本里的提及要序列化成什么。
@@ -243,6 +253,9 @@ export default function SessionComposer({
           backendType={backendType}
           supportsImageInput
           sendButtonTestId="session-detail-send"
+          inputMode={touch ? "touch" : undefined}
+          onAppendEdited={onAppendEdited}
+          enterKeyHint={touch ? "enter" : undefined}
           slashCommands={slashCommands}
           mentionSources={mentionSources}
           // 两个都给才启用 / 菜单（包的既定条件）。literal_text 由包自己填回编辑器，

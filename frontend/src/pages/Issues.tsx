@@ -38,13 +38,14 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import AppShell from "@/components/AppShell";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { orderProjectTree } from "@/components/session/newconv/ProjectAgentPane";
 import type { NewConvAgent } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
-import { FailureNotice } from "@/components/console";
+import { FailureNotice, MobileNavButton } from "@/components/console";
 import { describeFailure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
@@ -90,6 +91,7 @@ const STAGES: BoardStage[] = ["todo", "doing", "review", "done"];
 
 export default function Issues() {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   // 代号本只在本页这一次生命周期里有效，所以它必须比任何一次取数活得久：懒初始化
   // 一次，之后每张卡、每个标签、每个项目都从同一本册子里认号。
   const [ids] = React.useState(createSyncIdRegistry);
@@ -220,58 +222,110 @@ export default function Issues() {
   );
 
   return (
-    <AppShell title={t("issues.title")} flush>
+    <AppShell title={t("issues.title")} flush ownHeader={isMobile}>
       <div
         data-testid="issues-page"
         className="flex h-full min-h-0 min-w-0 flex-col"
       >
-        {/* 860px 是规格里那个最小宽度：窄到那里时项目选择器整条换到第二行占满
+        {isMobile ? (
+          /* 手机页头自己画（ownHeader）：☰ · 项目范围（标题）· ＋ 新建任务。 */
+          <>
+            <header
+              data-testid="issues-mobile-header"
+              className="flex shrink-0 items-center gap-2 px-4 pt-[env(safe-area-inset-top,0px)]"
+            >
+              <MobileNavButton />
+              <div className="min-w-0 flex-1">
+                <ProjectScopePicker
+                  sheet
+                  scope={query.scope}
+                  projects={scopeProjects}
+                  unassignedCount={board.unassignedCount}
+                  matchedCount={board.matchedCount}
+                  onScopeChange={(scope) =>
+                    setQuery((current) => ({ ...current, scope }))
+                  }
+                  className="max-w-full"
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-11 shrink-0"
+                aria-label={t("issues.actions.newTask")}
+                onClick={() =>
+                  setEditing(initialTaskFormValue({ scope: query.scope }))
+                }
+              >
+                <Plus aria-hidden="true" />
+              </Button>
+            </header>
+            <div className="flex min-h-12 shrink-0 items-center gap-2 px-4 py-1">
+              <BoardFilterBar
+                sheet
+                query={query}
+                labels={board.labels}
+                projects={scopeProjects}
+                matchedCount={board.matchedCount}
+                searching={board.searching}
+                ports={{ onQueryChange: setQuery }}
+                onManageLabels={() => setLabelsOpen(true)}
+                className="min-w-0 flex-1"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            {/* 860px 是规格里那个最小宽度：窄到那里时项目选择器整条换到第二行占满
             宽度，三件东西挤一行会先把它压没。 */}
-        <header className="flex min-h-[60px] shrink-0 flex-wrap items-center gap-3 px-5 py-3 min-[861px]:h-[60px] min-[861px]:flex-nowrap min-[861px]:py-0">
-          <p className="truncate text-2xs text-muted-foreground">
-            {t("issues.summary.counts", {
-              total: totalTasks,
-              doing: columns.doing?.total ?? 0,
-            })}
-          </p>
-          <div className="min-w-0 flex-1 max-[860px]:hidden" />
-          <ProjectScopePicker
-            scope={query.scope}
-            projects={scopeProjects}
-            unassignedCount={board.unassignedCount}
-            onScopeChange={(scope) =>
-              setQuery((current) => ({ ...current, scope }))
-            }
-            className="max-[860px]:order-last max-[860px]:w-full max-[860px]:max-w-none"
-          />
-          <div className="min-w-0 flex-1 max-[860px]:hidden" />
-          <Button
-            type="button"
-            size="sm"
-            className="h-[30px] max-[860px]:ml-auto"
-            onClick={() =>
-              setEditing(initialTaskFormValue({ scope: query.scope }))
-            }
-          >
-            <Plus data-icon="inline-start" aria-hidden="true" />
-            {t("issues.actions.newTask")}
-          </Button>
-        </header>
+            <header className="flex min-h-[60px] shrink-0 flex-wrap items-center gap-3 px-5 py-3 min-[861px]:h-[60px] min-[861px]:flex-nowrap min-[861px]:py-0">
+              <p className="truncate text-2xs text-muted-foreground">
+                {t("issues.summary.counts", {
+                  total: totalTasks,
+                  doing: columns.doing?.total ?? 0,
+                })}
+              </p>
+              <div className="min-w-0 flex-1 max-[860px]:hidden" />
+              <ProjectScopePicker
+                scope={query.scope}
+                projects={scopeProjects}
+                unassignedCount={board.unassignedCount}
+                onScopeChange={(scope) =>
+                  setQuery((current) => ({ ...current, scope }))
+                }
+                className="max-[860px]:order-last max-[860px]:w-full max-[860px]:max-w-none"
+              />
+              <div className="min-w-0 flex-1 max-[860px]:hidden" />
+              <Button
+                type="button"
+                size="sm"
+                className="h-[30px] max-[860px]:ml-auto"
+                onClick={() =>
+                  setEditing(initialTaskFormValue({ scope: query.scope }))
+                }
+              >
+                <Plus data-icon="inline-start" aria-hidden="true" />
+                {t("issues.actions.newTask")}
+              </Button>
+            </header>
 
-        <div className="flex min-h-12 shrink-0 items-center gap-2 overflow-x-auto px-5 py-2">
-          <BoardFilterBar
-            query={query}
-            labels={board.labels}
-            projects={scopeProjects}
-            matchedCount={
-              board.viewModel.filtering ? board.matchedCount : undefined
-            }
-            searching={board.searching}
-            ports={{ onQueryChange: setQuery }}
-            onManageLabels={() => setLabelsOpen(true)}
-            className="min-w-0 flex-1"
-          />
-        </div>
+            <div className="flex min-h-12 shrink-0 items-center gap-2 overflow-x-auto px-5 py-2">
+              <BoardFilterBar
+                query={query}
+                labels={board.labels}
+                projects={scopeProjects}
+                matchedCount={
+                  board.viewModel.filtering ? board.matchedCount : undefined
+                }
+                searching={board.searching}
+                ports={{ onQueryChange: setQuery }}
+                onManageLabels={() => setLabelsOpen(true)}
+                className="min-w-0 flex-1"
+              />
+            </div>
+          </>
+        )}
 
         {board.error ? (
           <BoardFailure
@@ -283,7 +337,8 @@ export default function Issues() {
 
         <IssueBoard
           viewModel={board.viewModel}
-          drag={bindings}
+          drag={isMobile ? undefined : bindings}
+          layout={isMobile ? "stage" : "columns"}
           ports={{
             onEdit: openTask,
             onDelete: (taskId) => void board.deleteTask(taskId),
@@ -304,6 +359,7 @@ export default function Issues() {
           engineBackends={engineBackends}
           catalog={catalog}
           ids={ids}
+          page={isMobile}
           onClose={() => setEditing(null)}
           onSave={async (next) => {
             await board.saveTask(next);

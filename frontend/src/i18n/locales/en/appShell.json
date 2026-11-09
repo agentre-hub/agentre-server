@@ -24,5 +24,11 @@
       "unread_one": "{{count}} unread",
       "unread_other": "{{count}} unread"
     }
+  },
+  "drawer": {
+    "title": "Navigation menu",
+    "open": "Open menu",
+    "back": "Back",
+    "more": "More"
   }
 }

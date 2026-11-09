@@ -11,6 +11,8 @@
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
+import { useIsMobile } from "@/components/use-is-mobile";
+
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
 import { useOrgIdentityText } from "./useOrgIdentityText";
 import type { RowMenuItem } from "./OrgDetailHeader";
@@ -77,6 +79,7 @@ export interface OrgAgentDetailProps {
 export function OrgAgentDetail(props: OrgAgentDetailProps) {
   const { t } = useTranslation();
   const { agent, agentModel } = props;
+  const isMobile = useIsMobile();
   const isSystem = isOrgSystemAgent(agentModel);
 
   const [prompt, setPrompt] = React.useState(() =>
@@ -171,47 +174,105 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
         },
       ];
 
+  const renderIdentity = (saveStatus: React.ReactNode) => (
+    <IdentityFields
+      kind="agent"
+      testIdPrefix="org-agent-identity"
+      {...identityText}
+      mark={{
+        iconKey: avatarIcon,
+        color: agent.avatar_color ?? "",
+        onPickIcon: (key) => saveIfChanged({ avatar_icon: key }),
+        onPickColor: (color) => saveIfChanged({ avatar_color: color }),
+      }}
+      meta={
+        <div className="flex flex-wrap items-center gap-1.5">
+          {isSystem && (
+            <OrgDetailBadge>
+              {t("org.detail.header.systemBadge")}
+            </OrgDetailBadge>
+          )}
+          {leadsDepartments && (
+            <OrgDetailBadge>{t("org.detail.header.leadBadge")}</OrgDetailBadge>
+          )}
+          {ownDepartment && <OrgDetailChip>{ownDepartment.name}</OrgDetailChip>}
+          {parentAgent && (
+            <OrgDetailChip>
+              {t("org.detail.header.reportsToParent", {
+                name: parentAgent.name,
+              })}
+            </OrgDetailChip>
+          )}
+          {saveStatus}
+        </div>
+      }
+    />
+  );
+
+  const promptField = (
+    <div className="min-w-0 space-y-2">
+      {/* 这是这一屏最常改的字段：区头写出字数，右侧给一个展开入口，
+            框本身加高到 232px（mockup README 点名的第 3 处）。 */}
+      <div className="flex min-w-0 items-center gap-2">
+        <label
+          className="font-mono text-2xs text-muted-foreground"
+          htmlFor="org-agent-prompt"
+        >
+          {t("org.detail.systemPrompt")}
+        </label>
+        <span
+          data-testid="org-prompt-count"
+          className="min-w-0 truncate text-2xs text-muted-foreground"
+        >
+          {t("org.detail.prompt.charCount", { n: prompt.length })}
+        </span>
+        <Button
+          variant="link"
+          size="xs"
+          className="ml-auto shrink-0 px-0"
+          onClick={() => {
+            setPromptDraft(prompt);
+            setPromptOpen(true);
+          }}
+        >
+          {t("org.detail.prompt.expand")}
+        </Button>
+      </div>
+      <Textarea
+        id="org-agent-prompt"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        onBlur={() => savePrompt(prompt)}
+        placeholder={t("org.detail.systemPromptPlaceholder")}
+        aria-label={t("org.detail.systemPrompt")}
+        className="min-h-[232px] bg-transparent font-mono text-xs [overflow-wrap:anywhere]"
+      />
+    </div>
+  );
+  const toolList = (
+    <OrgToolList
+      toolKeys={ORG_TOOL_KEYS}
+      agentTools={tools}
+      onToggleGrant={toggleTool}
+    />
+  );
+  const execSection = (
+    <OrgExecTargetSection
+      agentSyncId={agent.sync_id}
+      targets={agent.exec_targets}
+      backends={props.backends}
+      onCreate={props.onCreateExecTarget}
+      onRemove={props.onRemoveExecTarget}
+      onChangeSkills={props.onChangeExecTargetSkills}
+      onReordered={props.onReload}
+    />
+  );
+
   return (
     <div data-slot="org-detail-agent" className="flex h-full min-w-0 flex-col">
       <OrgDetailHeader
-        identity={(saveStatus) => (
-          <IdentityFields
-            kind="agent"
-            testIdPrefix="org-agent-identity"
-            {...identityText}
-            mark={{
-              iconKey: avatarIcon,
-              color: agent.avatar_color ?? "",
-              onPickIcon: (key) => saveIfChanged({ avatar_icon: key }),
-              onPickColor: (color) => saveIfChanged({ avatar_color: color }),
-            }}
-            meta={
-              <div className="flex flex-wrap items-center gap-1.5">
-                {isSystem && (
-                  <OrgDetailBadge>
-                    {t("org.detail.header.systemBadge")}
-                  </OrgDetailBadge>
-                )}
-                {leadsDepartments && (
-                  <OrgDetailBadge>
-                    {t("org.detail.header.leadBadge")}
-                  </OrgDetailBadge>
-                )}
-                {ownDepartment && (
-                  <OrgDetailChip>{ownDepartment.name}</OrgDetailChip>
-                )}
-                {parentAgent && (
-                  <OrgDetailChip>
-                    {t("org.detail.header.reportsToParent", {
-                      name: parentAgent.name,
-                    })}
-                  </OrgDetailChip>
-                )}
-                {saveStatus}
-              </div>
-            }
-          />
-        )}
+        identity={renderIdentity}
+        compactTitle={isMobile ? identityText.name : undefined}
         save={save}
         menuItems={menuItems}
         onBack={props.onBack}
@@ -244,6 +305,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
             <h3 className="font-mono text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("org.detail.columns.identity")}
             </h3>
+            {isMobile && renderIdentity(null)}
             <OrgPlacementField
               agent={agentModel}
               agents={props.agents}
@@ -262,60 +324,14 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
             <h3 className="font-mono text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("org.detail.columns.behavior")}
             </h3>
-            <div className="min-w-0 space-y-2">
-              {/* 这是这一屏最常改的字段：区头写出字数，右侧给一个展开入口，
-                  框本身加高到 232px（mockup README 点名的第 3 处）。 */}
-              <div className="flex min-w-0 items-center gap-2">
-                <label
-                  className="font-mono text-2xs text-muted-foreground"
-                  htmlFor="org-agent-prompt"
-                >
-                  {t("org.detail.systemPrompt")}
-                </label>
-                <span
-                  data-testid="org-prompt-count"
-                  className="min-w-0 truncate text-2xs text-muted-foreground"
-                >
-                  {t("org.detail.prompt.charCount", { n: prompt.length })}
-                </span>
-                <Button
-                  variant="link"
-                  size="xs"
-                  className="ml-auto shrink-0 px-0"
-                  onClick={() => {
-                    setPromptDraft(prompt);
-                    setPromptOpen(true);
-                  }}
-                >
-                  {t("org.detail.prompt.expand")}
-                </Button>
-              </div>
-              <Textarea
-                id="org-agent-prompt"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                onBlur={() => savePrompt(prompt)}
-                placeholder={t("org.detail.systemPromptPlaceholder")}
-                aria-label={t("org.detail.systemPrompt")}
-                className="min-h-[232px] bg-transparent font-mono text-xs [overflow-wrap:anywhere]"
-              />
-            </div>
-            <OrgToolList
-              toolKeys={ORG_TOOL_KEYS}
-              agentTools={tools}
-              onToggleGrant={toggleTool}
-            />
+            {promptField}
+            {!isMobile && toolList}
           </section>
 
-          <OrgExecTargetSection
-            agentSyncId={agent.sync_id}
-            targets={agent.exec_targets}
-            backends={props.backends}
-            onCreate={props.onCreateExecTarget}
-            onRemove={props.onRemoveExecTarget}
-            onChangeSkills={props.onChangeExecTargetSkills}
-            onReordered={props.onReload}
-          />
+          {execSection}
+          {/* 手机上是单列流，顺序按规格：身份 → 系统提示词 → 在哪儿跑 → 工具；
+              桌面三栏里工具跟在提示词下面，形态不变。 */}
+          {isMobile && toolList}
         </div>
       </div>
 

@@ -1,7 +1,14 @@
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Check, CircleAlert, Download } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  CircleAlert,
+  Download,
+  Share,
+  X,
+} from "lucide-react";
 
 import {
   AGENTRED_RELEASES_URL,
@@ -12,6 +19,7 @@ import {
   CommandCard,
   GuideStepRail,
   agentredLoginCommand,
+  cn,
   type AgentredInstallMethod,
   type AgentredTargetOS,
   type GuideStep,
@@ -54,20 +62,26 @@ function consoleOrigin(): string {
   return window.location.origin;
 }
 
-/** 选项按钮（设备类型）：当前选中态由 aria-pressed 表达，不靠颜色。 */
+/**
+ * 选项按钮（设备类型）：当前选中态由 aria-pressed 表达，不靠颜色。
+ * `compact` 与共享包 ChoiceGroup 的触屏档同形：chips，命中区不小于 44px。
+ */
 function ChoiceButton({
   selected,
   onSelect,
+  compact = false,
   children,
 }: {
   selected: boolean;
   onSelect: () => void;
+  compact?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <Button
       variant={selected ? "default" : "outline"}
       size="sm"
+      className={cn(compact && "min-h-11 rounded-full px-4")}
       aria-pressed={selected}
       onClick={onSelect}
     >
@@ -100,6 +114,28 @@ function StepHead({
 }
 
 /**
+ * 这一屏上所有命令的原文，交给系统分享。
+ *
+ * 从这一屏实际画出来的命令卡里取，而不是在这里再拼一遍：安装、常驻两条命令的
+ * 拼法归共享包（`agentredInstallCommand` 等没有导出），在宿主重写一份就是两份会
+ * 漂移的命令。屏上是什么就发什么，发出去的与用户看见的必然一致。
+ */
+function commandsOnScreen(root: HTMLElement | null): string {
+  return Array.from(root?.querySelectorAll("code") ?? [], (c) =>
+    (c.textContent ?? "").trim(),
+  )
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** 浏览器有没有系统分享。本站常跑在 http 上（非安全上下文），那里没有它。 */
+function canShare(): boolean {
+  return (
+    typeof navigator !== "undefined" && typeof navigator.share === "function"
+  );
+}
+
+/**
  * 「怎么加一台设备」的页内引导：装好并登录 → 输入设备码批准 → 让它常驻后台。
  *
  * 只在设备页由唯一的「添加设备」入口召唤（空态默认展开），不是常驻区块。
@@ -112,8 +148,21 @@ function StepHead({
  * 完成标记只跟「用户点过那一步的下一步」走：从步骤条直接跳到第 3 步不会给
  * 前两步补上勾，否则那个勾就是我们替用户编的。
  */
-export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
+export function AddDeviceGuide({
+  onClose,
+  compact = false,
+}: {
+  onClose?: () => void;
+  /**
+   * 手机整屏档（规格 2026-11-05「设备 · 添加设备」）：顶上 ✕ + 标题、进度条、
+   * 每屏一句说明 + chips + 命令卡 +「发到电脑上」，下一步钉在底部。省略即今天的
+   * 页内卡片。
+   */
+  compact?: boolean;
+}) {
   const { t } = useTranslation();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const codeFormId = useId();
   const nav = useNavigate();
   const [step, setStep] = useState(1);
   const [kind, setKind] = useState<AddKind>("agentred");
@@ -173,18 +222,266 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
         <ChoiceButton
           selected={isAgentred}
           onSelect={() => setKind("agentred")}
+          compact={compact}
         >
           {t("device.add.kindAgentred")}
         </ChoiceButton>
         <ChoiceButton
           selected={!isAgentred}
           onSelect={() => setKind("desktop")}
+          compact={compact}
         >
           {t("device.add.kindDesktop")}
         </ChoiceButton>
       </div>
     </div>
   );
+
+  // 桌面端第 1 步：去下载页 + 本控制台的地址。页内卡片与手机整屏共用这一段。
+  const desktopLogin = (
+    <>
+      <div className="flex flex-col gap-2">
+        <span className="text-aux font-medium text-foreground">
+          {t("device.add.install.downloadLabel")}
+        </span>
+        <div className="flex flex-wrap items-center gap-3 rounded-md bg-field-fill px-3 py-2.5">
+          <Download
+            aria-hidden="true"
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          <span className="min-w-0 flex-1 text-aux leading-relaxed text-muted-foreground">
+            {t("device.add.install.downloadBody")}
+          </span>
+          <Button variant="outline" size="sm" asChild>
+            <a
+              href={AGENTRED_RELEASES_URL}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="add-device-download"
+            >
+              {t("device.add.install.download")}
+              <ArrowRight />
+            </a>
+          </Button>
+        </div>
+      </div>
+      <CommandCard
+        label={t("device.add.login.serverLabel")}
+        command={server}
+        testId="add-device-server-address"
+        copyTestId="add-device-copy-server"
+      />
+    </>
+  );
+
+  // 第 2 步的码格与「不足六位」的就地提示，两种形态共用。
+  const codeField = (
+    <div className="flex flex-col gap-3">
+      <CodeInput
+        value={chars}
+        onChange={(next) => {
+          setChars(next);
+          // 用户一动手就撤掉红态，别让他继续瞪着上一次的错误。
+          setIncomplete(false);
+        }}
+        invalid={incomplete}
+        describedBy={incomplete ? codeErrorId : undefined}
+      />
+      {incomplete && (
+        <p
+          id={codeErrorId}
+          className="flex items-start gap-2 text-aux text-destructive-text"
+        >
+          <CircleAlert
+            className="mt-0.5 size-3.5 shrink-0"
+            aria-hidden="true"
+          />
+          {t("device.entry.errors.incomplete")}
+        </p>
+      )}
+    </div>
+  );
+
+  if (compact) {
+    // 这一屏有命令可发时才谈得上「发到电脑上」；第 2 步只有码格，桌面端第 3 步只有一句说明。
+    const shareable = step === 1 || (step === 3 && isAgentred);
+    const footerAction =
+      step === 1 ? (
+        // key 必须各不相同：三个按钮占同一位置，无 key 时 React 复用同一个 DOM 节点。
+        // 第 1 步的 click 在提交后才完成默认动作，复用的节点就是 type="submit" 的
+        // 第 2 步按钮，于是空码被提交、第 2 步一进来就报错。
+        <Button
+          key="next"
+          className="h-11 w-full"
+          onClick={() => finishStep(1)}
+        >
+          {t("device.add.login.next")}
+          <ArrowRight />
+        </Button>
+      ) : step === 2 ? (
+        <Button
+          key="submit"
+          type="submit"
+          form={codeFormId}
+          className="h-11 w-full"
+        >
+          {t("device.entry.submit")}
+          <ArrowRight />
+        </Button>
+      ) : (
+        <Button
+          key="done"
+          className="h-11 w-full"
+          onClick={() => {
+            finishStep(3);
+            // 整屏形态里「完成」就是走完了：回到它盖住的那一页。
+            onClose?.();
+          }}
+        >
+          {t("device.add.service.finish")}
+          <Check />
+        </Button>
+      );
+
+    return (
+      <div data-testid="add-device-guide" className="flex min-h-full flex-col">
+        {/* 有地方可回（列表里已经有设备）时才有 ✕；空态下三步就是这一页，页头归页面。 */}
+        {onClose && (
+          <header className="-mt-2 flex min-w-0 items-center gap-1 pb-2 pt-[env(safe-area-inset-top,0px)]">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="-ml-2 size-11"
+              aria-label={t("device.add.close")}
+              onClick={onClose}
+            >
+              <X className="size-5" aria-hidden="true" />
+            </Button>
+            <h1 className="truncate text-prose font-bold text-foreground">
+              {t("device.add.open")}
+            </h1>
+          </header>
+        )}
+        <div className="overflow-hidden rounded-lg">
+          <GuideStepRail
+            compact
+            steps={steps}
+            current={step}
+            done={done}
+            onSelect={setStep}
+          />
+        </div>
+
+        <div
+          ref={bodyRef}
+          data-testid="add-device-step-body"
+          className="flex flex-1 flex-col gap-4 py-4"
+        >
+          {step === 1 && (
+            <>
+              <StepHead
+                step={1}
+                title={t(
+                  isAgentred
+                    ? "device.add.login.agentredTitle"
+                    : "device.add.login.desktopTitle",
+                )}
+                description={t(
+                  isAgentred
+                    ? "device.add.login.agentredDesc"
+                    : "device.add.login.desktopDesc",
+                )}
+              />
+              {kindChoice}
+              {isAgentred ? (
+                <>
+                  {/* 每屏一张命令卡（规格「添加设备」）：登录并进安装那一张，装在上、
+                      登录在下，一次复制、一次「发到电脑上」。 */}
+                  <AgentredInstallSection
+                    compact
+                    method={method}
+                    onMethodChange={setMethod}
+                    os={os}
+                    onOsChange={setOS}
+                    thenCommand={agentredLoginCommand(method, server)}
+                    installTestId="add-device-command-install"
+                    installCopyTestId="add-device-copy-install"
+                  />
+                </>
+              ) : (
+                desktopLogin
+              )}
+            </>
+          )}
+
+          {step === 2 && (
+            <form
+              id={codeFormId}
+              onSubmit={submitCode}
+              className="flex flex-col gap-4"
+            >
+              <StepHead
+                step={2}
+                title={t("device.entry.title")}
+                description={t("device.entry.description")}
+              />
+              {codeField}
+            </form>
+          )}
+
+          {step === 3 && (
+            <>
+              <StepHead
+                step={3}
+                title={t(
+                  isAgentred
+                    ? "device.add.service.agentredTitle"
+                    : "device.add.service.desktopTitle",
+                )}
+                description={t(
+                  isAgentred
+                    ? "device.add.service.agentredDesc"
+                    : "device.add.service.desktopDesc",
+                )}
+              />
+              {isAgentred && (
+                <AgentredServiceSection
+                  compact
+                  method={method}
+                  serviceTestId="add-device-command-service"
+                  serviceCopyTestId="add-device-copy-service"
+                />
+              )}
+            </>
+          )}
+
+          {/* 系统分享：浏览器没有（http 部署、桌面浏览器）就不画，命令卡自带复制。 */}
+          {shareable && canShare() && (
+            <Button
+              variant="secondary"
+              className="h-11 w-full"
+              onClick={() => {
+                const text = commandsOnScreen(bodyRef.current);
+                if (!text) return;
+                // 用户在分享面板里取消也是 reject：那不是失败，什么都不用说。
+                navigator.share({ text }).catch(() => {});
+              }}
+            >
+              <Share aria-hidden="true" />
+              {t("device.add.share")}
+            </Button>
+          )}
+        </div>
+
+        <div
+          data-testid="add-device-footer"
+          className="sticky bottom-0 -mx-4 bg-sheet px-4 pt-3 pb-[env(safe-area-inset-bottom,0px)]"
+        >
+          {footerAction}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Card
@@ -248,37 +545,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               </>
             ) : (
               <>
-                <div className="flex flex-col gap-2">
-                  <span className="text-aux font-medium text-foreground">
-                    {t("device.add.install.downloadLabel")}
-                  </span>
-                  <div className="flex flex-wrap items-center gap-3 rounded-md bg-field-fill px-3 py-2.5">
-                    <Download
-                      aria-hidden="true"
-                      className="size-4 shrink-0 text-muted-foreground"
-                    />
-                    <span className="min-w-0 flex-1 text-aux leading-relaxed text-muted-foreground">
-                      {t("device.add.install.downloadBody")}
-                    </span>
-                    <Button variant="outline" size="sm" asChild>
-                      <a
-                        href={AGENTRED_RELEASES_URL}
-                        target="_blank"
-                        rel="noreferrer"
-                        data-testid="add-device-download"
-                      >
-                        {t("device.add.install.download")}
-                        <ArrowRight />
-                      </a>
-                    </Button>
-                  </div>
-                </div>
-                <CommandCard
-                  label={t("device.add.login.serverLabel")}
-                  command={server}
-                  testId="add-device-server-address"
-                  copyTestId="add-device-copy-server"
-                />
+                {desktopLogin}
                 <div className="flex justify-end pt-4">
                   <Button onClick={() => finishStep(1)}>
                     {t("device.add.login.next")}
@@ -298,30 +565,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               title={t("device.entry.title")}
               description={t("device.entry.description")}
             />
-            <div className="flex flex-col gap-3">
-              <CodeInput
-                value={chars}
-                onChange={(next) => {
-                  setChars(next);
-                  // 用户一动手就撤掉红态，别让他继续瞪着上一次的错误。
-                  setIncomplete(false);
-                }}
-                invalid={incomplete}
-                describedBy={incomplete ? codeErrorId : undefined}
-              />
-              {incomplete && (
-                <p
-                  id={codeErrorId}
-                  className="flex items-start gap-2 text-aux text-destructive-text"
-                >
-                  <CircleAlert
-                    className="mt-0.5 size-3.5 shrink-0"
-                    aria-hidden="true"
-                  />
-                  {t("device.entry.errors.incomplete")}
-                </p>
-              )}
-            </div>
+            {codeField}
             <div className="flex justify-end pt-4">
               <Button type="submit">
                 {t("device.entry.submit")}

@@ -535,3 +535,20 @@ describe("骨架那条占位只剩包里那一份", () => {
     }
   });
 });
+
+describe("shared UI package mobile-shell exports", () => {
+  it("Given the pinned package, When importing the mobile-shell exports, Then each is defined", async () => {
+    const ui = (await import("@agentre-hub/agentre-ui")) as Record<
+      string,
+      unknown
+    >;
+    for (const name of [
+      "ScopeList",
+      "phaseSections",
+      "ToolPermissionDock",
+      "ShortcutHintsProvider",
+    ]) {
+      expect(ui[name], name).toBeDefined();
+    }
+  });
+});

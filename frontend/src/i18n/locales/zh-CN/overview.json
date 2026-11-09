@@ -6,6 +6,7 @@
   "offline": "离线",
   "unpaired": "未配对",
   "stats": {
+    "pageTitle": "活跃统计",
     "range": {
       "label": "统计范围",
       "7d": "近 7 天",
