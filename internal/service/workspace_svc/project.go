@@ -185,7 +185,8 @@ func cascadeProjectDelete(
 		return nil
 	}
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, in.UserID, []string{
-		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation})
+		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
+		sync_entity.KindMemory})
 	if err != nil {
 		return err
 	}
@@ -290,6 +291,8 @@ func belongsToSubtree(row *sync_entity.SyncObject, subtree map[string]bool) bool
 		return subtree[pa.ProjectSyncID]
 	case sync_entity.KindProjectLocation:
 		return row.ScopeSyncID != "" && subtree[row.ScopeSyncID]
+	case sync_entity.KindMemory:
+		return memoryOwnerKind(row) == memoryOwnerProject && subtree[memoryOwnerSyncID(row)]
 	}
 	return false
 }

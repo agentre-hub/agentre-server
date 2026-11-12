@@ -34,6 +34,9 @@ const (
 	KindLabel      = syncwire.KindLabel
 	KindIssue      = syncwire.KindIssue
 	KindIssueLabel = syncwire.KindIssueLabel
+	// 记忆条目：归属以 owner_kind + owner_sync_id 引用 agent / 部门 / 项目；删除归属方时
+	// 控制台一并给名下记忆落墓碑（workspace_svc.cascadeMemoryDelete）。
+	KindMemory = syncwire.KindMemory
 )
 
 // SyncObject 是同步组的一行。
