@@ -292,7 +292,8 @@ func belongsToSubtree(row *sync_entity.SyncObject, subtree map[string]bool) bool
 	case sync_entity.KindProjectLocation:
 		return row.ScopeSyncID != "" && subtree[row.ScopeSyncID]
 	case sync_entity.KindMemory:
-		return memoryOwnerKind(row) == memoryOwnerProject && subtree[memoryOwnerSyncID(row)]
+		kind, syncID := memoryOwner(row)
+		return kind == memoryOwnerProject && subtree[syncID]
 	}
 	return false
 }

@@ -1418,27 +1418,23 @@ const (
 	memoryOwnerProject    = "project"
 )
 
-func memoryOwnerKind(row *sync_entity.SyncObject) string {
+// memoryOwner 取记忆载荷里的归属种类与同步标识，读不懂时两者都是空串。
+func memoryOwner(row *sync_entity.SyncObject) (kind, syncID string) {
 	var p syncwire.MemoryPayload
 	if json.Unmarshal([]byte(row.Payload), &p) != nil {
-		return ""
+		return "", ""
 	}
-	return p.OwnerKind
-}
-
-func memoryOwnerSyncID(row *sync_entity.SyncObject) string {
-	var p syncwire.MemoryPayload
-	if json.Unmarshal([]byte(row.Payload), &p) != nil {
-		return ""
-	}
-	return p.OwnerSyncID
+	return p.OwnerKind, p.OwnerSyncID
 }
 
 // memoryOwnedBy 判断这行是不是 kind/syncID 名下的记忆。读不懂的载荷、全局层（没有
 // 归属同步标识）都不算——宁可漏删，不多删（同 referencedAgentSyncID）。
 func memoryOwnedBy(row *sync_entity.SyncObject, ownerKind, ownerSyncID string) bool {
-	return row.Kind == sync_entity.KindMemory && ownerSyncID != "" &&
-		memoryOwnerKind(row) == ownerKind && memoryOwnerSyncID(row) == ownerSyncID
+	if row.Kind != sync_entity.KindMemory || ownerSyncID == "" {
+		return false
+	}
+	kind, syncID := memoryOwner(row)
+	return kind == ownerKind && syncID == ownerSyncID
 }
 
 // cascadeDepartmentDelete 删部门时把部门层的记忆落墓碑，与主行同在一个事务里、排在
