@@ -237,3 +237,52 @@ func TestCleanup_RecheckReadFails_ReturnsError(t *testing.T) {
 	_, err := f.svc.Cleanup(context.Background(), 7, 0, []string{cvOld1})
 	require.Error(t, err)
 }
+
+// 发起端是账号里另一台桌面时，控制台删除也要让它删掉本机那份（「从控制台删」），所以它
+// 同样是「涉及的机器」：预览按它名下的对话单列一行（在线态如实）。发起端不是本账号的
+// 桌面（浏览器等）、或就是承载端时，不多出一行；保留下来的对话不计入任何机器。
+func TestPreviewCleanup_InitiatorDesktopListedAsInvolvedMachine(t *testing.T) {
+	f := setupCleanupTest(t)
+	f.online["fp-agentred-1"] = true
+	withPeer := func(s *agent_session_entity.SessionSummary, peer string) *agent_session_entity.SessionSummary {
+		s.PeerFingerprint = peer
+		return s
+	}
+	f.summary.EXPECT().ListCleanupCandidates(gomock.Any(), gomock.Any()).Return(
+		[]*agent_session_entity.SessionSummary{
+			withPeer(sum(cvOld1, "fp-agentred-1", "idle", false), "fp-desktop-1"),
+			withPeer(sum(cvOld2, "fp-agentred-1", "idle", false), "fp-browser"),
+			withPeer(sum(cvRunning, "fp-agentred-1", "running", false), "fp-desktop-1"),
+			withPeer(sum(cvGone, "fp-desktop-1", "idle", false), "fp-desktop-1"),
+		}, nil)
+
+	got, err := f.svc.PreviewCleanup(context.Background(), 7, CleanupFilter{})
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, got.Count)
+	assert.Equal(t, []CleanupMachine{
+		{Fingerprint: "fp-agentred-1", Name: "build box", Online: true, Count: 2},
+		{Fingerprint: "fp-desktop-1", Name: "MacBook", Online: false, Count: 2},
+	}, got.Machines)
+}
+
+// 执行时发起端桌面离线：server 给它记了待办，结果里它和承载端一样列为「下次上线时删除」。
+func TestCleanup_InitiatorDesktopOffline_ReportedPending(t *testing.T) {
+	f := setupCleanupTest(t)
+	f.peer.errByFP = map[string]error{"fp-desktop-1": ErrMachineOffline}
+	f.summary.EXPECT().ListSavedByConversationIDs(gomock.Any(), int64(7), []string{cvOld1}).Return(
+		[]*agent_session_entity.SessionSummary{sum(cvOld1, "fp-agentred-1", "idle", false)}, nil)
+	f.follow.EXPECT().FindByIdentity(gomock.Any(), int64(7), cvOld1).Return(
+		&agent_session_entity.SessionSave{UserID: 7, ConversationID: cvOld1,
+			DeviceFingerprint: "fp-agentred-1", PeerFingerprint: "fp-desktop-1"}, nil)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), cvOld1).Return(nil)
+	f.device.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-desktop-1").Return(
+		&device_entity.Device{ID: 1, UserID: 7, Fingerprint: "fp-desktop-1", Kind: device_entity.KindDesktop, Status: 1}, nil)
+	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).Return(nil)
+
+	got, err := f.svc.Cleanup(context.Background(), 7, 0, []string{cvOld1})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.Deleted)
+	assert.Equal(t, []CleanupPendingMachine{{Fingerprint: "fp-desktop-1", Name: "MacBook", Count: 1}}, got.Pending)
+}

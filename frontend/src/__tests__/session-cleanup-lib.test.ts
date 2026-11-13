@@ -74,7 +74,7 @@ describe("previewCleanup", () => {
     expect(body(1).before_ms).toBe(NOW - 180 * DAY);
   });
 
-  it("响应映射成视图：账号副本 + 机器副本（带 online），ids 来自 conversation_ids", async () => {
+  it("响应映射成视图：只列涉及的机器（带 online），ids 来自 conversation_ids", async () => {
     const view = await previewCleanup(
       { before: "90d", agentId: "all", projectId: "all" },
       NOW,
@@ -83,7 +83,6 @@ describe("previewCleanup", () => {
     expect(view.retained).toBe(1);
     expect(view.ids).toEqual(["c1", "c2"]);
     expect(view.copies).toEqual([
-      { kind: "account", label: "", count: 2 },
       { kind: "machine", label: "build-box", online: true, count: 2 },
       { kind: "machine", label: "old", online: false, count: 1 },
     ]);
@@ -96,7 +95,7 @@ describe("previewCleanup", () => {
       NOW,
     );
     expect(view.ids).toEqual([]);
-    expect(view.copies).toEqual([{ kind: "account", label: "", count: 0 }]);
+    expect(view.copies).toEqual([]);
   });
 });
 

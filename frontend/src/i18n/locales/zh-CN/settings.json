@@ -85,7 +85,7 @@
     },
     "cleanup": {
       "deleted": "已删除 {{count}} 个对话",
-      "pending": "{{name}} 离线，还有 {{count}} 个对话等它上线后删除",
+      "pending": "{{name}} 上的 {{count}} 个会在它下次上线时删除",
       "reason": {
         "machine_protocol_violation": "执行端不支持删除，账号里的这份已删除",
         "delete_failed": "这条没删成，可以重试",

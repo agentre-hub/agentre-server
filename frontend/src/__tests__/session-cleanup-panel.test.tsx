@@ -95,7 +95,7 @@ describe("SessionCleanupPanel", () => {
     });
     const message = String(vi.mocked(toast.success).mock.calls[0][0]);
     expect(message).toContain("已删除 2 个对话");
-    expect(message).toContain("old-box");
+    expect(message).toContain("old-box 上的 2 个会在它下次上线时删除");
   });
 
   it("agent / 项目列表取不到时仍渲染（只剩「全部」）", async () => {

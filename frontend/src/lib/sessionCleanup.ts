@@ -67,16 +67,13 @@ export async function previewCleanup(
     retained: got.retained,
     cutoffDate: cutoff,
     ids,
-    copies: [
-      // 控制台只清账号里保存的这份；执行端的副本由服务端一并处理。
-      { kind: "account", label: "", count: got.count },
-      ...(got.machines ?? []).map((m) => ({
-        kind: "machine" as const,
-        label: m.name,
-        online: m.online,
-        count: m.count,
-      })),
-    ],
+    // 控制台的确认框只按机器列（执行端与发起端桌面，由服务端算好）。
+    copies: (got.machines ?? []).map((m) => ({
+      kind: "machine" as const,
+      label: m.name,
+      online: m.online,
+      count: m.count,
+    })),
   };
 }
 

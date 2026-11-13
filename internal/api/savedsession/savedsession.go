@@ -71,7 +71,7 @@ type CleanupPreviewRequest struct {
 	ProjectSyncID string `json:"project_sync_id" binding:"omitempty,max=128"`
 }
 
-// CleanupMachineView 是一台机器名下将被清理的对话数。机器已不在账号里的不出现在
+// CleanupMachineView 是一台涉及的机器（执行端，或发起端桌面）名下将被清理的对话数。机器已不在账号里的不出现在
 // machines 里，它们的对话仍计在 count 内。
 type CleanupMachineView struct {
 	Fingerprint string `json:"fingerprint"`
@@ -104,7 +104,7 @@ type CleanupFailureView struct {
 	Reason string `json:"reason"`
 }
 
-// CleanupPendingView 是执行端暂时联系不上、已记待办的机器：它下次上线时补删 count 条。
+// CleanupPendingView 是暂时联系不上、已记待办的机器（执行端或发起端桌面）：它下次上线时补删 count 条。
 type CleanupPendingView struct {
 	Fingerprint string `json:"fingerprint"`
 	Name        string `json:"name"`

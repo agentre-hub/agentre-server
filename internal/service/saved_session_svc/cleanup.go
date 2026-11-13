@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -38,7 +39,7 @@ type CleanupFilter struct {
 	ProjectSyncID string
 }
 
-// CleanupMachine 是预览里一台机器名下将被清理的对话数。
+// CleanupMachine 是预览里一台涉及的机器（执行端，或发起端桌面）名下将被清理的对话数。
 type CleanupMachine struct {
 	Fingerprint string
 	Name        string
@@ -60,7 +61,7 @@ type CleanupFailure struct {
 	Reason         string
 }
 
-// CleanupPendingMachine 是执行端暂时联系不上、已记待办的机器：它下次上线时补删 Count 条。
+// CleanupPendingMachine 是暂时联系不上、已记待办的机器（执行端或发起端桌面）：它下次上线时补删 Count 条。
 type CleanupPendingMachine struct {
 	Fingerprint string
 	Name        string
@@ -150,6 +151,11 @@ func (s *savedSessionSvc) PreviewCleanup(
 		}
 	}
 
+	devices, err := s.accountDevices(ctx, userID)
+	if err != nil {
+		return CleanupPreview{}, err
+	}
+
 	out := CleanupPreview{ConversationIDs: []string{}, Machines: []CleanupMachine{}}
 	perMachine := map[string]int{}
 	for _, row := range rows {
@@ -163,16 +169,18 @@ func (s *savedSessionSvc) PreviewCleanup(
 		out.Count++
 		out.ConversationIDs = append(out.ConversationIDs, row.ConversationID)
 		perMachine[row.MachineFingerprint]++
+		// 发起端是账号里另一台桌面：Delete 也会让它删本机那份，它同样是涉及的机器。
+		if fp := row.PeerFingerprint; fp != "" && fp != row.MachineFingerprint {
+			if d := devices[fp]; d != nil && d.Kind == device_entity.KindDesktop {
+				perMachine[fp]++
+			}
+		}
 	}
 
-	names, err := s.accountDeviceNames(ctx, userID)
-	if err != nil {
-		return CleanupPreview{}, err
-	}
 	// 已不在账号里的机器不单列（决策 13），它名下的对话仍计在 Count 里。
 	var fps []string
 	for fp := range perMachine {
-		if _, ok := names[fp]; ok {
+		if _, ok := devices[fp]; ok {
 			fps = append(fps, fp)
 		}
 	}
@@ -185,7 +193,7 @@ func (s *savedSessionSvc) PreviewCleanup(
 	}
 	for i, fp := range fps {
 		out.Machines = append(out.Machines, CleanupMachine{
-			Fingerprint: fp, Name: names[fp],
+			Fingerprint: fp, Name: devices[fp].EffectiveName(),
 			Online: perr == nil && i < len(online) && online[i],
 			Count:  perMachine[fp],
 		})
@@ -235,7 +243,7 @@ func (s *savedSessionSvc) Cleanup(
 			out.Retained++
 			continue
 		}
-		outcome, err := s.Delete(ctx, SessionRef{UserID: userID, ConversationID: id, CallerDeviceID: callerDeviceID})
+		res, err := s.deleteCopies(ctx, SessionRef{UserID: userID, ConversationID: id, CallerDeviceID: callerDeviceID})
 		if err != nil {
 			reason := CleanupReasonInternal
 			if errors.Is(err, ErrMachineProtocolViolation) {
@@ -248,23 +256,30 @@ func (s *savedSessionSvc) Cleanup(
 			continue
 		}
 		out.Deleted++
-		if outcome == MachineDeletePending {
+		if res.carrier == MachineDeletePending {
 			pending[row.MachineFingerprint]++
+		}
+		if res.initiatorFP != "" && res.initiator == MachineDeletePending {
+			pending[res.initiatorFP]++
 		}
 	}
 
 	if len(pending) > 0 {
-		names, err := s.accountDeviceNames(ctx, userID)
+		devices, err := s.accountDevices(ctx, userID)
 		if err != nil {
-			// 删除已经完成；名字取不到不该让这次执行报错，退回指纹缩写。
+			// 删除已经完成；名字取不到不该让这次执行报错，名字留空。
 			logger.Ctx(ctx).Warn("saved_session_svc.Cleanup: device names unavailable",
 				zap.Int64("userId", userID), zap.Error(err))
-			names = map[string]string{}
+			devices = map[string]*device_entity.Device{}
 		}
 		for fp, n := range pending {
-			name, inAccount := names[fp]
-			if !inAccount && len(names) > 0 {
+			d, inAccount := devices[fp]
+			if !inAccount && len(devices) > 0 {
 				continue // 已不在账号里的机器不单列（决策 13）
+			}
+			name := ""
+			if d != nil {
+				name = d.EffectiveName()
 			}
 			out.Pending = append(out.Pending, CleanupPendingMachine{Fingerprint: fp, Name: name, Count: n})
 		}
@@ -276,18 +291,18 @@ func (s *savedSessionSvc) Cleanup(
 	return out, nil
 }
 
-// accountDeviceNames 是账号在用设备的 指纹 → 显示名（备注名优先，规则只在
-// Device.EffectiveName 一处）。
-func (s *savedSessionSvc) accountDeviceNames(ctx context.Context, userID int64) (map[string]string, error) {
+// accountDevices 是账号在用设备的 指纹 → 设备（显示名取 Device.EffectiveName，备注名
+// 优先；种类用来认出发起端桌面）。
+func (s *savedSessionSvc) accountDevices(ctx context.Context, userID int64) (map[string]*device_entity.Device, error) {
 	devices, err := device_repo.Device().ListByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	names := make(map[string]string, len(devices))
+	out := make(map[string]*device_entity.Device, len(devices))
 	for _, d := range devices {
 		if d.IsActive() {
-			names[d.Fingerprint] = d.EffectiveName()
+			out[d.Fingerprint] = d
 		}
 	}
-	return names, nil
+	return out, nil
 }
