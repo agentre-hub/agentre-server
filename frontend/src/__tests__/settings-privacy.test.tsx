@@ -116,7 +116,35 @@ beforeEach(async () => {
   mockedApi.mockReset();
 });
 
+const CLEANUP_PREVIEW = {
+  count: 3,
+  retained: 0,
+  machines: [],
+  conversation_ids: ["c1", "c2", "c3"],
+};
+
 describe("设置 · 隐私", () => {
+  it("活动统计之后是清理对话历史（控制台形态），并向 preview 端点计数", async () => {
+    serve({
+      "POST /v1/saved-sessions/cleanup/preview": CLEANUP_PREVIEW,
+      "/v1/workspace/agents": { agents: [] },
+      "/v1/workspace/projects": { projects: [] },
+    });
+    renderSettings("/settings?tab=privacy");
+
+    const panel = await screen.findByTestId("privacy-activity-panel");
+    const clean = await screen.findByRole("button", {
+      name: /Clean up 3 conversations/,
+    });
+    expect(
+      panel.compareDocumentPosition(clean) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(mockedApi).toHaveBeenCalledWith(
+      "/v1/saved-sessions/cleanup/preview",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("活动统计的卡片是填充块：不画边与分隔线", async () => {
     serve();
     renderSettings("/settings?tab=privacy");

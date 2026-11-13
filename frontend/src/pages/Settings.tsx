@@ -18,6 +18,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import AppShell from "@/components/AppShell";
 import { ActivityStatsPanel } from "@/components/settings/ActivityStatsPanel";
+import { SessionCleanupPanel } from "@/components/settings/SessionCleanupPanel";
 import PageTitle from "@/components/PageTitle";
 import {
   EmptyState,
@@ -307,7 +308,12 @@ export default function Settings() {
         </div>
       );
     } else if (phoneSection === "privacy") {
-      body = <ActivityStatsPanel />;
+      body = (
+        <>
+          <ActivityStatsPanel />
+          <SessionCleanupPanel fullWidthAction />
+        </>
+      );
     } else if (phoneSection === "appearance") {
       body = <AppearancePage />;
     } else if (phoneSection === "language") {
@@ -455,6 +461,7 @@ export default function Settings() {
             <>
               {renderHeader(null)}
               <ActivityStatsPanel />
+              <SessionCleanupPanel />
             </>
           ) : section === "providers" ? (
             <LlmProvidersPanel

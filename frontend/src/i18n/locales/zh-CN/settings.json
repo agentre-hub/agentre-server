@@ -82,6 +82,15 @@
       "title": "已保存的对话",
       "count": "{{count}} 条",
       "body": "只有你显式保存过的对话会存到账号里。这一项不是开关，取消保存在「对话」页逐条操作。"
+    },
+    "cleanup": {
+      "deleted": "已删除 {{count}} 个对话",
+      "pending": "{{name}} 离线，还有 {{count}} 个对话等它上线后删除",
+      "reason": {
+        "machine_protocol_violation": "执行端不支持删除，账号里的这份已删除",
+        "delete_failed": "这条没删成，可以重试",
+        "unknown": "这条没删成，请稍后重试"
+      }
     }
   },
   "theme": {

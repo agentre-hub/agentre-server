@@ -234,6 +234,27 @@ describe("Settings on a phone", () => {
   });
 });
 
+describe("Settings privacy on phone", () => {
+  it("shows the cleanup section after the activity stats with a full-width action", async () => {
+    setMobile(true);
+    mockedApi.mockImplementation(async (path: string) => {
+      const p = String(path);
+      if (p === "/v1/saved-sessions/cleanup/preview")
+        return { count: 3, retained: 0, machines: [], conversation_ids: ["a"] };
+      if (p === "/v1/workspace/agents") return { agents: [] };
+      if (p === "/v1/workspace/projects") return { projects: [] };
+      if (p === "/v1/stats/settings")
+        return { activity_stats_enabled: true, devices: [] };
+      return {};
+    });
+    renderSettings("/settings?tab=privacy");
+    const clean = await screen.findByRole("button", {
+      name: /Clean up 3 conversations/,
+    });
+    expect(clean.className).toMatch(/\bw-full\b/);
+  });
+});
+
 describe("Settings on desktop", () => {
   it("still shows the segmented control", async () => {
     setMobile(false);
