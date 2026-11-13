@@ -82,6 +82,12 @@ type SummaryRepo interface {
 	// 「已删除但还在」的中间态）。
 	// 从来没镜像过的对话删不到行，仍然成功——删除幂等。
 	DeleteSummary(ctx context.Context, userID int64, conversationID string) error
+}
+
+// CleanupRepo 是控制台批量清理读候选的窄接口。它与 SummaryRepo 分开：清理只读这两
+// 条，而 SummaryRepo 有别的实现（mirror_svc 的内存假实现），往它里加方法会牵连它们。
+// 生产里两者由同一个 summaryRepo 实现。
+type CleanupRepo interface {
 	// ListCleanupCandidates 读出批量清理的候选：账号里**已保存**的对话（名单里有那一行），
 	// 按最后活动早于 BeforeMs、Agent 精确匹配收窄。进行中 / 等待中的不在这里剔除——
 	// 预览要把它们数成「保留」，所以由服务层分拣。判据只有这一处，预览与执行不会分家。
@@ -240,6 +246,11 @@ type SummaryPageQuery struct {
 }
 
 var defaultSummary SummaryRepo
+var defaultCleanup CleanupRepo
+
+func Cleanup() CleanupRepo          { return defaultCleanup }
+func RegisterCleanup(i CleanupRepo) { defaultCleanup = i }
+func NewCleanup() CleanupRepo       { return &summaryRepo{} }
 
 func Summary() SummaryRepo          { return defaultSummary }
 func RegisterSummary(i SummaryRepo) { defaultSummary = i }

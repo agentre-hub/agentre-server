@@ -669,7 +669,7 @@ func TestListSummariesPage_UnassignedProjectScope_AlsoTakesReportedProjectsThatA
 // 两张表都有 createtime，所以每一列都必须限定归属，否则 ambiguous column。
 func TestListCleanupCandidates_SavedOnlyWithActivityAndAgentFilters(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewSummary()
+	r := NewCleanup()
 
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"LEFT JOIN agent_session_saves ON agent_session_saves.user_id=agent_sessions.user_id"+
@@ -690,7 +690,7 @@ func TestListCleanupCandidates_SavedOnlyWithActivityAndAgentFilters(t *testing.T
 // before=0 / agent 为空 = 不按那一项过滤；但「已保存」与账号条件一条都不能少。
 func TestListCleanupCandidates_NoOptionalFilters_StillSavedAndAccountScoped(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewSummary()
+	r := NewCleanup()
 
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"WHERE agent_sessions.user_id=? AND agent_session_saves.id IS NOT NULL",
@@ -704,7 +704,7 @@ func TestListCleanupCandidates_NoOptionalFilters_StillSavedAndAccountScoped(t *t
 // 执行时按标识重读：同样限定账号与「已保存」，别人账号的标识命中不了。
 func TestListSavedByConversationIDs_AccountScopedAndSavedOnly(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewSummary()
+	r := NewCleanup()
 
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"WHERE agent_sessions.user_id=? AND agent_session_saves.id IS NOT NULL"+
@@ -719,7 +719,7 @@ func TestListSavedByConversationIDs_AccountScopedAndSavedOnly(t *testing.T) {
 
 func TestListSavedByConversationIDs_Empty_NoQuery(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	out, err := NewSummary().ListSavedByConversationIDs(ctx, 7, nil)
+	out, err := NewCleanup().ListSavedByConversationIDs(ctx, 7, nil)
 	require.NoError(t, err)
 	require.Empty(t, out)
 	require.NoError(t, mock.ExpectationsWereMet())

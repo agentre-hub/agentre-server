@@ -137,7 +137,7 @@ func retained(s *agent_session_entity.SessionSummary) bool {
 func (s *savedSessionSvc) PreviewCleanup(
 	ctx context.Context, userID int64, filter CleanupFilter,
 ) (CleanupPreview, error) {
-	rows, err := agent_session_repo.Summary().ListCleanupCandidates(ctx, agent_session_repo.CleanupCandidateQuery{
+	rows, err := agent_session_repo.Cleanup().ListCleanupCandidates(ctx, agent_session_repo.CleanupCandidateQuery{
 		UserID: userID, BeforeMs: filter.BeforeMs, AgentSyncID: filter.AgentSyncID,
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func (s *savedSessionSvc) Cleanup(
 			uniq = append(uniq, id)
 		}
 	}
-	rows, err := agent_session_repo.Summary().ListSavedByConversationIDs(ctx, userID, uniq)
+	rows, err := agent_session_repo.Cleanup().ListSavedByConversationIDs(ctx, userID, uniq)
 	if err != nil {
 		return CleanupResult{}, err
 	}

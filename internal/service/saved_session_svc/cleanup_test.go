@@ -26,7 +26,7 @@ const (
 
 type cleanupFixture struct {
 	*savedFixture
-	summary *mock_agent_session_repo.MockSummaryRepo
+	summary *mock_agent_session_repo.MockCleanupRepo
 	online  map[string]bool
 	members map[string]bool
 }
@@ -35,8 +35,8 @@ func setupCleanupTest(t *testing.T) *cleanupFixture {
 	t.Helper()
 	f := &cleanupFixture{savedFixture: setupSavedSessionTest(t), online: map[string]bool{}}
 	ctrl := gomock.NewController(t)
-	f.summary = mock_agent_session_repo.NewMockSummaryRepo(ctrl)
-	agent_session_repo.RegisterSummary(f.summary)
+	f.summary = mock_agent_session_repo.NewMockCleanupRepo(ctrl)
+	agent_session_repo.RegisterCleanup(f.summary)
 	prevProbe, prevMembers := presenceProbe, projectMembers
 	presenceProbe = func(_ context.Context, _ int64, fps []string) ([]bool, error) {
 		out := make([]bool, len(fps))
