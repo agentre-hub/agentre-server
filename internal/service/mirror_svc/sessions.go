@@ -205,7 +205,7 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.DeviceFingerprint),
 				zap.String("conversationId", todo.ConversationID))
 			if err := agent_session_repo.DeleteTodo().RemoveDeleteTodo(
-				ctx, todo.UserID, todo.ConversationID); err != nil {
+				ctx, todo.UserID, todo.ConversationID, todo.DeviceFingerprint); err != nil {
 				errs = append(errs, fmt.Errorf("conversation %s: clear todo: %w", todo.ConversationID, err))
 				continue
 			}
@@ -226,7 +226,7 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 			continue
 		}
 		if err := agent_session_repo.DeleteTodo().RemoveDeleteTodo(
-			ctx, todo.UserID, todo.ConversationID); err != nil {
+			ctx, todo.UserID, todo.ConversationID, todo.DeviceFingerprint); err != nil {
 			// 删是删掉了，待办没勾掉：下一轮会再删一遍，而两端都幂等。
 			errs = append(errs, fmt.Errorf("conversation %s: clear todo: %w", todo.ConversationID, err))
 			continue

@@ -13,7 +13,7 @@ import (
 )
 
 // AddDeleteTodo 是一条条件插入：命中 uk_agent_session_delete_todos_identity
-// (user_id, conversation_id) 时什么都不改——同一条待办不会被记两遍
+// (user_id, conversation_id, device_fingerprint) 时什么都不改——同一条待办不会被记两遍
 // （执行机离线期间账号侧可能因为别的原因重复触发同一次清理）。
 func TestAddDeleteTodo_OnConflictDoNothing(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
@@ -51,19 +51,22 @@ func TestListDeleteTodosByDevice_AccountAndPeerScoped(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// RemoveDeleteTodo 是一条 DELETE：待办被执行完之后撤掉；从未记过时删不到行，
+// RemoveDeleteTodo 是一条 DELETE，身份是 (账号, 对话, 机器)：同一条对话可以同时在
+// 两台机器上各挂一条待办，勾掉一台的不能带走另一台的。待办被执行完之后撤掉；从未记过时删不到行，
 // 仍然成功（幂等，与设备撤销时顺带清理同一条路径）。
 func TestRemoveDeleteTodo_DeleteIsIdempotent(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeleteTodo()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `agent_session_delete_todos`")).
-		WithArgs(int64(7), "conv-9").
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM `agent_session_delete_todos` WHERE user_id=? AND conversation_id=? AND device_fingerprint=?",
+	)).
+		WithArgs(int64(7), "conv-9", "fp-desktop-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.RemoveDeleteTodo(ctx, 7, "conv-9"))
+	require.NoError(t, r.RemoveDeleteTodo(ctx, 7, "conv-9", "fp-desktop-1"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

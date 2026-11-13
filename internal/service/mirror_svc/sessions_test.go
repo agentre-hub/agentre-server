@@ -212,12 +212,14 @@ func (f *fakeTodos) ListDeleteTodosByDevice(
 	return out, nil
 }
 
-func (f *fakeTodos) RemoveDeleteTodo(_ context.Context, userID int64, conversationID string) error {
+func (f *fakeTodos) RemoveDeleteTodo(
+	_ context.Context, userID int64, conversationID, fingerprint string,
+) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	kept := f.rows[:0]
 	for _, row := range f.rows {
-		if row.UserID == userID && row.ConversationID == conversationID {
+		if row.UserID == userID && row.ConversationID == conversationID && row.DeviceFingerprint == fingerprint {
 			continue
 		}
 		kept = append(kept, row)
@@ -490,6 +492,25 @@ func TestReplayPendingDeletes_MachineBack_DeletesOnPeerAndClearsTodos(t *testing
 	assert.Equal(t, want, sent, "机器回来了,它欠的每一条删除都要补做")
 	assert.Equal(t, []agent_session_entity.DeleteTodo{todo(testUserID, "fp-other-machine", conv7)},
 		todos.pending(), "做完的勾掉,别的机器上那条一条都不许动")
+}
+
+// Given 同一条对话在两台机器上各挂着一条待办,其中一台回来了、另一台还没;
+// When 巡检补做;Then 只勾掉回来的那台的待办 —— 另一台的那条还欠着,不能被带走。
+func TestReplayPendingDeletes_SameConversationOnTwoMachines_ClearsOnlyReplayedMachine(t *testing.T) {
+	rig := newResidentRig(t)
+	newFakeSaves()
+	todos := newFakeTodos(
+		todo(testUserID, testMachine, conv42),
+		todo(testUserID, "fp-other-machine", conv42),
+	)
+	agent_session_repo.RegisterDeleteTodo(todos)
+	a := rig.replica(t, replicaA)
+	a.net.failConnect("fp-other-machine")
+
+	require.Error(t, NewSessions(a.sup).ReplayPendingDeletes(context.Background()))
+
+	assert.Equal(t, []agent_session_entity.DeleteTodo{todo(testUserID, "fp-other-machine", conv42)},
+		todos.pending(), "只勾掉回来的那台;另一台同一条对话的待办原样留着")
 }
 
 // Given 那台机器还没回来;When 巡检补做;Then 一次连接都不发起,待办原样留着 ——

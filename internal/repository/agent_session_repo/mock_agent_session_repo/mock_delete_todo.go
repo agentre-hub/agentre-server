@@ -87,17 +87,17 @@ func (mr *MockDeleteTodoRepoMockRecorder) ListPendingMachines(ctx any) *gomock.C
 }
 
 // RemoveDeleteTodo mocks base method.
-func (m *MockDeleteTodoRepo) RemoveDeleteTodo(ctx context.Context, userID int64, conversationID string) error {
+func (m *MockDeleteTodoRepo) RemoveDeleteTodo(ctx context.Context, userID int64, conversationID, deviceFingerprint string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RemoveDeleteTodo", ctx, userID, conversationID)
+	ret := m.ctrl.Call(m, "RemoveDeleteTodo", ctx, userID, conversationID, deviceFingerprint)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // RemoveDeleteTodo indicates an expected call of RemoveDeleteTodo.
-func (mr *MockDeleteTodoRepoMockRecorder) RemoveDeleteTodo(ctx, userID, conversationID any) *gomock.Call {
+func (mr *MockDeleteTodoRepoMockRecorder) RemoveDeleteTodo(ctx, userID, conversationID, deviceFingerprint any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveDeleteTodo", reflect.TypeOf((*MockDeleteTodoRepo)(nil).RemoveDeleteTodo), ctx, userID, conversationID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveDeleteTodo", reflect.TypeOf((*MockDeleteTodoRepo)(nil).RemoveDeleteTodo), ctx, userID, conversationID, deviceFingerprint)
 }
 
 // RemoveDeleteTodosByDevice mocks base method.
