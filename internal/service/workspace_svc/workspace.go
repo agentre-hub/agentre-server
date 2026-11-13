@@ -1364,6 +1364,9 @@ func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*
 		if err := cascadeAgentDelete(ctx, in, row); err != nil {
 			return err
 		}
+		if err := cascadeDepartmentDelete(ctx, in, row); err != nil {
+			return err
+		}
 		row.DeletedAt = time.Now().UnixMilli()
 		return nil
 	})
@@ -1387,11 +1390,14 @@ func cascadeAgentDelete(ctx context.Context, in OrgWriteInput, root *sync_entity
 		return nil
 	}
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, in.UserID, []string{
-		sync_entity.KindAgentExecTarget, sync_entity.KindProjectAgent})
+		sync_entity.KindAgentExecTarget, sync_entity.KindProjectAgent, sync_entity.KindMemory})
 	if err != nil {
 		return err
 	}
 	cascaded, err := tombstoneCascade(ctx, in.UserID, rows, func(row *sync_entity.SyncObject) bool {
+		if row.Kind == sync_entity.KindMemory {
+			return memoryOwnedBy(row, memoryOwnerAgent, root.SyncID)
+		}
 		return referencedAgentSyncID(row) == root.SyncID
 	})
 	if err != nil {
@@ -1399,6 +1405,56 @@ func cascadeAgentDelete(ctx context.Context, in OrgWriteInput, root *sync_entity
 	}
 	if cascaded > 0 {
 		logger.Ctx(ctx).Info("workspace_svc.cascadeAgentDelete: exec targets and memberships tombstoned",
+			zap.Int64("userId", in.UserID), zap.String("syncId", root.SyncID),
+			zap.Int("cascadedCount", cascaded))
+	}
+	return nil
+}
+
+// 记忆归属种类，与桌面端 memory_entity 写进载荷 owner_kind 的取值一致。
+const (
+	memoryOwnerAgent      = "agent"
+	memoryOwnerDepartment = "department"
+	memoryOwnerProject    = "project"
+)
+
+// memoryOwner 取记忆载荷里的归属种类与同步标识，读不懂时两者都是空串。
+func memoryOwner(row *sync_entity.SyncObject) (kind, syncID string) {
+	var p syncwire.MemoryPayload
+	if json.Unmarshal([]byte(row.Payload), &p) != nil {
+		return "", ""
+	}
+	return p.OwnerKind, p.OwnerSyncID
+}
+
+// memoryOwnedBy 判断这行是不是 kind/syncID 名下的记忆。读不懂的载荷、全局层（没有
+// 归属同步标识）都不算——宁可漏删，不多删（同 referencedAgentSyncID）。
+func memoryOwnedBy(row *sync_entity.SyncObject, ownerKind, ownerSyncID string) bool {
+	if row.Kind != sync_entity.KindMemory || ownerSyncID == "" {
+		return false
+	}
+	kind, syncID := memoryOwner(row)
+	return kind == ownerKind && syncID == ownerSyncID
+}
+
+// cascadeDepartmentDelete 删部门时把部门层的记忆落墓碑，与主行同在一个事务里、排在
+// 主行之前。记忆留着，别的设备就会拉到归属已不存在的记忆。
+func cascadeDepartmentDelete(ctx context.Context, in OrgWriteInput, root *sync_entity.SyncObject) error {
+	if in.Kind != sync_entity.KindDepartment {
+		return nil
+	}
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, in.UserID, []string{sync_entity.KindMemory})
+	if err != nil {
+		return err
+	}
+	cascaded, err := tombstoneCascade(ctx, in.UserID, rows, func(row *sync_entity.SyncObject) bool {
+		return memoryOwnedBy(row, memoryOwnerDepartment, root.SyncID)
+	})
+	if err != nil {
+		return err
+	}
+	if cascaded > 0 {
+		logger.Ctx(ctx).Info("workspace_svc.cascadeDepartmentDelete: memories tombstoned",
 			zap.Int64("userId", in.UserID), zap.String("syncId", root.SyncID),
 			zap.Int("cascadedCount", cascaded))
 	}

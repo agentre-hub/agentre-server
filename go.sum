@@ -8,8 +8,8 @@ github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7Oputl
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
 github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc=
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
-github.com/agentre-hub/agentre/pkg/syncwire v0.0.0-20261109015301-9955ca98947a h1:jCJMysG1eo+6zyYUxQZr5gl+ag1wqj48+Re/Y7dPSH0=
-github.com/agentre-hub/agentre/pkg/syncwire v0.0.0-20261109015301-9955ca98947a/go.mod h1:mIpsVcozt3ka3H0mGqDsJBjp6HYkF27YuBQ1aTQr4gc=
+github.com/agentre-hub/agentre/pkg/syncwire v0.0.0-20261113061847-48a285b23e91 h1:58sADk+7n4GqQMUvfHrklo5Ed3lF1xTenWJkNTx410w=
+github.com/agentre-hub/agentre/pkg/syncwire v0.0.0-20261113061847-48a285b23e91/go.mod h1:mIpsVcozt3ka3H0mGqDsJBjp6HYkF27YuBQ1aTQr4gc=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261109015301-9955ca98947a h1:ixRkJA5JeH+bHdVwvMppjZI1kZEFekD7RSkZPQmmBUs=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261109015301-9955ca98947a/go.mod h1:0C+dvC2R00+FEkRp5udfettHgkkPROJybrz/bnZ2oNw=
 github.com/alicebob/miniredis/v2 v2.38.0 h1:nZAzCR+Lj+Vxk4ZXzm2NuKq2O33RXj1XxJ2e2uP9jiw=

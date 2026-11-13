@@ -1386,9 +1386,12 @@ func TestDeleteOrgObject_GivenWritableKinds_ThenTombstonedWithNewVersionAndServe
 
 			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "row-1").Return(
 				liveOrgRow(4, kind, "row-1", `{"name":"要删掉的"}`), nil)
-			if kind == sync_entity.KindAgent {
-				// 删 Agent 要查它名下的执行目标与项目成员关系（级联见专门的用例）。
+			switch kind {
+			case sync_entity.KindAgent:
+				// 删 Agent 要查它名下的执行目标、项目成员关系与记忆（级联见专门的用例）。
 				mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), agentCascadeKinds).Return(nil, nil)
+			case sync_entity.KindDepartment:
+				mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindMemory}).Return(nil, nil)
 			}
 			mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(105), nil)
 			var saved *sync_entity.SyncObject
@@ -1450,6 +1453,7 @@ func TestDeleteOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 
 	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindMemory}).Return(nil, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(203), nil)
 	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -2112,7 +2116,7 @@ func TestDeleteOrgObject_GivenOrdinaryAgent_ThenStillTombstoned(t *testing.T) {
 }
 
 // agentCascadeKinds 是删 Agent 时要一并查的两类子行：它的执行目标与它的项目成员关系。
-var agentCascadeKinds = []string{sync_entity.KindAgentExecTarget, sync_entity.KindProjectAgent}
+var agentCascadeKinds = []string{sync_entity.KindAgentExecTarget, sync_entity.KindProjectAgent, sync_entity.KindMemory}
 
 // 删 Agent：它的执行目标与项目成员关系在同一个事务里一并落墓碑（与桌面端
 // agentAdapter 删 Agent 时的级联同一份清单）。别的 Agent 的行一条都不动。
@@ -2463,6 +2467,7 @@ func TestOrgWrite_ThenVersionIsAllocatedInsideTheWriteTransaction(t *testing.T) 
 		{"删除", func(_ *testing.T, ctx context.Context, mObj *mock_sync_repo.MockSyncObjectRepo, svc *workspaceSvc) error {
 			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 				liveOrgRow(4, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
+			mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindMemory}).Return(nil, nil)
 			_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
 				UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1"})
 			return err
@@ -2554,6 +2559,7 @@ func TestDeleteOrgObject_GivenDevicePushBeforeTheWrite_ThenTombstoneBuildsOnTheL
 			lockedInTx = hubtest.InTransaction(ctx)
 			return fresh, nil
 		})
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindMemory}).Return(nil, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(121), nil)
 	var saved *sync_entity.SyncObject
 	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -2622,4 +2628,130 @@ func TestUpdateOrgObject_GivenLockedPayloadUnmergeable_ThenRolledBackWithoutWrit
 	require.Error(t, err)
 	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
 	assert.Empty(t, stub.recordedCalls())
+}
+
+// ── 删归属方时名下记忆一并落墓碑 ──────────────────────────────────────────────
+//
+// 记忆以 owner_kind + owner_sync_id 指向 agent / 部门 / 项目。控制台删掉归属方而记忆
+// 留着，其它设备就会拉到归属悬空的记忆。
+
+func memoryRow(t *testing.T, id int64, syncID, ownerKind, ownerSyncID string) *sync_entity.SyncObject {
+	t.Helper()
+	p := map[string]any{"owner_kind": ownerKind, "summary": "s"}
+	if ownerSyncID != "" {
+		p["owner_sync_id"] = ownerSyncID
+	}
+	return &sync_entity.SyncObject{ID: id, Kind: sync_entity.KindMemory, SyncID: syncID, Payload: mustJSON(t, p)}
+}
+
+func TestDeleteOrgObject_GivenAgentWithMemories_ThenOnlyItsOwnMemoriesAreTombstonedInTheSameTransaction(t *testing.T) {
+	ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	registerAccountChanStub(t)
+
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-1").Return(
+		liveOrgRow(1, sync_entity.KindAgent, "agent-1", `{"name":"张三"}`), nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), agentCascadeKinds).Return([]*sync_entity.SyncObject{
+		memoryRow(t, 31, "m-1", "agent", "agent-1"),
+		memoryRow(t, 32, "m-2", "agent", "agent-2"),
+		memoryRow(t, 33, "m-3", "project", "agent-1"), // 同标识但归属种类不同：不动
+		memoryRow(t, 34, "m-4", "global", ""),
+		{ID: 35, Kind: sync_entity.KindMemory, SyncID: "m-bad", Payload: `not json`},
+	}, nil)
+	var version int64 = 600
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+		func(context.Context, int64, int64) (int64, error) { version++; return version, nil }).AnyTimes()
+	tombstoned := map[int64]int64{}
+	mObj.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, id, v, _ int64) (int64, error) {
+			assert.True(t, hubtest.InTransaction(ctx))
+			tombstoned[id] = v
+			return 1, nil
+		}).AnyTimes()
+	var saved *sync_entity.SyncObject
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
+
+	got, err := svc.DeleteOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: sync_entity.KindAgent, SyncID: "agent-1"})
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	assert.ElementsMatch(t, []int64{31}, keysOfInt64(tombstoned))
+	assert.Less(t, tombstoned[31], got.Version)
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+}
+
+func TestDeleteOrgObject_GivenDepartmentWithMemories_ThenOnlyItsOwnMemoriesAreTombstoned(t *testing.T) {
+	ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	registerAccountChanStub(t)
+
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
+		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"研发"}`), nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindMemory}).Return([]*sync_entity.SyncObject{
+		memoryRow(t, 41, "m-1", "department", "dept-1"),
+		memoryRow(t, 42, "m-2", "department", "dept-2"),
+		memoryRow(t, 43, "m-3", "agent", "dept-1"),
+	}, nil)
+	var version int64 = 700
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+		func(context.Context, int64, int64) (int64, error) { version++; return version, nil }).AnyTimes()
+	tombstoned := map[int64]int64{}
+	mObj.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id, v, _ int64) (int64, error) { tombstoned[id] = v; return 1, nil }).AnyTimes()
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
+
+	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int64{41}, keysOfInt64(tombstoned))
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+}
+
+func TestDeleteOrgObject_GivenProjectSubtreeWithMemories_ThenMemoriesOfEveryProjectInTheSubtreeAreTombstoned(t *testing.T) {
+	ctx, _, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	registerAccountChanStub(t)
+
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-a").Return(
+		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
+		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation, sync_entity.KindMemory,
+	}).Return([]*sync_entity.SyncObject{
+		{ID: 1, Kind: sync_entity.KindProject, SyncID: "proj-a", Payload: mustJSON(t, map[string]any{"name": "A"})},
+		{ID: 2, Kind: sync_entity.KindProject, SyncID: "proj-b", Payload: mustJSON(t, map[string]any{
+			"name": "B", "parent_sync_id": "proj-a"})},
+		{ID: 3, Kind: sync_entity.KindProject, SyncID: "proj-z", Payload: mustJSON(t, map[string]any{"name": "Z"})},
+		memoryRow(t, 51, "m-1", "project", "proj-a"),
+		memoryRow(t, 52, "m-2", "project", "proj-b"),
+		memoryRow(t, 53, "m-3", "project", "proj-z"),
+		memoryRow(t, 54, "m-4", "agent", "proj-a"),
+	}, nil)
+	var version int64 = 800
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+		func(context.Context, int64, int64) (int64, error) { version++; return version, nil }).AnyTimes()
+	tombstoned := map[int64]int64{}
+	mObj.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id, v, _ int64) (int64, error) { tombstoned[id] = v; return 1, nil }).AnyTimes()
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
+
+	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: sync_entity.KindProject, SyncID: "proj-a"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int64{2, 51, 52}, keysOfInt64(tombstoned))
+}
+
+// 桌面端推上来的 agent 载荷带 memory_enabled:false 时，控制台改名不能把它丢掉或改回开。
+func TestUpdateOrgObject_GivenAgentWithMemoryDisabled_ThenRenameKeepsMemoryEnabledFalse(t *testing.T) {
+	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
+	mState := registerSyncStateMock(t)
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-1").Return(
+		liveOrgRow(4, sync_entity.KindAgent, "agent-1", `{"name":"张三","memory_enabled":false}`), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(140), nil)
+	var saved *sync_entity.SyncObject
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
+
+	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: sync_entity.KindAgent, SyncID: "agent-1",
+		Fields: map[string]any{"name": "李四"}})
+	require.NoError(t, err)
+	assert.Contains(t, saved.Payload, `"memory_enabled":false`)
+	assert.Contains(t, saved.Payload, `"name":"李四"`)
 }

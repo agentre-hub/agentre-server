@@ -2087,3 +2087,26 @@ func TestPush_GivenDeleteThenRecreateOnOneNaturalKeyInOneBatch_ThenNoMerge(t *te
 		}, store.snapshot())
 	})
 }
+
+// 记忆与其它 kind 一样被收下并原样存储：载荷（含归属同步标识）不被改写。
+func TestPush_GivenMemoryObject_ThenAcceptedAndStoredVerbatim(t *testing.T) {
+	convey.Convey("kind=memory 的新对象", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		onlineDevice(m)
+		expectTx(m)
+		expectFindMany(m)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil)
+		var saved []*sync_entity.SyncObject
+		captureCreateBatch(m, &saved)
+		payload := `{"owner_kind":"agent","owner_sync_id":"agent-1","summary":"用 pnpm","detail":"","pinned":true,"state":"normal"}`
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{{Kind: sync_entity.KindMemory, SyncID: "mem-1", UpdatedAt: testNow,
+				Payload: []byte(payload)}}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, PushStatusAccepted, out.Results[0].Status)
+		assert.Equal(t, sync_entity.KindMemory, saved[0].Kind)
+		assert.Equal(t, payload, saved[0].Payload)
+	})
+}

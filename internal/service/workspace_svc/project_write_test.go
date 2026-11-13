@@ -296,6 +296,7 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenDescendantsMembersAndLocati
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
+		sync_entity.KindMemory,
 	}).Return([]*sync_entity.SyncObject{
 		{ID: 1, Kind: sync_entity.KindProject, SyncID: "proj-a", Payload: mustJSON(t, map[string]any{"name": "A"})},
 		{ID: 2, Kind: sync_entity.KindProject, SyncID: "proj-b", Payload: mustJSON(t, map[string]any{
@@ -365,6 +366,7 @@ func TestDeleteOrgObject_GivenLeafProject_ThenOnlyItselfIsTombstoned(t *testing.
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
+		sync_entity.KindMemory,
 	}).Return([]*sync_entity.SyncObject{
 		{ID: 1, Kind: sync_entity.KindProject, SyncID: "proj-a", Payload: `{"name":"A"}`},
 	}, nil)
@@ -539,6 +541,7 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenTheWholeCascadeIsOneTransac
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
+		sync_entity.KindMemory,
 	}).Return([]*sync_entity.SyncObject{
 		{ID: 1, Kind: sync_entity.KindProject, SyncID: "proj-a", Payload: mustJSON(t, map[string]any{"name": "A"})},
 		{ID: 2, Kind: sync_entity.KindProject, SyncID: "proj-b", Payload: mustJSON(t, map[string]any{
