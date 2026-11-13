@@ -236,6 +236,32 @@ func TestCleanup_PassesCallerDeviceToDelete(t *testing.T) {
 	assert.Empty(t, f.peer.deleted, "调用方就是承载端：它本机已删，不回头通知")
 }
 
+// 决策 17 的批量面：清理时那条保存记录已经不在了（两次读之间被删），没有承载端可
+// 通知——不拨号、不记空指纹待办，也不出现在 pending 里。
+func TestCleanup_RowVanished_NoDialNoEmptyFingerprintTodo(t *testing.T) {
+	for _, caller := range []int64{0, 1} {
+		f := setupCleanupTest(t)
+		f.peer.err = ErrMachineOffline // 误拨就会走到 AddDeleteTodo，而 todo mock 没有任何预期
+		f.summary.EXPECT().ListSavedByConversationIDs(gomock.Any(), int64(7), []string{cvOld1}).Return(
+			[]*agent_session_entity.SessionSummary{sum(cvOld1, "fp-desktop-1", "idle", false)}, nil)
+		f.follow.EXPECT().FindByIdentity(gomock.Any(), int64(7), cvOld1).Return(nil, nil)
+		f.follow.EXPECT().Delete(gomock.Any(), int64(7), cvOld1).Return(nil)
+		if caller != 0 {
+			f.device.EXPECT().Find(gomock.Any(), caller).Return(
+				&device_entity.Device{ID: caller, UserID: 7, Fingerprint: "fp-desktop-1", Kind: device_entity.KindDesktop, Status: 1}, nil)
+		}
+
+		got, err := f.svc.Cleanup(context.Background(), 7, caller, []string{cvOld1})
+
+		require.NoError(t, err)
+		assert.Equal(t, 1, got.Deleted)
+		assert.Empty(t, got.Failed)
+		assert.Empty(t, got.Pending)
+		assert.Empty(t, f.peer.deleted)
+		assert.Equal(t, []string{"mirror:purge"}, f.calls, "不拨任何机器")
+	}
+}
+
 func TestCleanup_RecheckReadFails_ReturnsError(t *testing.T) {
 	f := setupCleanupTest(t)
 	f.summary.EXPECT().ListSavedByConversationIDs(gomock.Any(), int64(7), gomock.Any()).Return(nil, errors.New("db down"))

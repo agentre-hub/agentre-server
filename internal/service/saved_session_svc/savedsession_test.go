@@ -450,6 +450,74 @@ func TestDelete_NoRow_MachineFingerprintNotInAccountIsIgnored(t *testing.T) {
 	}
 }
 
+// 决策 17：没有名单行、也没有可用的执行端指纹时，没有任何一台机器是已知的承载端。
+// 调用方设备（它已经删了自己那份）顶上；连设备调用方都没有（浏览器、未知 / 已移除
+// 的指纹）就没有人可通知。三种都答「已删除」，不拨号、不记待办——空指纹的待办
+// 重放 cron 永远清不掉。对端设成离线，是为了让误拨 / 误记待办立刻在这里暴露。
+func assertDeletedWithoutCarrier(t *testing.T, f *savedFixture, ref SessionRef) {
+	t.Helper()
+	f.peer.err = ErrMachineOffline // 误拨就会走到 AddDeleteTodo，而 todo mock 没有任何预期
+	outcome, err := f.svc.Delete(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeleted, outcome)
+	assert.Equal(t, []string{"mirror:purge"}, f.calls, "不拨任何机器")
+	assert.Empty(t, f.peer.deleted)
+}
+
+func TestDelete_NoRow_DeviceCaller_IsTheCarrier_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	f.device.EXPECT().Find(gomock.Any(), int64(1)).Return(
+		&device_entity.Device{ID: 1, UserID: 7, Fingerprint: "fp-desktop-1", Kind: device_entity.KindDesktop, Status: 1}, nil)
+
+	ref := refB()
+	ref.CallerDeviceID = 1
+	assertDeletedWithoutCarrier(t, f, ref)
+}
+
+func TestDelete_NoRow_UnknownHint_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	f.device.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-someone-else").Return(nil, nil)
+
+	ref := refB()
+	ref.MachineFingerprint = "fp-someone-else"
+	assertDeletedWithoutCarrier(t, f, ref)
+}
+
+func TestDelete_NoRow_RemovedHint_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	expectDevice(f, "fp-removed", device_entity.KindAgentred, 0)
+
+	ref := refB()
+	ref.MachineFingerprint = "fp-removed"
+	assertDeletedWithoutCarrier(t, f, ref)
+}
+
+func TestDelete_NoRow_BrowserCallerNoDevice_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+
+	assertDeletedWithoutCarrier(t, f, refB())
+}
+
+// 有名单行时的老行为不变：承载端离线仍记它的待办（指纹非空）。
+func TestDelete_RowWithCarrier_Offline_StillQueuesTodoForCarrier(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	f.peer.err = ErrMachineOffline
+	expectRowB(f, "fp-agentred-1")
+	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, td *agent_session_entity.DeleteTodo) error {
+			assert.Equal(t, "fp-agentred-1", td.DeviceFingerprint)
+			return nil
+		})
+
+	outcome, err := f.svc.Delete(context.Background(), refB())
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeletePending, outcome)
+}
+
 func TestDelete_RowExists_MachineFingerprintHintIsNotConsulted(t *testing.T) {
 	f := setupSavedSessionTest(t)
 	expectRowB(f, "fp-agentred-1") // 发起端 = 承载端；没有 FindByFingerprint 的预期，一调用即红

@@ -255,6 +255,11 @@ func (s *savedSessionSvc) deleteCopies(ctx context.Context, ref SessionRef) (del
 	if err := agent_session_repo.Save().Delete(ctx, ref.UserID, ref.ConversationID); err != nil {
 		return out, err
 	}
+	if row == nil && ref.MachineFingerprint == "" {
+		// 没有名单行、也没有可用的执行端指纹：设备调用方就是承载端（它已经删了自己
+		// 那份）；浏览器调用方则压根没有可通知的机器，下面按「已删除」收口。
+		ref.MachineFingerprint = callerFP
+	}
 	// 到这里 server 那一份已经没了：它立刻从索引里消失，没有「已删除但还在」的中间态。
 	if callerFP != "" && callerFP == ref.MachineFingerprint {
 		// 调用方自己就是承载端：它在本机已经删过，不回头给它发。
@@ -327,6 +332,10 @@ func (s *savedSessionSvc) notifyInitiator(
 // deleteOrQueue 通知 ref.MachineFingerprint 那台机器删除；联系不上或这次没删成就给它
 // 记一条待办。协议违约原样上交，不留待办。
 func (s *savedSessionSvc) deleteOrQueue(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error) {
+	if ref.MachineFingerprint == "" {
+		// 没有机器可通知：空指纹的待办重放 cron 永远清不掉，任何路径都不许记。
+		return MachineDeleted, nil
+	}
 	err := machineDeleter.DeleteOnMachine(ctx, ref)
 	switch {
 	case err == nil:
