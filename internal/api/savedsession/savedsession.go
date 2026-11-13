@@ -34,13 +34,16 @@ type SaveSessionResponse struct{}
 // DeleteSessionRequest 删掉账号里的这条对话，**连同执行端上那一份**（决策 6）。
 // 幂等；只删这一条，不触碰别的。
 //
-// 只要身份，不要机器：承载它的机器是保存时记下的，服务端按身份查得出来。让调用方
-// 报的话，发起端是浏览器的那些对话（web 控制台派发出去的）根本报不出来——索引行上
-// 只有身份，没有机器。
+// 身份之外，机器默认不由调用方报：承载它的机器是保存时记下的，服务端按身份查得出
+// 来（发起端是浏览器的对话，调用方根本报不出来）。唯一的例外是 machine_fingerprint：
+// 桌面端删一条没保存过的远端对话时，账号里没有索引行可查，才由它指明执行端；
+// 有索引行时忽略，且必须是本账号的设备，否则也忽略。
 type DeleteSessionRequest struct {
 	mux.Meta `path:"/v1/saved-sessions/delete" method:"POST"`
-	// 只要身份：conversation_id 全局唯一，机器与发起端都由服务端自己查出来。
+	// conversation_id 全局唯一，机器与发起端默认由服务端自己查出来。
 	ConversationID string `json:"conversation_id" binding:"required,uuid"`
+	// MachineFingerprint 可省：仅在账号里没有这条对话的索引行时，指明执行它的机器。
+	MachineFingerprint string `json:"machine_fingerprint" binding:"omitempty,min=8,max=128"`
 }
 
 // DeleteSessionResponse 交代**执行端那一份**的去向；应答返回时 server 那一份一定

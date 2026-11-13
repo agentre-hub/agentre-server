@@ -42,10 +42,13 @@ func (f *Follow) Delete(c *gin.Context, req *api.DeleteSessionRequest) (*api.Del
 	if err != nil {
 		return nil, err
 	}
-	// 承载它的机器不由请求体提供：service 按身份从账号里查出来。
+	// 承载它的机器默认由 service 按身份从账号里查；请求体的 machine_fingerprint 只在
+	// 没有索引行时由 service 采信。调用设备（设备 JWT）一并交下去，好让它不被回头通知。
 	outcome, err := saved_session_svc.Default().Delete(c.Request.Context(), saved_session_svc.SessionRef{
-		UserID:         userID,
-		ConversationID: req.ConversationID,
+		UserID:             userID,
+		ConversationID:     req.ConversationID,
+		MachineFingerprint: req.MachineFingerprint,
+		CallerDeviceID:     ginctx.DeviceID(c),
 	})
 	if err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)

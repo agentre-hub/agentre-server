@@ -34,6 +34,8 @@ const testCookieName = "server_session"
 type stubSavedSessionSvc struct {
 	saved       map[int64][]saved_session_svc.SessionRef
 	peerOutcome saved_session_svc.MachineDeleteOutcome
+	// lastDelete 是最近一次 Delete 收到的入参，用来核对控制器转交了什么。
+	lastDelete saved_session_svc.SessionRef
 }
 
 // 两条对话的 conversation_id（决策 1 的 UUIDv7 规范形式）。
@@ -62,6 +64,7 @@ func (s *stubSavedSessionSvc) Save(_ context.Context, ref saved_session_svc.Sess
 func (s *stubSavedSessionSvc) Delete(
 	_ context.Context, ref saved_session_svc.SessionRef,
 ) (saved_session_svc.MachineDeleteOutcome, error) {
+	s.lastDelete = ref
 	items := s.saved[ref.UserID]
 	for i, it := range items {
 		// 删除按身份：这个桩里两个指纹同值（桌面端那一档），拿哪一个都行，
@@ -223,3 +226,31 @@ func TestSave_UnauthenticatedRejected(t *testing.T) {
 }
 
 var _ saved_session_svc.SavedSessionSvc = (*stubSavedSessionSvc)(nil)
+
+// 桌面（设备 JWT）删除自己的对话：machine_fingerprint 原样交给 service，调用设备 id 取自
+// JWT——service 据此不回头通知它。
+func TestDelete_DeviceJWT_ForwardsMachineFingerprintAndCallerDevice(t *testing.T) {
+	stub := newStubSavedSessionSvc()
+	server := newSavedSessionTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 4, Kind: device_entity.KindDesktop})
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/delete",
+		"", token, `{"conversation_id":"`+conversationNine+`","machine_fingerprint":"fp-agentred-1"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(7), stub.lastDelete.UserID)
+	require.Equal(t, "fp-agentred-1", stub.lastDelete.MachineFingerprint)
+	require.Equal(t, int64(4), stub.lastDelete.CallerDeviceID)
+}
+
+// 浏览器会话没有调用设备；machine_fingerprint 可省。
+func TestDelete_Session_HasNoCallerDevice(t *testing.T) {
+	stub := newStubSavedSessionSvc()
+	server := newSavedSessionTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/delete",
+		cookie.Value, "", `{"conversation_id":"`+conversationNine+`"}`, csrf)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Zero(t, stub.lastDelete.CallerDeviceID)
+	require.Empty(t, stub.lastDelete.MachineFingerprint)
+}

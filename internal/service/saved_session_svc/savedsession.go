@@ -19,7 +19,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 )
 
 type SavedSessionSvc interface {
@@ -51,6 +53,9 @@ type SessionRef struct {
 	ConversationID     string
 	MachineFingerprint string
 	PeerFingerprint    string
+	// CallerDeviceID 是发起这次删除的设备（设备 JWT 调用时才有，浏览器会话为 0）。
+	// 它自己已经在本机删过，所以删除传播绝不回头通知它。只由 Delete 使用。
+	CallerDeviceID int64
 }
 
 // Initiator 解出这条对话的发起端：留空即「就是承载它的那台机器自己」。
@@ -193,14 +198,31 @@ func (s *savedSessionSvc) Save(ctx context.Context, ref SessionRef) error {
 //     （决策 6）。
 func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error) {
 	// 承载它的机器由账号这边查出来，而不是要调用方报：发起端是浏览器时（web 控制台
-	// 派发出去的那些），调用方手上只有身份，它压根不认识那台机器。查不到（早已删过）
-	// 就沿用调用方给的那一份 —— 幂等删除照常往下走，只是没有机器可通知。
+	// 派发出去的那些），调用方手上只有身份，它压根不认识那台机器。
+	//
+	// 名单行不在了（早已删过，或桌面端删的是从没保存过的远端对话）：调用方报的
+	// machine_fingerprint 才有资格顶上，而且必须是本账号的在用设备，否则忽略——
+	// 一个请求不能借此点到别的账号的机器。有名单行时它不被采信。
 	row, err := agent_session_repo.Save().FindByIdentity(ctx, ref.UserID, ref.ConversationID)
 	if err != nil {
 		return "", err
 	}
+	initiator := ""
 	if row != nil {
 		ref.MachineFingerprint = row.DeviceFingerprint
+		initiator = row.PeerFingerprint
+	} else if ref.MachineFingerprint != "" {
+		own, err := s.activeDevice(ctx, ref.UserID, ref.MachineFingerprint)
+		if err != nil {
+			return "", err
+		}
+		if own == nil {
+			ref.MachineFingerprint = ""
+		}
+	}
+	callerFP, err := s.callerFingerprint(ctx, ref)
+	if err != nil {
+		return "", err
 	}
 	if err := sessionMirror.Purge(ctx, ref); err != nil {
 		return "", err
@@ -209,7 +231,75 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (MachineDe
 		return "", err
 	}
 	// 到这里 server 那一份已经没了：它立刻从索引里消失，没有「已删除但还在」的中间态。
-	err = machineDeleter.DeleteOnMachine(ctx, ref)
+	var outcome MachineDeleteOutcome
+	if callerFP != "" && callerFP == ref.MachineFingerprint {
+		// 调用方自己就是承载端：它在本机已经删过，不回头给它发。
+		outcome = MachineDeleted
+	} else if outcome, err = s.deleteOrQueue(ctx, ref); err != nil {
+		return "", err
+	}
+	// 发起端若是账号里另一台桌面，它本机也留着这条对话，同样要删；应答仍只描述
+	// 承载端那一份。
+	if err := s.notifyInitiator(ctx, ref, initiator, callerFP); err != nil {
+		return "", err
+	}
+	return outcome, nil
+}
+
+// activeDevice 取账号里这个指纹对应的在用设备；不是本账号的设备 / 已移除返回 nil。
+func (s *savedSessionSvc) activeDevice(ctx context.Context, userID int64, fp string) (*device_entity.Device, error) {
+	d, err := device_repo.Device().FindByFingerprint(ctx, userID, fp)
+	if err != nil {
+		return nil, err
+	}
+	if !d.IsActive() {
+		return nil, nil
+	}
+	return d, nil
+}
+
+// callerFingerprint 解出发起这次删除的设备的指纹；浏览器会话 / 解不出来返回空。
+func (s *savedSessionSvc) callerFingerprint(ctx context.Context, ref SessionRef) (string, error) {
+	if ref.CallerDeviceID == 0 {
+		return "", nil
+	}
+	d, err := device_repo.Device().Find(ctx, ref.CallerDeviceID)
+	if err != nil {
+		return "", err
+	}
+	if d == nil || d.UserID != ref.UserID {
+		return "", nil
+	}
+	return d.Fingerprint, nil
+}
+
+// notifyInitiator 通知发起端桌面删除。发起端不是账号里的在用桌面（浏览器、agentred、
+// 已移除的设备）、就是承载端、或就是调用方自己时什么都不做。它不影响应答；
+// 离线 / 没删成留待办，协议违约则只记日志（重放永远不会成功）。
+func (s *savedSessionSvc) notifyInitiator(ctx context.Context, ref SessionRef, initiator, callerFP string) error {
+	if initiator == "" || initiator == ref.MachineFingerprint || initiator == callerFP {
+		return nil
+	}
+	d, err := s.activeDevice(ctx, ref.UserID, initiator)
+	if err != nil {
+		return err
+	}
+	if d == nil || d.Kind != device_entity.KindDesktop {
+		return nil
+	}
+	target := ref
+	target.MachineFingerprint = initiator
+	target.PeerFingerprint = initiator
+	if _, err := s.deleteOrQueue(ctx, target); err != nil && !errors.Is(err, ErrMachineProtocolViolation) {
+		return err
+	}
+	return nil
+}
+
+// deleteOrQueue 通知 ref.MachineFingerprint 那台机器删除；联系不上或这次没删成就给它
+// 记一条待办。协议违约原样上交，不留待办。
+func (s *savedSessionSvc) deleteOrQueue(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error) {
+	err := machineDeleter.DeleteOnMachine(ctx, ref)
 	switch {
 	case err == nil:
 		logger.Ctx(ctx).Info("saved_session_svc.Delete: both copies deleted",
