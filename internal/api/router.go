@@ -384,6 +384,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// 删除清掉 server 那份，并让执行那条对话的机器也删掉它自己那一份。
 		savedSessionCtr.Save,
 		savedSessionCtr.Delete,
+		savedSessionCtr.CleanupPreview,
+		savedSessionCtr.Cleanup,
 		// 账号里 agent 会话的两个只读端点（/v1/agent-sessions*）：索引读会话摘要
 		// （项目归属就地判定，决策 12），
 		// 详情页按游标翻转录。cwd 不出现在任一响应里（R19，见 workspace 包守卫）。

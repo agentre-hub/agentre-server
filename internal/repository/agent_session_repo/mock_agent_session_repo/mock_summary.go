@@ -131,6 +131,21 @@ func (mr *MockSummaryRepoMockRecorder) DeleteSummary(ctx, userID, conversationID
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSummary", reflect.TypeOf((*MockSummaryRepo)(nil).DeleteSummary), ctx, userID, conversationID)
 }
 
+// ListCleanupCandidates mocks base method.
+func (m *MockSummaryRepo) ListCleanupCandidates(ctx context.Context, q agent_session_repo.CleanupCandidateQuery) ([]*agent_session_entity.SessionSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListCleanupCandidates", ctx, q)
+	ret0, _ := ret[0].([]*agent_session_entity.SessionSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListCleanupCandidates indicates an expected call of ListCleanupCandidates.
+func (mr *MockSummaryRepoMockRecorder) ListCleanupCandidates(ctx, q any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListCleanupCandidates", reflect.TypeOf((*MockSummaryRepo)(nil).ListCleanupCandidates), ctx, q)
+}
+
 // ListImportedProviderSessions mocks base method.
 func (m *MockSummaryRepo) ListImportedProviderSessions(ctx context.Context, userID int64, fingerprint string) (map[string]string, error) {
 	m.ctrl.T.Helper()
@@ -144,6 +159,21 @@ func (m *MockSummaryRepo) ListImportedProviderSessions(ctx context.Context, user
 func (mr *MockSummaryRepoMockRecorder) ListImportedProviderSessions(ctx, userID, fingerprint any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListImportedProviderSessions", reflect.TypeOf((*MockSummaryRepo)(nil).ListImportedProviderSessions), ctx, userID, fingerprint)
+}
+
+// ListSavedByConversationIDs mocks base method.
+func (m *MockSummaryRepo) ListSavedByConversationIDs(ctx context.Context, userID int64, ids []string) ([]*agent_session_entity.SessionSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSavedByConversationIDs", ctx, userID, ids)
+	ret0, _ := ret[0].([]*agent_session_entity.SessionSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSavedByConversationIDs indicates an expected call of ListSavedByConversationIDs.
+func (mr *MockSummaryRepoMockRecorder) ListSavedByConversationIDs(ctx, userID, ids any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSavedByConversationIDs", reflect.TypeOf((*MockSummaryRepo)(nil).ListSavedByConversationIDs), ctx, userID, ids)
 }
 
 // ListSummariesByUser mocks base method.

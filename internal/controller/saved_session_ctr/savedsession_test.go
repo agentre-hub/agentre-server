@@ -36,6 +36,29 @@ type stubSavedSessionSvc struct {
 	peerOutcome saved_session_svc.MachineDeleteOutcome
 	// lastDelete 是最近一次 Delete 收到的入参，用来核对控制器转交了什么。
 	lastDelete saved_session_svc.SessionRef
+	// 清理：preview / result 是桩要交回的东西，last* 记下控制器转交了什么。
+	preview       saved_session_svc.CleanupPreview
+	result        saved_session_svc.CleanupResult
+	lastPreviewBy int64
+	lastFilter    saved_session_svc.CleanupFilter
+	lastCleanup   struct {
+		userID, callerDevice int64
+		ids                  []string
+	}
+}
+
+func (s *stubSavedSessionSvc) PreviewCleanup(
+	_ context.Context, userID int64, f saved_session_svc.CleanupFilter,
+) (saved_session_svc.CleanupPreview, error) {
+	s.lastPreviewBy, s.lastFilter = userID, f
+	return s.preview, nil
+}
+
+func (s *stubSavedSessionSvc) Cleanup(
+	_ context.Context, userID, callerDevice int64, ids []string,
+) (saved_session_svc.CleanupResult, error) {
+	s.lastCleanup.userID, s.lastCleanup.callerDevice, s.lastCleanup.ids = userID, callerDevice, ids
+	return s.result, nil
 }
 
 // 两条对话的 conversation_id（决策 1 的 UUIDv7 规范形式）。
@@ -253,4 +276,127 @@ func TestDelete_Session_HasNoCallerDevice(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Zero(t, stub.lastDelete.CallerDeviceID)
 	require.Empty(t, stub.lastDelete.MachineFingerprint)
+}
+
+// 预览：条件原样交给 service，账号取自会话而不是请求体；应答字段名就是对外契约。
+func TestCleanupPreview_ForwardsFilterAndRendersContract(t *testing.T) {
+	stub := newStubSavedSessionSvc()
+	stub.preview = saved_session_svc.CleanupPreview{
+		Count: 2, Retained: 1, ConversationIDs: []string{conversationNine, conversationEight},
+		Machines: []saved_session_svc.CleanupMachine{{Fingerprint: "fp-1", Name: "box", Online: true, Count: 2}},
+	}
+	server := newSavedSessionTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/cleanup/preview", cookie.Value, "",
+		`{"before_ms":5000,"agent_sync_id":"a1","project_sync_id":"p1","user_id":99}`, csrf)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(7), stub.lastPreviewBy)
+	require.Equal(t, saved_session_svc.CleanupFilter{BeforeMs: 5000, AgentSyncID: "a1", ProjectSyncID: "p1"}, stub.lastFilter)
+	var env struct {
+		Code int `json:"code"`
+		Data struct {
+			Count           int      `json:"count"`
+			Retained        int      `json:"retained"`
+			ConversationIDs []string `json:"conversation_ids"`
+			Machines        []struct {
+				Fingerprint string `json:"fingerprint"`
+				Name        string `json:"name"`
+				Online      bool   `json:"online"`
+				Count       int    `json:"count"`
+			} `json:"machines"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+	require.Equal(t, 0, env.Code)
+	require.Equal(t, 2, env.Data.Count)
+	require.Equal(t, 1, env.Data.Retained)
+	require.Equal(t, []string{conversationNine, conversationEight}, env.Data.ConversationIDs)
+	require.Len(t, env.Data.Machines, 1)
+	require.Equal(t, "fp-1", env.Data.Machines[0].Fingerprint)
+	require.Equal(t, "box", env.Data.Machines[0].Name)
+	require.True(t, env.Data.Machines[0].Online)
+	require.Equal(t, 2, env.Data.Machines[0].Count)
+}
+
+func TestCleanupPreview_RejectsNegativeBefore(t *testing.T) {
+	stub := newStubSavedSessionSvc()
+	server := newSavedSessionTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/cleanup/preview", cookie.Value, "",
+		`{"before_ms":-1}`, csrf)
+	require.NotEqual(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestCleanupPreview_UnauthenticatedRejected(t *testing.T) {
+	server := newSavedSessionTestServer(t, newStubSavedSessionSvc())
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/cleanup/preview", "", "", `{}`)
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+// 执行：id 列表与账号 / 调用设备交给 service；应答字段名就是对外契约。
+func TestCleanup_ForwardsIDsAndCallerDeviceAndRendersContract(t *testing.T) {
+	stub := newStubSavedSessionSvc()
+	stub.result = saved_session_svc.CleanupResult{
+		Deleted: 1, Retained: 1,
+		Failed:  []saved_session_svc.CleanupFailure{{ConversationID: conversationEight, Reason: "delete_failed"}},
+		Pending: []saved_session_svc.CleanupPendingMachine{{Fingerprint: "fp-1", Name: "box", Count: 3}},
+	}
+	server := newSavedSessionTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 4, Kind: device_entity.KindDesktop})
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/cleanup", "", token,
+		`{"conversation_ids":["`+conversationNine+`","`+conversationEight+`"]}`)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int64(7), stub.lastCleanup.userID)
+	require.Equal(t, int64(4), stub.lastCleanup.callerDevice)
+	require.Equal(t, []string{conversationNine, conversationEight}, stub.lastCleanup.ids)
+	var env struct {
+		Data struct {
+			Deleted  int `json:"deleted"`
+			Retained int `json:"retained"`
+			Failed   []struct {
+				ConversationID string `json:"conversation_id"`
+				Reason         string `json:"reason"`
+			} `json:"failed"`
+			Pending []struct {
+				Fingerprint string `json:"fingerprint"`
+				Name        string `json:"name"`
+				Count       int    `json:"count"`
+			} `json:"pending"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+	require.Equal(t, 1, env.Data.Deleted)
+	require.Equal(t, 1, env.Data.Retained)
+	require.Len(t, env.Data.Failed, 1)
+	require.Equal(t, conversationEight, env.Data.Failed[0].ConversationID)
+	require.Equal(t, "delete_failed", env.Data.Failed[0].Reason)
+	require.Len(t, env.Data.Pending, 1)
+	require.Equal(t, "fp-1", env.Data.Pending[0].Fingerprint)
+	require.Equal(t, 3, env.Data.Pending[0].Count)
+}
+
+// 浏览器会话的清理是破坏性写操作：必须出示 CSRF。
+func TestCleanup_RejectsMissingCSRF(t *testing.T) {
+	stub := newStubSavedSessionSvc()
+	server := newSavedSessionTestServer(t, stub)
+	cookie, _ := newSessionCookie(t, 7)
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/cleanup", cookie.Value, "",
+		`{"conversation_ids":["`+conversationNine+`"]}`)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.Empty(t, stub.lastCleanup.ids)
+}
+
+func TestCleanup_RejectsEmptyAndMalformedIDs(t *testing.T) {
+	stub := newStubSavedSessionSvc()
+	server := newSavedSessionTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+	for _, body := range []string{`{"conversation_ids":[]}`, `{}`, `{"conversation_ids":["not-a-uuid"]}`} {
+		resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/cleanup", cookie.Value, "", body, csrf)
+		require.NotEqual(t, http.StatusOK, resp.StatusCode, body)
+	}
+	require.Empty(t, stub.lastCleanup.ids)
 }

@@ -663,3 +663,64 @@ func TestListSummariesPage_UnassignedProjectScope_AlsoTakesReportedProjectsThatA
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// 清理候选只取「账号里已保存」的对话（名单里有那一行），并且全部判据都在 SQL 里：
+// 最后活动（没有消息时间的按建立时间）早于 before、Agent 精确匹配。账号条件永远在。
+// 两张表都有 createtime，所以每一列都必须限定归属，否则 ambiguous column。
+func TestListCleanupCandidates_SavedOnlyWithActivityAndAgentFilters(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"LEFT JOIN agent_session_saves ON agent_session_saves.user_id=agent_sessions.user_id"+
+			" AND agent_session_saves.conversation_id=agent_sessions.conversation_id"+
+			" WHERE agent_sessions.user_id=? AND agent_session_saves.id IS NOT NULL"+
+			" AND (CASE WHEN agent_sessions.last_message_at>0 THEN agent_sessions.last_message_at"+
+			" ELSE agent_sessions.createtime END)<?"+
+			" AND agent_sessions.agent_sync_id=?",
+	)).WithArgs(int64(7), int64(5000), "agent-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "conversation_id"}).AddRow(1, 7, "conv-1"))
+
+	out, err := r.ListCleanupCandidates(ctx, CleanupCandidateQuery{UserID: 7, BeforeMs: 5000, AgentSyncID: "agent-1"})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// before=0 / agent 为空 = 不按那一项过滤；但「已保存」与账号条件一条都不能少。
+func TestListCleanupCandidates_NoOptionalFilters_StillSavedAndAccountScoped(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"WHERE agent_sessions.user_id=? AND agent_session_saves.id IS NOT NULL",
+	)).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	_, err := r.ListCleanupCandidates(ctx, CleanupCandidateQuery{UserID: 7})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 执行时按标识重读：同样限定账号与「已保存」，别人账号的标识命中不了。
+func TestListSavedByConversationIDs_AccountScopedAndSavedOnly(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"WHERE agent_sessions.user_id=? AND agent_session_saves.id IS NOT NULL"+
+			" AND agent_sessions.conversation_id IN (?,?)",
+	)).WithArgs(int64(7), "conv-1", "conv-2").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	_, err := r.ListSavedByConversationIDs(ctx, 7, []string{"conv-1", "conv-2"})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListSavedByConversationIDs_Empty_NoQuery(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	out, err := NewSummary().ListSavedByConversationIDs(ctx, 7, nil)
+	require.NoError(t, err)
+	require.Empty(t, out)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

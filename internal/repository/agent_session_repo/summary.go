@@ -82,6 +82,22 @@ type SummaryRepo interface {
 	// 「已删除但还在」的中间态）。
 	// 从来没镜像过的对话删不到行，仍然成功——删除幂等。
 	DeleteSummary(ctx context.Context, userID int64, conversationID string) error
+	// ListCleanupCandidates 读出批量清理的候选：账号里**已保存**的对话（名单里有那一行），
+	// 按最后活动早于 BeforeMs、Agent 精确匹配收窄。进行中 / 等待中的不在这里剔除——
+	// 预览要把它们数成「保留」，所以由服务层分拣。判据只有这一处，预览与执行不会分家。
+	ListCleanupCandidates(ctx context.Context, q CleanupCandidateQuery) ([]*agent_session_entity.SessionSummary, error)
+	// ListSavedByConversationIDs 按标识重读一批已保存对话的摘要（执行时重新判断用）。
+	// 账号条件永远在：别的账号的标识命中不了；已不在名单里的也读不到。
+	ListSavedByConversationIDs(ctx context.Context, userID int64, ids []string) ([]*agent_session_entity.SessionSummary, error)
+}
+
+// CleanupCandidateQuery 是批量清理的候选判据。零值表示不按那一项过滤。
+type CleanupCandidateQuery struct {
+	UserID int64
+	// BeforeMs：最后活动（last_message_at，没有时用 createtime）早于它；0 = 全部。
+	BeforeMs int64
+	// AgentSyncID 非空时精确匹配；空 = 全部 Agent。
+	AgentSyncID string
 }
 
 // SummaryCursor 是「上一页读到哪」：(last_message_at, id) 这个**复合**位置。只比
@@ -643,6 +659,46 @@ func (r *summaryRepo) CountSummariesByProjectKey(
 			"cwd, count(*) AS total").
 		Group("project_sync_id").Group("machine_fingerprint").Group("cwd").
 		Scan(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// savedScoped 是清理两条读路径共用的底：本账号、且名单里有这一行。
+func savedScoped(ctx context.Context, userID int64) *gorm.DB {
+	tx := joinSaves(db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}))
+	return withMachineFingerprint(tx).
+		Where("agent_sessions.user_id=?", userID).
+		Where("agent_session_saves.id IS NOT NULL")
+}
+
+func (r *summaryRepo) ListCleanupCandidates(
+	ctx context.Context, q CleanupCandidateQuery,
+) ([]*agent_session_entity.SessionSummary, error) {
+	tx := savedScoped(ctx, q.UserID)
+	if q.BeforeMs > 0 {
+		tx = tx.Where("(CASE WHEN agent_sessions.last_message_at>0 THEN agent_sessions.last_message_at"+
+			" ELSE agent_sessions.createtime END)<?", q.BeforeMs)
+	}
+	if q.AgentSyncID != "" {
+		tx = tx.Where("agent_sessions.agent_sync_id=?", q.AgentSyncID)
+	}
+	var out []*agent_session_entity.SessionSummary
+	if err := tx.Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *summaryRepo) ListSavedByConversationIDs(
+	ctx context.Context, userID int64, ids []string,
+) ([]*agent_session_entity.SessionSummary, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var out []*agent_session_entity.SessionSummary
+	if err := savedScoped(ctx, userID).
+		Where("agent_sessions.conversation_id IN ?", ids).Find(&out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil

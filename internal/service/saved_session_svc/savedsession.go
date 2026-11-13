@@ -31,6 +31,12 @@ type SavedSessionSvc interface {
 	// 时一定已经没了；执行端那一份的去向由 MachineDeleteOutcome 如实交代。幂等：
 	// 删一条早已删过的对话不是错误。
 	Delete(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error)
+	// PreviewCleanup 在账号已保存的对话里按条件数出一批可清理的（控制台批量清理），
+	// 进行中 / 等待中的不算，计入 Retained。只读，不改任何东西。
+	PreviewCleanup(ctx context.Context, userID int64, filter CleanupFilter) (CleanupPreview, error)
+	// Cleanup 逐条重新判断后经 Delete 删除这批对话；callerDeviceID 是发起设备
+	// （浏览器会话为 0），语义同 SessionRef.CallerDeviceID。
+	Cleanup(ctx context.Context, userID, callerDeviceID int64, ids []string) (CleanupResult, error)
 }
 
 // SessionRef 指向一条对话：账号 + 它的 **conversation_id** + 承载它的机器 + 发起它
