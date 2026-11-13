@@ -33,6 +33,15 @@ type cleanupFixture struct {
 
 func setupCleanupTest(t *testing.T) *cleanupFixture {
 	t.Helper()
+	// 账号里的在用设备：桌面一台、agentred 一台；fp-removed 已不在账号里。
+	return setupCleanupTestWithDevices(t, []*device_entity.Device{
+		{ID: 1, UserID: 7, Fingerprint: "fp-desktop-1", Name: "MacBook", Kind: device_entity.KindDesktop, Status: 1},
+		{ID: 2, UserID: 7, Fingerprint: "fp-agentred-1", Name: "host", DisplayName: "build box", Kind: device_entity.KindAgentred, Status: 1},
+	})
+}
+
+func setupCleanupTestWithDevices(t *testing.T, devices []*device_entity.Device) *cleanupFixture {
+	t.Helper()
 	f := &cleanupFixture{savedFixture: setupSavedSessionTest(t), online: map[string]bool{}}
 	ctrl := gomock.NewController(t)
 	f.summary = mock_agent_session_repo.NewMockCleanupRepo(ctrl)
@@ -49,11 +58,7 @@ func setupCleanupTest(t *testing.T) *cleanupFixture {
 		return f.members, nil
 	}
 	t.Cleanup(func() { presenceProbe, projectMembers = prevProbe, prevMembers })
-	// 账号里的在用设备：桌面一台、agentred 一台；fp-removed 已不在账号里。
-	f.device.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
-		{ID: 1, UserID: 7, Fingerprint: "fp-desktop-1", Name: "MacBook", Kind: device_entity.KindDesktop, Status: 1},
-		{ID: 2, UserID: 7, Fingerprint: "fp-agentred-1", Name: "host", DisplayName: "build box", Kind: device_entity.KindAgentred, Status: 1},
-	}, nil).AnyTimes()
+	f.device.EXPECT().ListByUser(gomock.Any(), int64(7)).Return(devices, nil).AnyTimes()
 	return f
 }
 
@@ -285,4 +290,22 @@ func TestCleanup_InitiatorDesktopOffline_ReportedPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.Deleted)
 	assert.Equal(t, []CleanupPendingMachine{{Fingerprint: "fp-desktop-1", Name: "MacBook", Count: 1}}, got.Pending)
+}
+
+// 账号里已经一台在用设备都没有（唯一的执行端被移除了）：执行端那份照样记了待办，但它
+// 不在账号里，结果不单列它（决策 13）——不能因为设备清单是空的，就把它当成「名字取不到」
+// 而以空名字列出来。
+func TestCleanup_NoActiveDevicesLeft_RemovedMachineNotListedPending(t *testing.T) {
+	f := setupCleanupTestWithDevices(t, []*device_entity.Device{})
+	f.peer.errByFP = map[string]error{"fp-removed": ErrMachineOffline}
+	f.summary.EXPECT().ListSavedByConversationIDs(gomock.Any(), int64(7), []string{cvRemoved}).Return(
+		[]*agent_session_entity.SessionSummary{sum(cvRemoved, "fp-removed", "idle", false)}, nil)
+	expectDeletableRow(f, cvRemoved, "fp-removed")
+	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).Return(nil)
+
+	got, err := f.svc.Cleanup(context.Background(), 7, 0, []string{cvRemoved})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.Deleted)
+	assert.Empty(t, got.Pending)
 }

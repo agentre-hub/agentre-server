@@ -93,9 +93,13 @@ function reasonText(code: string): string {
   );
 }
 
-export async function executeCleanup(
-  ids: string[],
-): Promise<CleanupExecuteView> {
+/**
+ * 一次请求送多少条。服务端单次上限是 5000（CleanupRequest 的 binding），而预览给出的
+ * 清单不设上限；服务端又是逐条删、逐台机器通知，批小一些每个请求的耗时才有界。
+ */
+const EXECUTE_BATCH = 500;
+
+async function executeBatch(ids: string[]): Promise<CleanupExecuteView> {
   const got = await api<ExecutePayload>("/v1/saved-sessions/cleanup", {
     method: "POST",
     body: JSON.stringify({ conversation_ids: ids }),
@@ -111,4 +115,33 @@ export async function executeCleanup(
       count: p.count,
     })),
   };
+}
+
+/**
+ * 分批执行并合并结果。第一批就整个失败时原样抛出（确认框据此原样重试）；之后某一批
+ * 失败时，已删的照报，那一批及其后没送成的列为失败，由「重试剩下的」接着送。
+ */
+export async function executeCleanup(
+  ids: string[],
+): Promise<CleanupExecuteView> {
+  const out: CleanupExecuteView = { deleted: 0, failed: [], pending: [] };
+  const pending = new Map<string, number>();
+  for (let i = 0; i < ids.length; i += EXECUTE_BATCH) {
+    let got: CleanupExecuteView;
+    try {
+      got = await executeBatch(ids.slice(i, i + EXECUTE_BATCH));
+    } catch (err) {
+      if (i === 0) throw err;
+      const reason = reasonText("");
+      out.failed.push(...ids.slice(i).map((id) => ({ id, reason })));
+      break;
+    }
+    out.deleted += got.deleted;
+    out.failed.push(...got.failed);
+    for (const p of got.pending) {
+      pending.set(p.label, (pending.get(p.label) ?? 0) + p.count);
+    }
+  }
+  out.pending = [...pending].map(([label, count]) => ({ label, count }));
+  return out;
 }

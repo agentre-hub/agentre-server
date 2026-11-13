@@ -266,7 +266,8 @@ func (s *savedSessionSvc) Cleanup(
 
 	if len(pending) > 0 {
 		devices, err := s.accountDevices(ctx, userID)
-		if err != nil {
+		known := err == nil
+		if !known {
 			// 删除已经完成；名字取不到不该让这次执行报错，名字留空。
 			logger.Ctx(ctx).Warn("saved_session_svc.Cleanup: device names unavailable",
 				zap.Int64("userId", userID), zap.Error(err))
@@ -274,7 +275,7 @@ func (s *savedSessionSvc) Cleanup(
 		}
 		for fp, n := range pending {
 			d, inAccount := devices[fp]
-			if !inAccount && len(devices) > 0 {
+			if !inAccount && known {
 				continue // 已不在账号里的机器不单列（决策 13）
 			}
 			name := ""

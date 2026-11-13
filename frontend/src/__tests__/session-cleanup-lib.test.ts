@@ -136,4 +136,48 @@ describe("executeCleanup", () => {
     const view = await executeCleanup(["c1"]);
     expect(view).toEqual({ deleted: 1, failed: [], pending: [] });
   });
+
+  // 服务端一次最多收 5000 条（binding max=5000），预览却不设上限：分批送，结果合并，
+  // 同一台机器的待删跨批次累加。
+  it("超过单批上限：分批送、每批不超过服务端上限，结果合并", async () => {
+    const ids = Array.from({ length: 6001 }, (_, i) => `c${i}`);
+    mockedApi.mockImplementation(async (_path, init) => {
+      const sent = JSON.parse(init!.body as string).conversation_ids;
+      return {
+        deleted: sent.length,
+        retained: 0,
+        pending: [{ fingerprint: "fp2", name: "old", count: 1 }],
+      };
+    });
+    const view = await executeCleanup(ids);
+    const sent = mockedApi.mock.calls.map(
+      (_, i) => body(i).conversation_ids as string[],
+    );
+    expect(sent.length).toBeGreaterThan(1);
+    for (const batch of sent) expect(batch.length).toBeLessThanOrEqual(5000);
+    expect(sent.flat()).toEqual(ids);
+    expect(view.deleted).toBe(6001);
+    expect(view.pending).toEqual([{ label: "old", count: sent.length }]);
+  });
+
+  it("后面某一批整个失败：已删的照报，没送成的那些列为失败可重试", async () => {
+    const ids = Array.from({ length: 6001 }, (_, i) => `c${i}`);
+    let call = 0;
+    mockedApi.mockImplementation(async (_path, init) => {
+      call++;
+      if (call > 1) throw new Error("net");
+      const sent = JSON.parse(init!.body as string).conversation_ids;
+      return { deleted: sent.length, retained: 0 };
+    });
+    const view = await executeCleanup(ids);
+    const firstBatch = body(0).conversation_ids as string[];
+    expect(view.deleted).toBe(firstBatch.length);
+    expect(view.failed.map((f) => f.id)).toEqual(ids.slice(firstBatch.length));
+    expect(view.failed[0].reason).toMatch(/[一-鿿]/);
+  });
+
+  it("第一批就失败：整个报错，交给确认框的重试", async () => {
+    mockedApi.mockRejectedValue(new Error("net"));
+    await expect(executeCleanup(["c1"])).rejects.toThrow("net");
+  });
 });
