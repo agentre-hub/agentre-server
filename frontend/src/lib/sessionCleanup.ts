@@ -80,12 +80,20 @@ export async function previewCleanup(
   };
 }
 
+/** 服务端失败原因码 → 文案键（写成字面量，才查得到「这个键有读者」）。 */
+const REASON_KEYS: Record<string, string> = {
+  machine_protocol_violation:
+    "settings.privacy.cleanup.reason.machine_protocol_violation",
+  delete_failed: "settings.privacy.cleanup.reason.delete_failed",
+};
+
 /** 失败原因码 → 本站文案；不认识的码落到通用说法，不透出原码。 */
 function reasonText(code: string): string {
-  const key = `settings.privacy.cleanup.reason.${code}`;
-  return i18n.exists(key)
-    ? i18n.t(key)
-    : i18n.t("settings.privacy.cleanup.reason.unknown");
+  return i18n.t(
+    Object.hasOwn(REASON_KEYS, code)
+      ? REASON_KEYS[code]
+      : "settings.privacy.cleanup.reason.unknown",
+  );
 }
 
 export async function executeCleanup(
