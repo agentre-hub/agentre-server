@@ -871,6 +871,67 @@ describe("对话页:机器轴", () => {
   });
 
   /**
+   * 桌面端列出的会话可能其实是它旁边那台 agentred 在执行（SessionSummary 的
+   * carrierFingerprint）。保存时承载端记的是执行它的那台，而不是列出它的那台
+   * （规格 2026-11-12 决策 18 消费端；已保存的旧行不回填，决策 19）。
+   */
+  describe("保存时的承载端", () => {
+    async function saveDesktopListed(carrierFingerprint?: string) {
+      const posted: Record<string, unknown>[] = [];
+      // 账号里已有保存过的：否则第一次保存会先弹说明框。
+      stubApi({ mirror: [mirrored()], devices: [agentred, desktop] });
+      relayByMachine({
+        "fp-desktop": [
+          {
+            ...summary,
+            conversationId: "88",
+            peerFingerprint: "fp-desktop",
+            title: "桌面端列出的",
+            ...(carrierFingerprint ? { carrierFingerprint } : {}),
+          },
+        ],
+      });
+      const base = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === "/v1/saved-sessions" && init?.method === "POST") {
+          posted.push(JSON.parse(String(init.body)));
+          return {};
+        }
+        return base(path, init);
+      });
+      renderChat("/chat?axis=machine");
+      await screen.findByText("桌面端列出的");
+      fireEvent.click(screen.getByTestId("row-save-88"));
+      await waitFor(() => expect(posted.length).toBe(1));
+      return posted[0];
+    }
+
+    it("执行端是本账号的设备：记为执行端，而不是列出它的桌面端", async () => {
+      expect(await saveDesktopListed("fp-1")).toEqual({
+        device_fingerprint: "fp-1",
+        peer_fingerprint: "fp-desktop",
+        conversation_id: "88",
+      });
+    });
+
+    it("执行端不是本账号的设备（未知 / 已移除）：仍记列出它的那台机器", async () => {
+      expect(await saveDesktopListed("fp-gone")).toEqual({
+        device_fingerprint: "fp-desktop",
+        peer_fingerprint: "fp-desktop",
+        conversation_id: "88",
+      });
+    });
+
+    it("没有 carrierFingerprint（本机会话或旧桌面端）：记列出它的那台机器", async () => {
+      expect(await saveDesktopListed()).toEqual({
+        device_fingerprint: "fp-desktop",
+        peer_fingerprint: "fp-desktop",
+        conversation_id: "88",
+      });
+    });
+  });
+
+  /**
    * 保存写失败此前是一个空 catch：乐观行撤回、界面一声不吭。用户按下「保存」，
    * 行闪一下就没了 —— 与「我大概没点中」长得一模一样，而真相是 server 拒了这次写。
    *

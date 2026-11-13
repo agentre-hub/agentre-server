@@ -723,10 +723,10 @@ export default function Chat() {
   const fromMachineRow = useCallback(
     (device: DeviceItem, s: SessionSummary, localFingerprint?: string) =>
       overlayLiveRow(
-        toMachineRow(device, s, t, localFingerprint),
+        toMachineRow(device, s, t, localFingerprint, reach.devicesByFp),
         liveTurns.get(s.conversationId),
       ),
-    [t, liveTurns],
+    [t, liveTurns, reach.devicesByFp],
   );
 
   /**

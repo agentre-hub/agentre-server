@@ -634,6 +634,7 @@ export function useSessionIndex({
         conversation_id: row.conversationId,
         peer_fingerprint: row.fingerprint,
         device_fingerprint:
+          row.carrierFingerprint ??
           devices.find((d) => d.id === row.deviceId)?.fingerprint ??
           row.fingerprint,
         title: row.title,
@@ -652,7 +653,9 @@ export function useSessionIndex({
             // 「保存」只出现在机器轴上那些账号里还没有的行，它们恒挂着那台机器
             // （fromMachineRow 的 deviceId）。取不到时退回行的身份指纹 —— 对在本机
             // 开的对话两者本来就同值。
+            // 摘要说明执行它的是账号里另一台设备时（carrierFingerprint）记那一台。
             device_fingerprint:
+              row.carrierFingerprint ??
               devices.find((d) => d.id === row.deviceId)?.fingerprint ??
               row.fingerprint,
             // 行的身份指纹就是发起端（IndexRow.fingerprint 的定义）。
