@@ -612,11 +612,70 @@ describe("设置 · 隐私：关闭并删除", () => {
           mockedApi.mock.calls.filter((c) => c[0] === "/v1/stats/settings"),
         ).toHaveLength(2),
       );
+      // 发出去不等于落地：等那次失败的重读走完 catch，再看它有没有把面板换成报错。
+      await new Promise((r) => setTimeout(r, 0));
       expect(screen.getByTestId("privacy-saved-count").textContent).toContain(
         "128",
       );
       expect(screen.getByTestId("privacy-activity-panel")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("清理后的重读比随后的开关回执回来得晚，也不会把开关翻回去", async () => {
+      let releaseReread: (v: unknown) => void = () => {};
+      let reads = 0;
+      serve({
+        "PUT /v1/stats/settings": settingsResponse({
+          activity_stats_enabled: false,
+          devices: undefined,
+        }),
+        "/v1/stats/settings": () => {
+          reads += 1;
+          if (reads === 1) return settingsResponse();
+          return new Promise((resolve) => {
+            releaseReread = resolve;
+          });
+        },
+        "POST /v1/saved-sessions/cleanup/preview": {
+          ...CLEANUP_PREVIEW,
+          count: 2,
+          conversation_ids: ["c1", "c2"],
+        },
+        "POST /v1/saved-sessions/cleanup": {
+          deleted: 2,
+          retained: 0,
+          failed: [],
+          pending: [],
+        },
+        "/v1/workspace/agents": { agents: [] },
+        "/v1/workspace/projects": { projects: [] },
+      });
+      renderSettings("/settings?tab=privacy");
+      await screen.findByTestId("privacy-activity-panel");
+
+      await runCleanup();
+      await waitFor(() => expect(reads).toBe(2));
+
+      fireEvent.click(
+        within(screen.getByTestId("privacy-danger-zone")).getByRole("button", {
+          name: "Turn off and delete",
+        }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Turn off and delete" }),
+      );
+      const toggle = () =>
+        screen
+          .getByRole("switch", { name: "Activity stats" })
+          .getAttribute("aria-checked");
+      await waitFor(() => expect(toggle()).toBe("false"));
+
+      // 重读是在关掉之前发出的：它带回的「开着」已经过期。
+      releaseReread(settingsResponse());
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(toggle()).toBe("false");
     });
   });
 });

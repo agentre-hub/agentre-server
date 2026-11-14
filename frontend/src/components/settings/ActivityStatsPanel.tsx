@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, MessagesSquare, X } from "lucide-react";
 
@@ -89,15 +89,19 @@ export function ActivityStatsPanel({
   const [backfill, setBackfill] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  /** 每落地一次写回执就加一：在它之前发出的读，带回的是写之前的状态。 */
+  const writeEpoch = useRef(0);
 
   // 首次读、重试和清理后的重读共用这一轮：新一轮开始，上一轮的结果就不算数，
   // 慢回来的旧读数盖不掉新数。已经有数时是静默重读：不清 settings，读不到就留着旧数。
   useAliveEffect(
     (alive) => {
       const silent = settings !== null;
+      const epoch = writeEpoch.current;
       fetchStatsSettings()
         .then((got) => {
-          if (!alive()) return;
+          // 读发出之后开关已经写过一次：回执才是现状，这次读数作废。
+          if (!alive() || epoch !== writeEpoch.current) return;
           setSettings(got);
           setLoadError(null);
         })
@@ -125,6 +129,7 @@ export function ActivityStatsPanel({
         enabled,
         ...(enabled ? { backfill } : {}),
       });
+      writeEpoch.current += 1;
       setSettings(got);
       setConfirm(null);
     } catch {
