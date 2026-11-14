@@ -498,4 +498,87 @@ describe("设置 · 隐私：关闭并删除", () => {
     await screen.findByTestId("privacy-activity-panel");
     expect(screen.queryByTestId("privacy-danger-zone")).toBeNull();
   });
+
+  describe("清理完成后已保存对话数跟着刷新（问题 10）", () => {
+    /** stats 设置按调用次序给：第一次 128，之后按 later 给。 */
+    function serveCleanup(later: () => unknown) {
+      let reads = 0;
+      serve({
+        "/v1/stats/settings": () => {
+          reads += 1;
+          if (reads === 1) return settingsResponse();
+          return later();
+        },
+        "POST /v1/saved-sessions/cleanup/preview": {
+          ...CLEANUP_PREVIEW,
+          count: 2,
+          conversation_ids: ["c1", "c2"],
+        },
+        "POST /v1/saved-sessions/cleanup": {
+          deleted: 2,
+          retained: 0,
+          failed: [],
+          pending: [],
+        },
+        "/v1/workspace/agents": { agents: [] },
+        "/v1/workspace/projects": { projects: [] },
+      });
+    }
+
+    async function runCleanup() {
+      const clean = await screen.findByRole("button", {
+        name: /Clean up 2 conversations/,
+      });
+      await waitFor(() =>
+        expect((clean as HTMLButtonElement).disabled).toBe(false),
+      );
+      fireEvent.click(clean);
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /Delete 2/ }));
+    }
+
+    it("清理完成后卡片显示服务端新的数，且不闪掉活动统计面板", async () => {
+      serveCleanup(() => settingsResponse({ saved_conversations: 1 }));
+      renderSettings("/settings?tab=privacy");
+      const panel = await screen.findByTestId("privacy-activity-panel");
+      expect(screen.getByTestId("privacy-saved-count").textContent).toContain(
+        "128",
+      );
+
+      await runCleanup();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("privacy-saved-count").textContent).toMatch(
+          /^1 conversation/,
+        ),
+      );
+      expect(
+        screen.getByTestId("privacy-saved-count").textContent,
+      ).not.toContain("128");
+      // 同一个节点：没有被骨架屏换掉再重建。
+      expect(screen.getByTestId("privacy-activity-panel")).toBe(panel);
+      expect(screen.queryByTestId("privacy-activity-loading")).toBeNull();
+    });
+
+    it("重读失败时保留原来的数，页面不报错", async () => {
+      serveCleanup(() => {
+        throw new Error("boom");
+      });
+      renderSettings("/settings?tab=privacy");
+      await screen.findByTestId("privacy-activity-panel");
+
+      await runCleanup();
+
+      await waitFor(() =>
+        expect(
+          mockedApi.mock.calls.filter((c) => c[0] === "/v1/stats/settings"),
+        ).toHaveLength(2),
+      );
+      expect(screen.getByTestId("privacy-saved-count").textContent).toContain(
+        "128",
+      );
+      expect(screen.getByTestId("privacy-activity-panel")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
 });

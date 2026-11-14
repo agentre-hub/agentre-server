@@ -197,6 +197,13 @@ export default function Settings() {
     setRefreshSignal((value) => value + 1),
   );
 
+  // 清理完成后让同页的「已保存的对话 N 条」重读服务端的数。
+  const [savedCountSignal, setSavedCountSignal] = React.useState(0);
+  const onCleaned = React.useCallback(
+    () => setSavedCountSignal((value) => value + 1),
+    [],
+  );
+
   const ports = React.useMemo(() => {
     // Hermes 结构化失败码 → 可读句子。键集合与 agentre-ui 的
     // agentBackends.hermes.errors.* 同源（同一份 wire 结果码），但这里必须自成
@@ -310,8 +317,8 @@ export default function Settings() {
     } else if (phoneSection === "privacy") {
       body = (
         <>
-          <ActivityStatsPanel />
-          <SessionCleanupPanel fullWidthAction />
+          <ActivityStatsPanel refreshSignal={savedCountSignal} />
+          <SessionCleanupPanel fullWidthAction onCleaned={onCleaned} />
         </>
       );
     } else if (phoneSection === "appearance") {
@@ -460,8 +467,8 @@ export default function Settings() {
           {section === "privacy" ? (
             <>
               {renderHeader(null)}
-              <ActivityStatsPanel />
-              <SessionCleanupPanel />
+              <ActivityStatsPanel refreshSignal={savedCountSignal} />
+              <SessionCleanupPanel onCleaned={onCleaned} />
             </>
           ) : section === "providers" ? (
             <LlmProvidersPanel

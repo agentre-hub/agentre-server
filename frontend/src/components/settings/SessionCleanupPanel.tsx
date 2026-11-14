@@ -22,8 +22,11 @@ import { executeCleanup, previewCleanup } from "@/lib/sessionCleanup";
  */
 export function SessionCleanupPanel({
   fullWidthAction = false,
+  onCleaned,
 }: {
   fullWidthAction?: boolean;
+  /** 一次清理完成后通知宿主（同页的「已保存的对话」数要重读）。 */
+  onCleaned?: () => void;
 }) {
   const { t } = useTranslation();
   const [agents, setAgents] = useState<CleanupOption[]>([]);
@@ -61,9 +64,10 @@ export function SessionCleanupPanel({
           ),
         ];
         toast.success(lines.join("\n"));
+        onCleaned?.();
       },
     }),
-    [agents, projects, t],
+    [agents, projects, t, onCleaned],
   );
 
   return (

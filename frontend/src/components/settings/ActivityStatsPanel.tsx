@@ -73,7 +73,12 @@ function ActivityStatsSkeleton() {
   );
 }
 
-export function ActivityStatsPanel() {
+export function ActivityStatsPanel({
+  refreshSignal = 0,
+}: {
+  /** 每变一次就静默重读一遍设置（清理完成后刷新「已保存的对话」）；0 是初始值，不触发。 */
+  refreshSignal?: number;
+}) {
   const { t, i18n } = useTranslation();
 
   const [settings, setSettings] = useState<StatsSettings | null>(null);
@@ -100,6 +105,19 @@ export function ActivityStatsPanel() {
         });
     },
     [reloadKey],
+  );
+
+  // 静默重读：不清 settings、不碰 loadError，面板与开关状态原样保留；读不到就留着旧数。
+  useAliveEffect(
+    (alive) => {
+      if (refreshSignal === 0) return;
+      fetchStatsSettings()
+        .then((got) => {
+          if (alive()) setSettings(got);
+        })
+        .catch(() => {});
+    },
+    [refreshSignal],
   );
 
   const openConfirm = useCallback((next: "enable" | "disable") => {

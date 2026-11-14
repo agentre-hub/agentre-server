@@ -253,6 +253,55 @@ describe("Settings privacy on phone", () => {
     });
     expect(clean.className).toMatch(/\bw-full\b/);
   });
+
+  it("updates the saved-conversation count after a cleanup completes", async () => {
+    setMobile(true);
+    let reads = 0;
+    mockedApi.mockImplementation(async (path: string) => {
+      const p = String(path);
+      if (p === "/v1/saved-sessions/cleanup/preview")
+        return {
+          count: 2,
+          retained: 0,
+          machines: [],
+          conversation_ids: ["a", "b"],
+        };
+      if (p === "/v1/saved-sessions/cleanup")
+        return { deleted: 2, retained: 0, failed: [], pending: [] };
+      if (p === "/v1/workspace/agents") return { agents: [] };
+      if (p === "/v1/workspace/projects") return { projects: [] };
+      if (p === "/v1/stats/settings") {
+        reads += 1;
+        return {
+          activity_stats_enabled: true,
+          devices: [],
+          saved_conversations: reads === 1 ? 128 : 1,
+        };
+      }
+      return {};
+    });
+    renderSettings("/settings?tab=privacy");
+    const clean = await screen.findByRole("button", {
+      name: /Clean up 2 conversations/,
+    });
+    await waitFor(() =>
+      expect((clean as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(
+      (await screen.findByTestId("privacy-saved-count")).textContent,
+    ).toContain("128");
+    fireEvent.click(clean);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /Delete 2/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("privacy-saved-count").textContent).toMatch(
+        /^1 conversation/,
+      ),
+    );
+    expect(screen.getByTestId("privacy-saved-count").textContent).not.toContain(
+      "128",
+    );
+  });
 });
 
 describe("Settings on desktop", () => {
