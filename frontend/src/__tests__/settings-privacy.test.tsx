@@ -560,6 +560,44 @@ describe("设置 · 隐私：关闭并删除", () => {
       expect(screen.queryByTestId("privacy-activity-loading")).toBeNull();
     });
 
+    it("页面加载时那次读数比清理后的重读回来得晚，也不会把旧数盖回去", async () => {
+      let releaseFirst: (v: unknown) => void = () => {};
+      let reads = 0;
+      serve({
+        "/v1/stats/settings": () => {
+          reads += 1;
+          if (reads === 1)
+            return new Promise((resolve) => {
+              releaseFirst = resolve;
+            });
+          return settingsResponse({ saved_conversations: 1 });
+        },
+        "POST /v1/saved-sessions/cleanup/preview": {
+          ...CLEANUP_PREVIEW,
+          count: 2,
+          conversation_ids: ["c1", "c2"],
+        },
+        "POST /v1/saved-sessions/cleanup": {
+          deleted: 2,
+          retained: 0,
+          failed: [],
+          pending: [],
+        },
+        "/v1/workspace/agents": { agents: [] },
+        "/v1/workspace/projects": { projects: [] },
+      });
+      renderSettings("/settings?tab=privacy");
+
+      await runCleanup();
+      await screen.findByTestId("privacy-saved-count");
+      releaseFirst(settingsResponse());
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(screen.getByTestId("privacy-saved-count").textContent).toMatch(
+        /^1 conversation/,
+      );
+    });
+
     it("重读失败时保留原来的数，页面不报错", async () => {
       serveCleanup(() => {
         throw new Error("boom");

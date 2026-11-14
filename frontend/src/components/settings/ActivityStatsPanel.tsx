@@ -76,7 +76,7 @@ function ActivityStatsSkeleton() {
 export function ActivityStatsPanel({
   refreshSignal = 0,
 }: {
-  /** 每变一次就静默重读一遍设置（清理完成后刷新「已保存的对话」）；0 是初始值，不触发。 */
+  /** 每变一次就静默重读一遍设置（清理完成后刷新「已保存的对话」）。 */
   refreshSignal?: number;
 }) {
   const { t, i18n } = useTranslation();
@@ -90,8 +90,11 @@ export function ActivityStatsPanel({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // 首次读、重试和清理后的重读共用这一轮：新一轮开始，上一轮的结果就不算数，
+  // 慢回来的旧读数盖不掉新数。已经有数时是静默重读：不清 settings，读不到就留着旧数。
   useAliveEffect(
     (alive) => {
+      const silent = settings !== null;
       fetchStatsSettings()
         .then((got) => {
           if (!alive()) return;
@@ -100,24 +103,11 @@ export function ActivityStatsPanel({
         })
         .catch((e: unknown) => {
           // 读不到就说读不到：给一个猜出来的开关状态，用户会以为上报正开着（或正关着）。
-          if (alive())
+          if (alive() && !silent)
             setLoadError(e ?? new Error("stats settings load failed"));
         });
     },
-    [reloadKey],
-  );
-
-  // 静默重读：不清 settings、不碰 loadError，面板与开关状态原样保留；读不到就留着旧数。
-  useAliveEffect(
-    (alive) => {
-      if (refreshSignal === 0) return;
-      fetchStatsSettings()
-        .then((got) => {
-          if (alive()) setSettings(got);
-        })
-        .catch(() => {});
-    },
-    [refreshSignal],
+    [reloadKey, refreshSignal],
   );
 
   const openConfirm = useCallback((next: "enable" | "disable") => {
