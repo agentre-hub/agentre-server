@@ -475,7 +475,8 @@ describe("统一会话索引", () => {
 
     const second = screen.getByTestId("row-secondary-a");
     expect(second.textContent).toContain("Old laptop");
-    expect(second.textContent).toContain("Offline");
+    // 离线是机器名后面的一枚图标（名「离线」），不再是一段字。
+    expect(within(second).getByRole("img", { name: "Offline" })).toBeTruthy();
     // 行仍是可点的真链接，不是灰行。
     const link = screen.getByRole("link", { name: /重构登录页/ });
     expect(link.getAttribute("href")).toBe("/chat/42");
@@ -485,9 +486,11 @@ describe("统一会话索引", () => {
   it("机器在线时第二行不多这一段（不给每一行都印一个状态）", () => {
     renderIndex({ axis: "project", rows: [row({ key: "a" })] });
 
-    expect(screen.getByTestId("row-secondary-a").textContent).not.toContain(
-      "Offline",
-    );
+    expect(
+      within(screen.getByTestId("row-secondary-a")).queryByRole("img", {
+        name: "Offline",
+      }),
+    ).toBeNull();
   });
 
   it("行是可点的真链接：中键 / ⌘ 点击 / 右键复制地址都得成立", () => {

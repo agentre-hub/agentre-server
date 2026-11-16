@@ -622,7 +622,8 @@ describe("对话页 = 统一会话索引", () => {
     // 第二行：机器名 + 离线。
     const second = screen.getByTestId("row-secondary-7");
     expect(second.textContent).toContain("公司 Mac mini");
-    expect(second.textContent).toContain("Offline");
+    // 离线是机器名后面的一枚图标（名「离线」），不再是一段字。
+    expect(within(second).getByRole("img", { name: "Offline" })).toBeTruthy();
     // 行是可点的真链接（不是灰行）。
     const link = screen.getByRole("link", { name: /接口迁移的第二批/ });
     expect(link.getAttribute("href")).toBe("/chat/7");
