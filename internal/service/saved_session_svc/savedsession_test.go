@@ -10,8 +10,11 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 )
 
 // stubMirror 是镜像那一侧的假实现：记下每一次调用的次序与目标，并可以让开始 /
@@ -54,10 +57,19 @@ type stubPeer struct {
 	calls   *[]string
 	deleted []SessionRef
 	err     error
+	// errByFP 按目标机器覆盖 err：同一次删除要拨两台机器时，让它们各答各的。
+	errByFP map[string]error
 }
 
 func (s *stubPeer) DeleteOnMachine(_ context.Context, ref SessionRef) error {
-	*s.calls = append(*s.calls, "peer:delete")
+	*s.calls = append(*s.calls, "peer:delete:"+ref.MachineFingerprint)
+	if e, ok := s.errByFP[ref.MachineFingerprint]; ok {
+		if e != nil {
+			return e
+		}
+		s.deleted = append(s.deleted, ref)
+		return nil
+	}
 	if s.err != nil {
 		return s.err
 	}
@@ -69,6 +81,7 @@ type savedFixture struct {
 	calls  []string
 	follow *mock_agent_session_repo.MockSaveRepo
 	todo   *mock_agent_session_repo.MockDeleteTodoRepo
+	device *mock_device_repo.MockDeviceRepo
 	mirror *stubMirror
 	peer   *stubPeer
 	svc    *savedSessionSvc
@@ -81,6 +94,7 @@ func setupSavedSessionTest(t *testing.T) *savedFixture {
 	f := &savedFixture{
 		follow: mock_agent_session_repo.NewMockSaveRepo(ctrl),
 		todo:   mock_agent_session_repo.NewMockDeleteTodoRepo(ctrl),
+		device: mock_device_repo.NewMockDeviceRepo(ctrl),
 	}
 	f.mirror = &stubMirror{calls: &f.calls}
 	f.peer = &stubPeer{calls: &f.calls}
@@ -96,6 +110,7 @@ func setupSavedSessionTest(t *testing.T) *savedFixture {
 		AnyTimes()
 	agent_session_repo.RegisterSave(f.follow)
 	agent_session_repo.RegisterDeleteTodo(f.todo)
+	device_repo.RegisterDevice(f.device)
 	SetSessionMirror(f.mirror)
 	SetMachineSessionDeleter(f.peer)
 	t.Cleanup(func() {
@@ -157,6 +172,8 @@ func TestDelete_WebDispatchedConversation_ResolvesItsMachineFromTheAccount(t *te
 			DeviceFingerprint: "fp-agentred-1", PeerFingerprint: browser,
 		}, nil)
 	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationB).Return(nil)
+	// 发起端是浏览器：不是已登记的桌面，不通知。
+	f.device.EXPECT().FindByFingerprint(gomock.Any(), int64(7), browser).Return(nil, nil)
 
 	outcome, err := f.svc.Delete(context.Background(), SessionRef{
 		UserID: 7, ConversationID: conversationB,
@@ -192,7 +209,7 @@ func TestDelete_PeerOnline_BothCopiesGone(t *testing.T) {
 	// 内容先清、名单后撤：反过来一旦清理失败，库里就会留下一条「没人保存过」的
 	// 对话的转录——决策 2 的隐私边界正是破在这里。执行端最后说，它答什么都不
 	// 改变 server 这边已经删干净的事实。
-	assert.Equal(t, []string{"mirror:purge", "account:remove", "peer:delete"}, f.calls)
+	assert.Equal(t, []string{"mirror:purge", "account:remove", "peer:delete:fp-desktop-1"}, f.calls)
 	// 不留待办：这一份已经删掉了，没有什么要等那台机器回来做。
 }
 
@@ -223,7 +240,7 @@ func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 	assert.Equal(t, MachineDeletePending, outcome)
 	assert.Equal(t, []SessionRef{ref7()}, f.mirror.purged)
 	assert.Empty(t, f.peer.deleted)
-	assert.Equal(t, []string{"mirror:purge", "account:remove", "peer:delete", "todo:add"}, f.calls)
+	assert.Equal(t, []string{"mirror:purge", "account:remove", "peer:delete:fp-desktop-1", "todo:add"}, f.calls)
 }
 
 // 执行端太老、这辈子都不认识 runtime.session.delete（RPC method-not-found -32601）：如实降级
@@ -291,4 +308,223 @@ func TestDelete_ServerCopyNotPurged_StopsAndReports(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []string{"mirror:purge"}, f.calls)
 	assert.Empty(t, f.peer.deleted)
+}
+
+// ---- 任务 9：发起端桌面也要收到删除；调用方自己不回头通知 ----
+
+// expectRow 让 conversationB 的名单行是：执行端 agentred、发起端 initiator。
+func expectRowB(f *savedFixture, initiator string) {
+	f.follow.EXPECT().FindByIdentity(gomock.Any(), int64(7), conversationB).Return(
+		&agent_session_entity.SessionSave{
+			UserID: 7, ConversationID: conversationB,
+			DeviceFingerprint: "fp-agentred-1", PeerFingerprint: initiator,
+		}, nil)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationB).Return(nil)
+}
+
+func expectDevice(f *savedFixture, fp, kind string, status int) {
+	f.device.EXPECT().FindByFingerprint(gomock.Any(), int64(7), fp).Return(
+		&device_entity.Device{ID: 2, UserID: 7, Fingerprint: fp, Kind: kind, Status: status}, nil)
+}
+
+func refB() SessionRef { return SessionRef{UserID: 7, ConversationID: conversationB} }
+
+func TestDelete_InitiatorDesktop_AlsoNotifiedAfterCarrier(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	expectRowB(f, "fp-desktop-2")
+	expectDevice(f, "fp-desktop-2", device_entity.KindDesktop, 1)
+
+	outcome, err := f.svc.Delete(context.Background(), refB())
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeleted, outcome)
+	assert.Equal(t, []string{"mirror:purge", "peer:delete:fp-agentred-1", "peer:delete:fp-desktop-2"}, f.calls)
+}
+
+func TestDelete_InitiatorDesktopOffline_TodoForThatMachineOnly_ResponseDescribesCarrier(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	f.peer.errByFP = map[string]error{"fp-desktop-2": ErrMachineOffline}
+	expectRowB(f, "fp-desktop-2")
+	expectDevice(f, "fp-desktop-2", device_entity.KindDesktop, 1)
+	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, todo *agent_session_entity.DeleteTodo) error {
+			assert.Equal(t, "fp-desktop-2", todo.DeviceFingerprint)
+			assert.Equal(t, conversationB, todo.ConversationID)
+			return nil
+		})
+
+	outcome, err := f.svc.Delete(context.Background(), refB())
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeleted, outcome, "应答只说承载端那一份")
+}
+
+func TestDelete_InitiatorTodoNotRecorded_ReportsError(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	f.peer.errByFP = map[string]error{"fp-desktop-2": ErrMachineOffline}
+	expectRowB(f, "fp-desktop-2")
+	expectDevice(f, "fp-desktop-2", device_entity.KindDesktop, 1)
+	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).Return(errors.New("db down"))
+
+	_, err := f.svc.Delete(context.Background(), refB())
+	require.Error(t, err)
+}
+
+func TestDelete_InitiatorNotADesktop_SkippedSilently(t *testing.T) {
+	cases := map[string]func(f *savedFixture){
+		"browser peer (web device)": func(f *savedFixture) { expectDevice(f, "fp-browser", device_entity.KindWeb, 1) },
+		"agentred":                  func(f *savedFixture) { expectDevice(f, "fp-browser", device_entity.KindAgentred, 1) },
+		"not a registered device": func(f *savedFixture) {
+			f.device.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-browser").Return(nil, nil)
+		},
+		"removed device": func(f *savedFixture) { expectDevice(f, "fp-browser", device_entity.KindDesktop, 0) },
+	}
+	for name, arrange := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := setupSavedSessionTest(t)
+			expectRowB(f, "fp-browser")
+			arrange(f)
+			outcome, err := f.svc.Delete(context.Background(), refB())
+			require.NoError(t, err)
+			assert.Equal(t, MachineDeleted, outcome)
+			assert.Equal(t, []string{"mirror:purge", "peer:delete:fp-agentred-1"}, f.calls)
+		})
+	}
+}
+
+func TestDelete_CallerIsInitiator_NotNotifiedBack(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	expectRowB(f, "fp-desktop-2")
+	f.device.EXPECT().Find(gomock.Any(), int64(2)).Return(
+		&device_entity.Device{ID: 2, UserID: 7, Fingerprint: "fp-desktop-2", Kind: device_entity.KindDesktop, Status: 1}, nil)
+
+	ref := refB()
+	ref.CallerDeviceID = 2
+	outcome, err := f.svc.Delete(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeleted, outcome)
+	assert.Equal(t, []string{"mirror:purge", "peer:delete:fp-agentred-1"}, f.calls)
+}
+
+func TestDelete_CallerIsCarrier_NotNotifiedBackAndOutcomeDeleted(t *testing.T) {
+	f := setupSavedSessionTest(t) // 默认名单行：承载端 = 发起端 = fp-desktop-1
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).Return(nil)
+	f.device.EXPECT().Find(gomock.Any(), int64(1)).Return(
+		&device_entity.Device{ID: 1, UserID: 7, Fingerprint: "fp-desktop-1", Kind: device_entity.KindDesktop, Status: 1}, nil)
+
+	ref := ref7()
+	ref.CallerDeviceID = 1
+	outcome, err := f.svc.Delete(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeleted, outcome)
+	assert.Equal(t, []string{"mirror:purge"}, f.calls)
+}
+
+func noRowB(f *savedFixture) {
+	f.follow.EXPECT().FindByIdentity(gomock.Any(), int64(7), conversationB).Return(nil, nil)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationB).Return(nil)
+}
+
+func TestDelete_NoRow_MachineFingerprintOfOwnDeviceIsTheCarrier(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	expectDevice(f, "fp-agentred-1", device_entity.KindAgentred, 1)
+
+	ref := refB()
+	ref.MachineFingerprint = "fp-agentred-1"
+	outcome, err := f.svc.Delete(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeleted, outcome)
+	assert.Equal(t, []string{"mirror:purge", "peer:delete:fp-agentred-1"}, f.calls)
+}
+
+func TestDelete_NoRow_MachineFingerprintNotInAccountIsIgnored(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	f.device.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-someone-else").Return(nil, nil)
+
+	ref := refB()
+	ref.MachineFingerprint = "fp-someone-else"
+	_, err := f.svc.Delete(context.Background(), ref)
+	require.NoError(t, err)
+	for _, c := range f.calls {
+		assert.NotContains(t, c, "fp-someone-else", "别的账号的机器不能被这条请求点到")
+	}
+}
+
+// 决策 17：没有名单行、也没有可用的执行端指纹时，没有任何一台机器是已知的承载端。
+// 调用方设备（它已经删了自己那份）顶上；连设备调用方都没有（浏览器、未知 / 已移除
+// 的指纹）就没有人可通知。三种都答「已删除」，不拨号、不记待办——空指纹的待办
+// 重放 cron 永远清不掉。对端设成离线，是为了让误拨 / 误记待办立刻在这里暴露。
+func assertDeletedWithoutCarrier(t *testing.T, f *savedFixture, ref SessionRef) {
+	t.Helper()
+	f.peer.err = ErrMachineOffline // 误拨就会走到 AddDeleteTodo，而 todo mock 没有任何预期
+	outcome, err := f.svc.Delete(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeleted, outcome)
+	assert.Equal(t, []string{"mirror:purge"}, f.calls, "不拨任何机器")
+	assert.Empty(t, f.peer.deleted)
+}
+
+func TestDelete_NoRow_DeviceCaller_IsTheCarrier_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	f.device.EXPECT().Find(gomock.Any(), int64(1)).Return(
+		&device_entity.Device{ID: 1, UserID: 7, Fingerprint: "fp-desktop-1", Kind: device_entity.KindDesktop, Status: 1}, nil)
+
+	ref := refB()
+	ref.CallerDeviceID = 1
+	assertDeletedWithoutCarrier(t, f, ref)
+}
+
+func TestDelete_NoRow_UnknownHint_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	f.device.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-someone-else").Return(nil, nil)
+
+	ref := refB()
+	ref.MachineFingerprint = "fp-someone-else"
+	assertDeletedWithoutCarrier(t, f, ref)
+}
+
+func TestDelete_NoRow_RemovedHint_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+	expectDevice(f, "fp-removed", device_entity.KindAgentred, 0)
+
+	ref := refB()
+	ref.MachineFingerprint = "fp-removed"
+	assertDeletedWithoutCarrier(t, f, ref)
+}
+
+func TestDelete_NoRow_BrowserCallerNoDevice_NoDialNoTodo(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	noRowB(f)
+
+	assertDeletedWithoutCarrier(t, f, refB())
+}
+
+// 有名单行时的老行为不变：承载端离线仍记它的待办（指纹非空）。
+func TestDelete_RowWithCarrier_Offline_StillQueuesTodoForCarrier(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	f.peer.err = ErrMachineOffline
+	expectRowB(f, "fp-agentred-1")
+	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, td *agent_session_entity.DeleteTodo) error {
+			assert.Equal(t, "fp-agentred-1", td.DeviceFingerprint)
+			return nil
+		})
+
+	outcome, err := f.svc.Delete(context.Background(), refB())
+	require.NoError(t, err)
+	assert.Equal(t, MachineDeletePending, outcome)
+}
+
+func TestDelete_RowExists_MachineFingerprintHintIsNotConsulted(t *testing.T) {
+	f := setupSavedSessionTest(t)
+	expectRowB(f, "fp-agentred-1") // 发起端 = 承载端；没有 FindByFingerprint 的预期，一调用即红
+
+	ref := refB()
+	ref.MachineFingerprint = "fp-hint"
+	_, err := f.svc.Delete(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"mirror:purge", "peer:delete:fp-agentred-1"}, f.calls)
 }

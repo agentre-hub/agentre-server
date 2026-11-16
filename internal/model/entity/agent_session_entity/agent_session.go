@@ -168,9 +168,10 @@ func (*DurableFrame) TableName() string { return "agent_session_durable_frames" 
 type DeleteTodo struct {
 	ID     int64 `gorm:"column:id;primaryKey;autoIncrement"`
 	UserID int64 `gorm:"column:user_id"`
-	// ConversationID 与 UserID 一起是这条待办的身份键：同一条对话只欠一条删除。
+	// ConversationID 与 UserID、DeviceFingerprint 一起是这条待办的身份键：同一条对话
+	// 可以同时欠两台机器各一条删除（承载端 + 发起端桌面），见 migration 202611130101。
 	ConversationID string `gorm:"column:conversation_id"`
-	// DeviceFingerprint 是**要拨给谁**（补删时拨的那台机器），不是身份的一半——
+	// DeviceFingerprint 是**要拨给谁**（补删时拨的那台机器），也是身份键的第三列——
 	// 见 ListPendingMachines 与 saved_session_svc.Delete。它曾经叫
 	// peer_fingerprint，而那个名字说的是发起端：两个角色的取值范围重叠（本机开的
 	// 对话两者同值），拿错了列不会有任何一处报错，只会把待办拨给一台从来没跑过这

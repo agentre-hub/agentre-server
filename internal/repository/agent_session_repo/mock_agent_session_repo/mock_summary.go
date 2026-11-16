@@ -218,3 +218,57 @@ func (mr *MockSummaryRepoMockRecorder) UpsertSummary(ctx, s any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertSummary", reflect.TypeOf((*MockSummaryRepo)(nil).UpsertSummary), ctx, s)
 }
+
+// MockCleanupRepo is a mock of CleanupRepo interface.
+type MockCleanupRepo struct {
+	ctrl     *gomock.Controller
+	recorder *MockCleanupRepoMockRecorder
+	isgomock struct{}
+}
+
+// MockCleanupRepoMockRecorder is the mock recorder for MockCleanupRepo.
+type MockCleanupRepoMockRecorder struct {
+	mock *MockCleanupRepo
+}
+
+// NewMockCleanupRepo creates a new mock instance.
+func NewMockCleanupRepo(ctrl *gomock.Controller) *MockCleanupRepo {
+	mock := &MockCleanupRepo{ctrl: ctrl}
+	mock.recorder = &MockCleanupRepoMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockCleanupRepo) EXPECT() *MockCleanupRepoMockRecorder {
+	return m.recorder
+}
+
+// ListCleanupCandidates mocks base method.
+func (m *MockCleanupRepo) ListCleanupCandidates(ctx context.Context, q agent_session_repo.CleanupCandidateQuery) ([]*agent_session_entity.SessionSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListCleanupCandidates", ctx, q)
+	ret0, _ := ret[0].([]*agent_session_entity.SessionSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListCleanupCandidates indicates an expected call of ListCleanupCandidates.
+func (mr *MockCleanupRepoMockRecorder) ListCleanupCandidates(ctx, q any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListCleanupCandidates", reflect.TypeOf((*MockCleanupRepo)(nil).ListCleanupCandidates), ctx, q)
+}
+
+// ListSavedByConversationIDs mocks base method.
+func (m *MockCleanupRepo) ListSavedByConversationIDs(ctx context.Context, userID int64, ids []string) ([]*agent_session_entity.SessionSummary, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSavedByConversationIDs", ctx, userID, ids)
+	ret0, _ := ret[0].([]*agent_session_entity.SessionSummary)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSavedByConversationIDs indicates an expected call of ListSavedByConversationIDs.
+func (mr *MockCleanupRepoMockRecorder) ListSavedByConversationIDs(ctx, userID, ids any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSavedByConversationIDs", reflect.TypeOf((*MockCleanupRepo)(nil).ListSavedByConversationIDs), ctx, userID, ids)
+}

@@ -116,7 +116,35 @@ beforeEach(async () => {
   mockedApi.mockReset();
 });
 
+const CLEANUP_PREVIEW = {
+  count: 3,
+  retained: 0,
+  machines: [],
+  conversation_ids: ["c1", "c2", "c3"],
+};
+
 describe("设置 · 隐私", () => {
+  it("活动统计之后是清理对话历史（控制台形态），并向 preview 端点计数", async () => {
+    serve({
+      "POST /v1/saved-sessions/cleanup/preview": CLEANUP_PREVIEW,
+      "/v1/workspace/agents": { agents: [] },
+      "/v1/workspace/projects": { projects: [] },
+    });
+    renderSettings("/settings?tab=privacy");
+
+    const panel = await screen.findByTestId("privacy-activity-panel");
+    const clean = await screen.findByRole("button", {
+      name: /Clean up 3 conversations/,
+    });
+    expect(
+      panel.compareDocumentPosition(clean) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(mockedApi).toHaveBeenCalledWith(
+      "/v1/saved-sessions/cleanup/preview",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("活动统计的卡片是填充块：不画边与分隔线", async () => {
     serve();
     renderSettings("/settings?tab=privacy");
@@ -469,5 +497,185 @@ describe("设置 · 隐私：关闭并删除", () => {
 
     await screen.findByTestId("privacy-activity-panel");
     expect(screen.queryByTestId("privacy-danger-zone")).toBeNull();
+  });
+
+  describe("清理完成后已保存对话数跟着刷新（问题 10）", () => {
+    /** stats 设置按调用次序给：第一次 128，之后按 later 给。 */
+    function serveCleanup(later: () => unknown) {
+      let reads = 0;
+      serve({
+        "/v1/stats/settings": () => {
+          reads += 1;
+          if (reads === 1) return settingsResponse();
+          return later();
+        },
+        "POST /v1/saved-sessions/cleanup/preview": {
+          ...CLEANUP_PREVIEW,
+          count: 2,
+          conversation_ids: ["c1", "c2"],
+        },
+        "POST /v1/saved-sessions/cleanup": {
+          deleted: 2,
+          retained: 0,
+          failed: [],
+          pending: [],
+        },
+        "/v1/workspace/agents": { agents: [] },
+        "/v1/workspace/projects": { projects: [] },
+      });
+    }
+
+    async function runCleanup() {
+      const clean = await screen.findByRole("button", {
+        name: /Clean up 2 conversations/,
+      });
+      await waitFor(() =>
+        expect((clean as HTMLButtonElement).disabled).toBe(false),
+      );
+      fireEvent.click(clean);
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: /Delete 2/ }));
+    }
+
+    it("清理完成后卡片显示服务端新的数，且不闪掉活动统计面板", async () => {
+      serveCleanup(() => settingsResponse({ saved_conversations: 1 }));
+      renderSettings("/settings?tab=privacy");
+      const panel = await screen.findByTestId("privacy-activity-panel");
+      expect(screen.getByTestId("privacy-saved-count").textContent).toContain(
+        "128",
+      );
+
+      await runCleanup();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("privacy-saved-count").textContent).toMatch(
+          /^1 conversation/,
+        ),
+      );
+      expect(
+        screen.getByTestId("privacy-saved-count").textContent,
+      ).not.toContain("128");
+      // 同一个节点：没有被骨架屏换掉再重建。
+      expect(screen.getByTestId("privacy-activity-panel")).toBe(panel);
+      expect(screen.queryByTestId("privacy-activity-loading")).toBeNull();
+    });
+
+    it("页面加载时那次读数比清理后的重读回来得晚，也不会把旧数盖回去", async () => {
+      let releaseFirst: (v: unknown) => void = () => {};
+      let reads = 0;
+      serve({
+        "/v1/stats/settings": () => {
+          reads += 1;
+          if (reads === 1)
+            return new Promise((resolve) => {
+              releaseFirst = resolve;
+            });
+          return settingsResponse({ saved_conversations: 1 });
+        },
+        "POST /v1/saved-sessions/cleanup/preview": {
+          ...CLEANUP_PREVIEW,
+          count: 2,
+          conversation_ids: ["c1", "c2"],
+        },
+        "POST /v1/saved-sessions/cleanup": {
+          deleted: 2,
+          retained: 0,
+          failed: [],
+          pending: [],
+        },
+        "/v1/workspace/agents": { agents: [] },
+        "/v1/workspace/projects": { projects: [] },
+      });
+      renderSettings("/settings?tab=privacy");
+
+      await runCleanup();
+      await screen.findByTestId("privacy-saved-count");
+      releaseFirst(settingsResponse());
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(screen.getByTestId("privacy-saved-count").textContent).toMatch(
+        /^1 conversation/,
+      );
+    });
+
+    it("重读失败时保留原来的数，页面不报错", async () => {
+      serveCleanup(() => {
+        throw new Error("boom");
+      });
+      renderSettings("/settings?tab=privacy");
+      await screen.findByTestId("privacy-activity-panel");
+
+      await runCleanup();
+
+      await waitFor(() =>
+        expect(
+          mockedApi.mock.calls.filter((c) => c[0] === "/v1/stats/settings"),
+        ).toHaveLength(2),
+      );
+      // 发出去不等于落地：等那次失败的重读走完 catch，再看它有没有把面板换成报错。
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.getByTestId("privacy-saved-count").textContent).toContain(
+        "128",
+      );
+      expect(screen.getByTestId("privacy-activity-panel")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("清理后的重读比随后的开关回执回来得晚，也不会把开关翻回去", async () => {
+      let releaseReread: (v: unknown) => void = () => {};
+      let reads = 0;
+      serve({
+        "PUT /v1/stats/settings": settingsResponse({
+          activity_stats_enabled: false,
+          devices: undefined,
+        }),
+        "/v1/stats/settings": () => {
+          reads += 1;
+          if (reads === 1) return settingsResponse();
+          return new Promise((resolve) => {
+            releaseReread = resolve;
+          });
+        },
+        "POST /v1/saved-sessions/cleanup/preview": {
+          ...CLEANUP_PREVIEW,
+          count: 2,
+          conversation_ids: ["c1", "c2"],
+        },
+        "POST /v1/saved-sessions/cleanup": {
+          deleted: 2,
+          retained: 0,
+          failed: [],
+          pending: [],
+        },
+        "/v1/workspace/agents": { agents: [] },
+        "/v1/workspace/projects": { projects: [] },
+      });
+      renderSettings("/settings?tab=privacy");
+      await screen.findByTestId("privacy-activity-panel");
+
+      await runCleanup();
+      await waitFor(() => expect(reads).toBe(2));
+
+      fireEvent.click(
+        within(screen.getByTestId("privacy-danger-zone")).getByRole("button", {
+          name: "Turn off and delete",
+        }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Turn off and delete" }),
+      );
+      const toggle = () =>
+        screen
+          .getByRole("switch", { name: "Activity stats" })
+          .getAttribute("aria-checked");
+      await waitFor(() => expect(toggle()).toBe("false"));
+
+      // 重读是在关掉之前发出的：它带回的「开着」已经过期。
+      releaseReread(settingsResponse());
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(toggle()).toBe("false");
+    });
   });
 });

@@ -82,6 +82,15 @@
       "title": "Saved conversations",
       "count": "{{count}} conversations",
       "body": "Only conversations you explicitly saved are stored in your account. This is not a switch — unsave them one at a time on the Conversations page."
+    },
+    "cleanup": {
+      "deleted": "Deleted {{count}} conversations",
+      "pending": "{{count}} on {{name}} will be deleted next time it comes online",
+      "reason": {
+        "machine_protocol_violation": "The machine does not support deletion; the account copy was removed",
+        "delete_failed": "This one could not be deleted; you can retry",
+        "unknown": "This one could not be deleted; try again later"
+      }
     }
   },
   "theme": {

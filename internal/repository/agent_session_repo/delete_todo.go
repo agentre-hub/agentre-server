@@ -16,8 +16,9 @@ type DeleteTodoRepo interface {
 	// AddDeleteTodo records a pending delete: the server's own copy is
 	// already gone, but the peer that must also delete its local copy was
 	// offline at delete time (决策 6). Hitting the existing
-	// (user_id, conversation_id) row is a no-op — the same todo is never
-	// recorded twice.
+	// (user_id, conversation_id, device_fingerprint) row is a no-op — the
+	// same todo is never recorded twice, while one conversation may owe a
+	// delete to two machines at once (carrier + initiator).
 	AddDeleteTodo(ctx context.Context, t *agent_session_entity.DeleteTodo) error
 	// ListDeleteTodosByDevice returns every pending delete owed by one machine
 	// on one account, for that machine's mirror client to execute when it comes
@@ -27,8 +28,10 @@ type DeleteTodoRepo interface {
 	ListDeleteTodosByDevice(ctx context.Context, userID int64, deviceFingerprint string) ([]*agent_session_entity.DeleteTodo, error)
 	// RemoveDeleteTodo clears one todo — the machine executed it, or a device
 	// revocation purged it outright (决策 7, device_svc.DeviceDataPurger).
-	// Removing an unrecorded todo is a no-op.
-	RemoveDeleteTodo(ctx context.Context, userID int64, conversationID string) error
+	// Keyed by (user, conversation, machine): only that machine's todo goes,
+	// the same conversation's todo on another machine stays. Removing an
+	// unrecorded todo is a no-op.
+	RemoveDeleteTodo(ctx context.Context, userID int64, conversationID, deviceFingerprint string) error
 	// RemoveDeleteTodosByDevice 清掉挂在一台机器上的全部待办。设备被撤销之后这些
 	// 删除指令永远执行不了——那台机器已经不归这个账号管（决策 7），留着只是一堆
 	// 对着谁都发不出去的指令。一条都没有时是 no-op。
@@ -78,9 +81,11 @@ func (r *deleteTodoRepo) ListDeleteTodosByDevice(
 	return out, nil
 }
 
-func (r *deleteTodoRepo) RemoveDeleteTodo(ctx context.Context, userID int64, conversationID string) error {
+func (r *deleteTodoRepo) RemoveDeleteTodo(
+	ctx context.Context, userID int64, conversationID, deviceFingerprint string,
+) error {
 	return db.Ctx(ctx).Where(
-		"user_id=? AND conversation_id=?", userID, conversationID,
+		"user_id=? AND conversation_id=? AND device_fingerprint=?", userID, conversationID, deviceFingerprint,
 	).Delete(&agent_session_entity.DeleteTodo{}).Error
 }
 

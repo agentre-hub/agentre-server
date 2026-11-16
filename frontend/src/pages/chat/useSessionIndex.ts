@@ -630,12 +630,18 @@ export function useSessionIndex({
    */
   const doSave = useCallback(
     async (row: MirrorIndexRow) => {
+      // 承载端：摘要说明执行它的是账号里另一台设备时（carrierFingerprint）记那一台；
+      // 否则是列出它的那台机器——「保存」只出现在机器轴上那些账号里还没有的行，它们
+      // 恒挂着那台机器（fromMachineRow 的 deviceId）。取不到时退回行的身份指纹 ——
+      // 对在本机开的对话两者本来就同值。乐观行与写请求用同一个值。
+      const deviceFingerprint =
+        row.carrierFingerprint ??
+        devices.find((d) => d.id === row.deviceId)?.fingerprint ??
+        row.fingerprint;
       const entry: MirroredSession = {
         conversation_id: row.conversationId,
         peer_fingerprint: row.fingerprint,
-        device_fingerprint:
-          devices.find((d) => d.id === row.deviceId)?.fingerprint ??
-          row.fingerprint,
+        device_fingerprint: deviceFingerprint,
         title: row.title,
         agent_sync_id: row.agentSyncId || undefined,
         project_sync_id: row.projectSyncId || undefined,
@@ -649,12 +655,7 @@ export function useSessionIndex({
         await api("/v1/saved-sessions", {
           method: "POST",
           body: JSON.stringify({
-            // 「保存」只出现在机器轴上那些账号里还没有的行，它们恒挂着那台机器
-            // （fromMachineRow 的 deviceId）。取不到时退回行的身份指纹 —— 对在本机
-            // 开的对话两者本来就同值。
-            device_fingerprint:
-              devices.find((d) => d.id === row.deviceId)?.fingerprint ??
-              row.fingerprint,
+            device_fingerprint: deviceFingerprint,
             // 行的身份指纹就是发起端（IndexRow.fingerprint 的定义）。
             peer_fingerprint: row.fingerprint,
             conversation_id: row.conversationId,

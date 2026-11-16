@@ -19,7 +19,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 )
 
 type SavedSessionSvc interface {
@@ -29,6 +31,12 @@ type SavedSessionSvc interface {
 	// 时一定已经没了；执行端那一份的去向由 MachineDeleteOutcome 如实交代。幂等：
 	// 删一条早已删过的对话不是错误。
 	Delete(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error)
+	// PreviewCleanup 在账号已保存的对话里按条件数出一批可清理的（控制台批量清理），
+	// 进行中 / 等待中的不算，计入 Retained。只读，不改任何东西。
+	PreviewCleanup(ctx context.Context, userID int64, filter CleanupFilter) (CleanupPreview, error)
+	// Cleanup 逐条重新判断后经 Delete 删除这批对话；callerDeviceID 是发起设备
+	// （浏览器会话为 0），语义同 SessionRef.CallerDeviceID。
+	Cleanup(ctx context.Context, userID, callerDeviceID int64, ids []string) (CleanupResult, error)
 }
 
 // SessionRef 指向一条对话：账号 + 它的 **conversation_id** + 承载它的机器 + 发起它
@@ -51,6 +59,9 @@ type SessionRef struct {
 	ConversationID     string
 	MachineFingerprint string
 	PeerFingerprint    string
+	// CallerDeviceID 是发起这次删除的设备（设备 JWT 调用时才有，浏览器会话为 0）。
+	// 它自己已经在本机删过，所以删除传播绝不回头通知它。只由 Delete 使用。
+	CallerDeviceID int64
 }
 
 // Initiator 解出这条对话的发起端：留空即「就是承载它的那台机器自己」。
@@ -192,24 +203,137 @@ func (s *savedSessionSvc) Save(ctx context.Context, ref SessionRef) error {
 //     场景恰恰是机器离线，要求两边都成功才算删，等于在最常见的情形下删不掉东西
 //     （决策 6）。
 func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error) {
-	// 承载它的机器由账号这边查出来，而不是要调用方报：发起端是浏览器时（web 控制台
-	// 派发出去的那些），调用方手上只有身份，它压根不认识那台机器。查不到（早已删过）
-	// 就沿用调用方给的那一份 —— 幂等删除照常往下走，只是没有机器可通知。
-	row, err := agent_session_repo.Save().FindByIdentity(ctx, ref.UserID, ref.ConversationID)
+	d, err := s.deleteCopies(ctx, ref)
 	if err != nil {
 		return "", err
 	}
+	return d.carrier, nil
+}
+
+// deleteResult 是一次删除里各台机器那一份的去向：carrier 是承载端（Delete 的应答只说
+// 它）；initiatorFP 非空时，发起端桌面也被通知了，initiator 是它那一份的去向（协议违约
+// 时为空）。批量清理据此把两类机器都列进「下次上线时删除」。
+type deleteResult struct {
+	carrier     MachineDeleteOutcome
+	initiatorFP string
+	initiator   MachineDeleteOutcome
+}
+
+// deleteCopies 是 Delete 的全部实现，见 Delete。
+func (s *savedSessionSvc) deleteCopies(ctx context.Context, ref SessionRef) (deleteResult, error) {
+	// 承载它的机器由账号这边查出来，而不是要调用方报：发起端是浏览器时（web 控制台
+	// 派发出去的那些），调用方手上只有身份，它压根不认识那台机器。
+	//
+	// 名单行不在了（早已删过，或桌面端删的是从没保存过的远端对话）：调用方报的
+	// machine_fingerprint 才有资格顶上，而且必须是本账号的在用设备，否则忽略——
+	// 一个请求不能借此点到别的账号的机器。有名单行时它不被采信。
+	var out deleteResult
+	row, err := agent_session_repo.Save().FindByIdentity(ctx, ref.UserID, ref.ConversationID)
+	if err != nil {
+		return out, err
+	}
+	initiator := ""
 	if row != nil {
 		ref.MachineFingerprint = row.DeviceFingerprint
+		initiator = row.PeerFingerprint
+	} else if ref.MachineFingerprint != "" {
+		own, err := s.activeDevice(ctx, ref.UserID, ref.MachineFingerprint)
+		if err != nil {
+			return out, err
+		}
+		if own == nil {
+			ref.MachineFingerprint = ""
+		}
+	}
+	callerFP, err := s.callerFingerprint(ctx, ref)
+	if err != nil {
+		return out, err
 	}
 	if err := sessionMirror.Purge(ctx, ref); err != nil {
-		return "", err
+		return out, err
 	}
 	if err := agent_session_repo.Save().Delete(ctx, ref.UserID, ref.ConversationID); err != nil {
-		return "", err
+		return out, err
 	}
 	// 到这里 server 那一份已经没了：它立刻从索引里消失，没有「已删除但还在」的中间态。
-	err = machineDeleter.DeleteOnMachine(ctx, ref)
+	if callerFP != "" && callerFP == ref.MachineFingerprint {
+		// 调用方自己就是承载端：它在本机已经删过，不回头给它发。
+		out.carrier = MachineDeleted
+	} else if out.carrier, err = s.deleteOrQueue(ctx, ref); err != nil {
+		return deleteResult{}, err
+	}
+	// 发起端若是账号里另一台桌面，它本机也留着这条对话，同样要删；应答仍只描述
+	// 承载端那一份。
+	if out.initiatorFP, out.initiator, err = s.notifyInitiator(ctx, ref, initiator, callerFP); err != nil {
+		return deleteResult{}, err
+	}
+	return out, nil
+}
+
+// activeDevice 取账号里这个指纹对应的在用设备；不是本账号的设备 / 已移除返回 nil。
+func (s *savedSessionSvc) activeDevice(ctx context.Context, userID int64, fp string) (*device_entity.Device, error) {
+	d, err := device_repo.Device().FindByFingerprint(ctx, userID, fp)
+	if err != nil {
+		return nil, err
+	}
+	if !d.IsActive() {
+		return nil, nil
+	}
+	return d, nil
+}
+
+// callerFingerprint 解出发起这次删除的设备的指纹；浏览器会话 / 解不出来返回空。
+func (s *savedSessionSvc) callerFingerprint(ctx context.Context, ref SessionRef) (string, error) {
+	if ref.CallerDeviceID == 0 {
+		return "", nil
+	}
+	d, err := device_repo.Device().Find(ctx, ref.CallerDeviceID)
+	if err != nil {
+		return "", err
+	}
+	if d == nil || d.UserID != ref.UserID {
+		return "", nil
+	}
+	return d.Fingerprint, nil
+}
+
+// notifyInitiator 通知发起端桌面删除，交回被通知的桌面指纹与它那一份的去向。发起端
+// 不是账号里的在用桌面（浏览器、agentred、已移除的设备）、就是承载端、或就是调用方
+// 自己时什么都不做（指纹为空）。它不影响应答；离线 / 没删成留待办，协议违约则只记
+// 日志（重放永远不会成功，去向为空）。
+func (s *savedSessionSvc) notifyInitiator(
+	ctx context.Context, ref SessionRef, initiator, callerFP string,
+) (string, MachineDeleteOutcome, error) {
+	if initiator == "" || initiator == ref.MachineFingerprint || initiator == callerFP {
+		return "", "", nil
+	}
+	d, err := s.activeDevice(ctx, ref.UserID, initiator)
+	if err != nil {
+		return "", "", err
+	}
+	if d == nil || d.Kind != device_entity.KindDesktop {
+		return "", "", nil
+	}
+	target := ref
+	target.MachineFingerprint = initiator
+	target.PeerFingerprint = initiator
+	outcome, err := s.deleteOrQueue(ctx, target)
+	if err != nil && !errors.Is(err, ErrMachineProtocolViolation) {
+		return "", "", err
+	}
+	return initiator, outcome, nil
+}
+
+// deleteOrQueue 通知 ref.MachineFingerprint 那台机器删除；联系不上或这次没删成就给它
+// 记一条待办。协议违约原样上交，不留待办。
+func (s *savedSessionSvc) deleteOrQueue(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error) {
+	if ref.MachineFingerprint == "" {
+		// 没有机器可通知（没有名单行、也没有可用的执行端指纹：设备调用方已经删了自己
+		// 那份，浏览器调用方压根没有机器）：按「已删除」收口。空指纹的待办重放 cron
+		// 永远清不掉，任何路径都不许记。
+		return MachineDeleted, nil
+	}
+	err := machineDeleter.DeleteOnMachine(ctx, ref)
 	switch {
 	case err == nil:
 		logger.Ctx(ctx).Info("saved_session_svc.Delete: both copies deleted",

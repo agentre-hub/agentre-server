@@ -42,13 +42,64 @@ func (f *Follow) Delete(c *gin.Context, req *api.DeleteSessionRequest) (*api.Del
 	if err != nil {
 		return nil, err
 	}
-	// 承载它的机器不由请求体提供：service 按身份从账号里查出来。
+	// 承载它的机器默认由 service 按身份从账号里查；请求体的 machine_fingerprint 只在
+	// 没有索引行时由 service 采信。调用设备（设备 JWT）一并交下去，好让它不被回头通知。
 	outcome, err := saved_session_svc.Default().Delete(c.Request.Context(), saved_session_svc.SessionRef{
-		UserID:         userID,
-		ConversationID: req.ConversationID,
+		UserID:             userID,
+		ConversationID:     req.ConversationID,
+		MachineFingerprint: req.MachineFingerprint,
+		CallerDeviceID:     ginctx.DeviceID(c),
 	})
 	if err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}
 	return &api.DeleteSessionResponse{MachineStatus: string(outcome)}, nil
+}
+
+// CleanupPreview 数出账号已保存的对话里符合条件、可清理的那一批（只读）。
+func (f *Follow) CleanupPreview(c *gin.Context, req *api.CleanupPreviewRequest) (*api.CleanupPreviewResponse, error) {
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
+	}
+	p, err := saved_session_svc.Default().PreviewCleanup(c.Request.Context(), userID, saved_session_svc.CleanupFilter{
+		BeforeMs: req.BeforeMs, AgentSyncID: req.AgentSyncID, ProjectSyncID: req.ProjectSyncID,
+	})
+	if err != nil {
+		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
+	}
+	machines := make([]api.CleanupMachineView, 0, len(p.Machines))
+	for _, m := range p.Machines {
+		machines = append(machines, api.CleanupMachineView{
+			Fingerprint: m.Fingerprint, Name: m.Name, Online: m.Online, Count: m.Count,
+		})
+	}
+	ids := p.ConversationIDs
+	if ids == nil {
+		ids = []string{}
+	}
+	return &api.CleanupPreviewResponse{
+		Count: p.Count, Retained: p.Retained, Machines: machines, ConversationIDs: ids,
+	}, nil
+}
+
+// Cleanup 逐条重新判断后删除预览给出的那一批；调用设备（设备 JWT）一并交下去。
+func (f *Follow) Cleanup(c *gin.Context, req *api.CleanupRequest) (*api.CleanupResponse, error) {
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
+	}
+	r, err := saved_session_svc.Default().Cleanup(c.Request.Context(), userID, ginctx.DeviceID(c), req.ConversationIDs)
+	if err != nil {
+		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
+	}
+	failed := make([]api.CleanupFailureView, 0, len(r.Failed))
+	for _, x := range r.Failed {
+		failed = append(failed, api.CleanupFailureView{ConversationID: x.ConversationID, Reason: x.Reason})
+	}
+	pending := make([]api.CleanupPendingView, 0, len(r.Pending))
+	for _, x := range r.Pending {
+		pending = append(pending, api.CleanupPendingView{Fingerprint: x.Fingerprint, Name: x.Name, Count: x.Count})
+	}
+	return &api.CleanupResponse{Deleted: r.Deleted, Retained: r.Retained, Failed: failed, Pending: pending}, nil
 }

@@ -110,8 +110,8 @@ func purgeStoredCopy(ctx context.Context, userID int64, conversationID string) e
 func (s *Sessions) DeleteOnMachine(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
 	return s.sup.withShortConn(ctx, machineKey{userID: userID, fingerprint: machineFingerprint}, s.sup.cfg.CallTimeout,
 		func(conn *machineConn) error {
-			// peerFingerprint 有意不填：这条连接通到的就是那台机器，而在账号鉴权的连接上
-			// 点名一个本可以省略的对端会被拒（省略即「调用方自己那一端」）。
+			// peerFingerprint 有意不填：这是账号鉴权的连接，对端没点名发起端时按对话删
+			// 这条会话，不论它是哪个发起端的（agentre spec 2026-11-12 决策 16）。
 			// 应答里的 deleted 有意不看：契约是**后置条件**——「那一端已经没有这条会话了」，
 			// 而不是「这一次删掉了几行」。对面回 deleted:false（它那儿早就没有了）与
 			// deleted:true 对调用方是同一件事，重复删除因此照样成功。
@@ -205,7 +205,7 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.DeviceFingerprint),
 				zap.String("conversationId", todo.ConversationID))
 			if err := agent_session_repo.DeleteTodo().RemoveDeleteTodo(
-				ctx, todo.UserID, todo.ConversationID); err != nil {
+				ctx, todo.UserID, todo.ConversationID, todo.DeviceFingerprint); err != nil {
 				errs = append(errs, fmt.Errorf("conversation %s: clear todo: %w", todo.ConversationID, err))
 				continue
 			}
@@ -226,7 +226,7 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 			continue
 		}
 		if err := agent_session_repo.DeleteTodo().RemoveDeleteTodo(
-			ctx, todo.UserID, todo.ConversationID); err != nil {
+			ctx, todo.UserID, todo.ConversationID, todo.DeviceFingerprint); err != nil {
 			// 删是删掉了，待办没勾掉：下一轮会再删一遍，而两端都幂等。
 			errs = append(errs, fmt.Errorf("conversation %s: clear todo: %w", todo.ConversationID, err))
 			continue

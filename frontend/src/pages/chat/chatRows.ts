@@ -62,6 +62,12 @@ export type MirrorIndexRow = IndexRow & {
   lastReadAt?: number;
   /** 承载机器的指纹；与对话发起端 fingerprint 可能不同。 */
   machineFingerprint: string;
+  /**
+   * 保存时记为承载端的那台账号设备的指纹；缺省 = 记列出它的那台机器。只有机器轴上
+   * 那些「列出它的机器并不是执行它的机器」的行带它（桌面端列出的 agentred 会话）。
+   * 它**不是**路由用的：读写仍连 machineFingerprint 那台。
+   */
+  carrierFingerprint?: string;
 };
 
 /**
@@ -188,8 +194,13 @@ export function toMachineRow(
   s: SessionSummary,
   t: Translate,
   localFingerprint?: string,
+  devicesByFp?: ReadonlyMap<string, DeviceItem>,
 ): MirrorIndexRow {
   const origin = machineRowOrigin(s, device, localFingerprint);
+  // 执行端只在它是本账号的设备时才算数（未知 / 已移除的仍记列出它的那台）。
+  const carrier = s.carrierFingerprint?.trim();
+  const carrierFingerprint =
+    carrier && devicesByFp?.has(carrier) ? carrier : undefined;
   return {
     key: rowKey(s.conversationId),
     conversationId: s.conversationId,
@@ -199,6 +210,7 @@ export function toMachineRow(
     fingerprint: origin,
     // 该列表只包含本机承载的会话。
     machineFingerprint: device.fingerprint,
+    ...(carrierFingerprint ? { carrierFingerprint } : {}),
     agentSyncId: s.agentSyncId?.trim() ?? "",
     // 项目归属由服务端在镜像上判（决策 12）：还没保存的对话 server 手里没有
     // 它的任何东西，因此这一维如实空着，而不是拿 cwd 在浏览器里猜一个。

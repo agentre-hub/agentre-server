@@ -141,12 +141,14 @@ func TestMigrationList_IDsAreUniqueAndStrictlyAscending(t *testing.T) {
 	}
 }
 
-// agent_sessions 的 CLI 模型选择两列是这一轮新增的补丁迁移，必须是清单里的**最后**
-// 两条（每列一条 ALTER，schema 守卫才逐列看得见）。
-func TestMigrationList_EndsWithTheCLIModelColumns(t *testing.T) {
+// 清单的尾部依次是：agent_sessions 的 CLI 模型选择两列（每列一条 ALTER，schema 守卫才
+// 逐列看得见），以及删除待办身份键换成 (user_id, conversation_id, device_fingerprint) 的
+// 补丁迁移。它们必须按这个顺序排在清单**最后**。
+func TestMigrationList_EndsWithTheDeleteTodoMachineKey(t *testing.T) {
 	list := migrationList()
 	require.NotEmpty(t, list)
 	require.GreaterOrEqual(t, len(list), 3)
-	assert.Equal(t, "202610270101", list[len(list)-2].ID)
-	assert.Equal(t, "202610270102", list[len(list)-1].ID)
+	assert.Equal(t, "202610270101", list[len(list)-3].ID)
+	assert.Equal(t, "202610270102", list[len(list)-2].ID)
+	assert.Equal(t, "202611130101", list[len(list)-1].ID)
 }
