@@ -5201,7 +5201,7 @@ describe("会话详情：头部", () => {
     const badge = within(
       screen.getByTestId("session-detail-meta-agent"),
     ).getByTestId("session-detail-status-badge");
-    expect(badge.getAttribute("aria-label")).toBe("running status");
+    expect(badge.getAttribute("aria-label")).toBe("Running");
     expect(badge.className).toContain("absolute");
     expect(badge.className).toContain("ring-sheet-header");
     unmount();
@@ -5678,7 +5678,9 @@ describe("会话详情：头部", () => {
 
     const status = await screen.findByTestId("session-detail-status");
     // 状态点在（这一维知道），而名字那一格闭嘴。
-    expect(status.querySelector("[aria-label$='status']")).toBeTruthy();
+    expect(
+      status.querySelector('span[aria-label]:not([role="img"])'),
+    ).toBeTruthy();
     expect(status.textContent).toBe("");
 
     releaseList();
@@ -9258,7 +9260,7 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
   const statusDotClass = () =>
     screen
       .getByTestId("session-detail-status")
-      .querySelector("[aria-label$='status']")?.className ?? "";
+      .querySelector('span[aria-label]:not([role="img"])')?.className ?? "";
 
   it("Given 打开时是空闲 When 自己发一条 Then 头部变 Running 并摆出停止", async () => {
     wireIdleSession();

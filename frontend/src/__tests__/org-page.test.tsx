@@ -105,7 +105,10 @@ function mockOrgApi() {
 
 /** Alice 那一行的选择按钮：CEO 与 Alice 都有 org-row-select-*，按名字定位到具体那一行。 */
 async function selectAlice() {
-  const nameNode = await screen.findByText("Alice");
+  // 「Alice」也出现在部门行的负责人皇冠后面，取索引行里的那一处。
+  const nameNode = (await screen.findAllByText("Alice")).find((n) =>
+    n.closest('[data-slot="org-index-row"]'),
+  )!;
   const row = nameNode.closest('[data-slot="org-index-row"]') as HTMLElement;
   fireEvent.click(within(row).getByTestId(/^org-row-select-/));
 }

@@ -140,10 +140,11 @@ beforeEach(async () => {
   resetLiveTurns();
 });
 
-/** 左栏此刻列出来的行：标题 + 状态点的读屏名，按屏幕上的顺序。 */
+/** 左栏此刻列出来的行：标题 + 状态点的读屏名，按屏幕上的顺序。状态点是带读屏名、
+ * 但不是图标（role="img" 的是行尾状态标记）的那一枚。 */
 function listedRows(): string[] {
   return [...document.querySelectorAll("[data-nav-target]")].map((el) => {
-    const dot = el.querySelector('[aria-label$="status"]');
+    const dot = el.querySelector('span[aria-label]:not([role="img"])');
     return `${el.textContent?.match(/重构登录页|另一条对话/)?.[0] ?? "?"}|${
       dot?.getAttribute("aria-label") ?? "no-dot"
     }`;
@@ -248,17 +249,11 @@ describe("实时覆盖层：这个浏览器亲眼看到的那一轮", () => {
     );
 
     await screen.findByRole("link", { name: /重构登录页/ });
-    expect(listedRows()).toEqual([
-      "另一条对话|idle status",
-      "重构登录页|idle status",
-    ]);
+    expect(listedRows()).toEqual(["另一条对话|Idle", "重构登录页|Idle"]);
 
     act(() => noteLiveTurn("42", true));
 
-    expect(listedRows()).toEqual([
-      "重构登录页|running status",
-      "另一条对话|idle status",
-    ]);
+    expect(listedRows()).toEqual(["重构登录页|Running", "另一条对话|Idle"]);
   });
 
   it("不再盯着它了：running 撤回，位置留在它该在的地方", async () => {
@@ -286,14 +281,14 @@ describe("实时覆盖层：这个浏览器亲眼看到的那一轮", () => {
     await screen.findByRole("link", { name: /重构登录页/ });
 
     act(() => noteLiveTurn("42", true));
-    expect(listedRows()[0]).toBe("重构登录页|running status");
+    expect(listedRows()[0]).toBe("重构登录页|Running");
 
     act(() => forgetLiveTurn("42"));
     // running 那一半撤回了 —— 此后这条会话是死是活这个浏览器不知道，镜像重新说了算。
     // 点变黄不是残留：时间被推到了「刚才」而这一屏没标已读，那正是「未读」的定义
     // （真实流程里详情会在轮末标一次已读）。位置留在最上面，那是既成事实。
     const after = listedRows();
-    expect(after[0]).toBe("重构登录页|waiting status");
-    expect(after[1]).toBe("另一条对话|idle status");
+    expect(after[0]).toBe("重构登录页|Needs you");
+    expect(after[1]).toBe("另一条对话|Idle");
   });
 });

@@ -2856,7 +2856,7 @@ describe("草稿与详情共用同一条顶带", () => {
     const badge = within(
       screen.getByTestId("draft-header-meta-agent"),
     ).getByTestId("draft-header-status-badge");
-    expect(badge.getAttribute("aria-label")).toBe("running status");
+    expect(badge.getAttribute("aria-label")).toBe("Running");
   });
 
   /**
