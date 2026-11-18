@@ -32,27 +32,31 @@ export default function AuthLayout({
 
   return (
     <div className="flex min-h-dvh flex-col bg-chrome">
-      {header ?? (
-        <header className="flex items-center px-8 py-5">
-          <div className="flex items-center gap-[9px]">
-            {/* 跟侧边栏 Brand 带同一份共享 mark，不套底板：登录页是没登录的人第一眼
+      {/* sticky 实底外壳：iOS 主屏幕 App 顶部的系统模糊，只在顶边有一条 fixed/sticky
+          的全宽实底容器时才被换成实色。这一页整页滚动、顶栏在文档流里，由这层外壳担。 */}
+      <div className="sticky top-0 z-10 bg-chrome">
+        {header ?? (
+          <header className="flex items-center px-8 py-5">
+            <div className="flex items-center gap-[9px]">
+              {/* 跟侧边栏 Brand 带同一份共享 mark，不套底板：登录页是没登录的人第一眼
               看到的界面，摆个通用终端图标等于第一眼就不是这个产品；而那块实心底色
               在这一页会成为仅次于主按钮的第二亮元素，跟 CTA 抢。 */}
-            <img
-              src={agentreLogoUrl}
-              alt=""
-              aria-hidden="true"
-              className="size-7 shrink-0 object-contain"
-              draggable={false}
-            />
-            <span className="text-prose font-semibold text-foreground">
-              {t("authLayout.brand")}
-            </span>
-          </div>
-          <div className="flex-1" />
-          <AppControls />
-        </header>
-      )}
+              <img
+                src={agentreLogoUrl}
+                alt=""
+                aria-hidden="true"
+                className="size-7 shrink-0 object-contain"
+                draggable={false}
+              />
+              <span className="text-prose font-semibold text-foreground">
+                {t("authLayout.brand")}
+              </span>
+            </div>
+            <div className="flex-1" />
+            <AppControls />
+          </header>
+        )}
+      </div>
 
       <main
         className={

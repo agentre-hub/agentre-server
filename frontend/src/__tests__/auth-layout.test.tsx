@@ -34,6 +34,30 @@ describe("AuthLayout", () => {
     expect(banner.className).not.toMatch(/\bfixed\b/);
   });
 
+  // iOS 主屏幕 App 的顶部系统模糊只在顶边有一条 fixed/sticky 的全宽实底容器时才会被
+  // 换成实色。认证页整页滚动，所以给顶栏套一层 sticky 实底外壳；顶栏本身仍在文档流里。
+  it("wraps the top bar in a sticky, opaque full-width edge so iOS swaps its top blur for a solid colour", () => {
+    renderLayout();
+    const edge = screen.getByRole("banner").parentElement as HTMLElement;
+    expect(edge.className).toMatch(/(^|\s)sticky(\s|$)/);
+    expect(edge.className).toContain("top-0");
+    expect(edge.className).toContain("bg-chrome");
+  });
+
+  it("keeps the sticky edge around a page-supplied header too", () => {
+    render(
+      <MemoryRouter>
+        <AuthLayout header={<header>custom</header>}>
+          <p>content</p>
+        </AuthLayout>
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+    const edge = screen.getByRole("banner").parentElement as HTMLElement;
+    expect(edge.className).toMatch(/(^|\s)sticky(\s|$)/);
+    expect(edge.className).toContain("bg-chrome");
+  });
+
   // 顶栏这枚标跟侧边栏 Brand 带是同一份共享 mark，不是通用图标垫一块底板：
   // 登录页是没登录的人第一眼看到的界面，摆个终端图标等于第一眼就不是这个产品。
   it("brands the top bar with the shared Agentre mark rather than a generic glyph on a plate", () => {

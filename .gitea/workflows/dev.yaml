@@ -35,14 +35,16 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           cache-dependency-path: go.sum
 
       - name: Set up pnpm
         run: |
           set -euo pipefail
           command -v node >/dev/null || { echo "runner 上没有 node,前端编不出来" >&2; exit 1; }
-          corepack enable
+          # runner 镜像 ci-tools 自带与 packageManager 同版本的 pnpm；再 corepack enable 会把它
+          # 换成 corepack 的垫片，每次构建都去 registry.npmjs.org 下载 pnpm，连不上就断在 make build
+          command -v pnpm >/dev/null || corepack enable
 
       - name: Set outputs
         id: vars

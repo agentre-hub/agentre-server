@@ -115,6 +115,18 @@ describe("PWA 安装契约", () => {
     expect(viewport![1]).toContain("viewport-fit=cover");
   });
 
+  // iOS 26 起，主屏幕 App 顶部有一层系统的边缘模糊，原生 App 的导航栏会被它让开，网页
+  // 只有在 WebKit 认出顶边有一条 fixed/sticky 的全宽容器时才会被换成实色——而这套判定
+  // 只在状态栏是 default 时才开，black-translucent 会把它整个关掉（真机对照见
+  // docs/design.md 的 PWA 小节）。所以这一行不能再是 black-translucent。
+  it("状态栏样式是 default，好让 iOS 用实色替换顶部的系统模糊", () => {
+    const style = indexHtml.match(
+      /<meta[^>]*name="apple-mobile-web-app-status-bar-style"[^>]*content="([^"]*)"/,
+    );
+    expect(style).toBeTruthy();
+    expect(style![1]).toBe("default");
+  });
+
   it("从不禁止缩放：没有 user-scalable=no，也没有 maximum-scale", () => {
     expect(indexHtml).not.toContain("user-scalable=no");
     expect(indexHtml).not.toContain("maximum-scale");

@@ -1093,6 +1093,22 @@ package (`agentre-ui` primitive `Input`/`Textarea`/`SearchInput` and the compose
 because a host cannot reach into a shared component's DOM contract — this host inherits it
 when its pinned revision moves up.
 
+**The status bar style is `default`, and both shells own a fixed/sticky top edge.** From
+iOS 26 a Home Screen app gets a system blur over the top of its web view. Native apps keep
+their bars out of it; a page only escapes it when WebKit's top-edge hit test (4px in, at the
+horizontal midpoint) lands inside a `fixed` or `sticky` ancestor at least 90% of the
+viewport wide — a full-screen one counts — and then the area is filled with a solid colour
+instead (`LocalFrameView::fixedContainerEdges`). That check only runs under `default`;
+`black-translucent` disables it, so no CSS can save the header. Hence `AppShell`'s root is
+`fixed inset-x-0 top-0 h-dvh`, covering every page whatever its header looks like, and
+`AuthLayout` wraps its top bar in a `sticky top-0 bg-chrome` edge because those pages scroll
+the document. Under `default` the web view starts below the status bar, so
+`env(safe-area-inset-top)` is 0 in an installed app and the existing insets are harmless.
+The style is fixed at install time: existing installs keep the blur until they are removed
+and re-added. This was confirmed on an iPhone with side-by-side installed variants;
+neither half alone (`default` with an ordinary header, or `black-translucent` with a
+fixed header) removed the blur.
+
 iOS install behaviour — the "Add to Home Screen" surface and the safe-area treatment on a
 notched device — still needs a real device. No jsdom test can stand in for it: there is
 no layout engine, no safe-area inset and no service-worker runtime there.

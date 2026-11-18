@@ -426,10 +426,15 @@ export default function AppShell({
     h-dvh（dynamic viewport height）而不是 h-screen：移动浏览器里 100vh 是**最大**
     视口（地址栏收起来时的高度），页面渲染在地址栏还开着的那一帧，底部 TabBar 就
     被浏览器自己的底栏盖住。100dvh 跟着当前可视高度变，TabBar 始终在可视区内。
+
+    fixed inset-x-0 top-0：iOS 主屏幕 App 顶部有一层系统边缘模糊，WebKit 只在顶边命中
+    的元素有一个 fixed/sticky、宽度不小于视口九成的祖先时才把它换成实色（全屏的也算）。
+    各页页头形态不一（离顶 16px、没有底色、在滚动区里），由根统一担这个容器，页头就不会
+    被糊掉。根本来就不随文档滚动，钉成 fixed 不改变布局。
   */
   return (
     <MobileDrawerProvider value={{ open: openDrawer }}>
-      <div className="flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row">
+      <div className="fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row">
         {!isMobile && (
           <nav
             aria-label={t("common.appName")}

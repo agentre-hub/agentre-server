@@ -772,6 +772,22 @@ describe("外框 + 内容页", () => {
     expect(edgeClasses(topbar)).toEqual([]);
   });
 
+  // iOS 主屏幕 App 的顶部系统模糊：WebKit 在顶边往里 4px 处命中测试，沿祖先链找第一个
+  // fixed/sticky、宽度不小于视口九成的容器，找到才用实色替换模糊。各页的页头形态不一
+  // （有的离顶 16px、有的没有底色），所以由壳的根来担这个容器：全屏 fixed 也算数。
+  it("根是钉满视口的 fixed 容器，好让 iOS 把顶部的系统模糊换成实色", () => {
+    serveAll();
+    const { container } = renderShell(
+      <AppShell title="Page Title">body</AppShell>,
+    );
+
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toMatch(/(^|\s)fixed(\s|$)/);
+    expect(root.className).toContain("inset-x-0");
+    expect(root.className).toContain("top-0");
+    expect(root.className).toContain("h-dvh");
+  });
+
   it("当前导航项用抬起色，不是品牌浅底", () => {
     renderShell();
     const chat = screen.getByRole("link", { name: /^Chat/ });
