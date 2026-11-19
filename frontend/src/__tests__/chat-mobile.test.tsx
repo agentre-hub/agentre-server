@@ -393,6 +393,22 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(await screen.findByTestId("chat-empty-state")).toBeTruthy();
   });
 
+  // 共享 chip 视觉 32px、点按区靠 ::before 上下各撑 6px；它们排在横向滚动的容器里，
+  // overflow-x:auto 会把纵向溢出一起裁掉，所以容器得自己留出上下 6px（上边用负外边距
+  // 抵掉，排版与 2026-11-19 选定的 B 稿一致）。
+  it("筛选 chip 的横向滚动容器上下各留 6px，撑出来的 44px 点按区不被裁掉", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+    await screen.findByText("等你批");
+
+    const row = screen.getByTestId("filter-chip-all")
+      .parentElement as HTMLElement;
+    expect(row.className).toContain("overflow-x-auto");
+    expect(row.className).toContain("pt-1.5");
+    expect(row.className).toContain("-mt-1.5");
+    expect(row.className).toContain("pb-2.5");
+  });
+
   it("筛选清空移动列表时挂共享筛选空态，且筛选优先于账号真空态", async () => {
     stubApi([
       {

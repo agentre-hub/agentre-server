@@ -16,7 +16,8 @@ import { describe, expect, it } from "vitest";
  * - 192 与 512 图标都存在，且 src 指向的 PNG 真的在磁盘上；
  * - 没有 prefer_related_applications（它会改变安装语义）；
  * - index.html 里 manifest / apple-touch-icon / theme-color / viewport-fit 都在；
- * - 没有 user-scalable=no / maximum-scale —— 禁止缩放是这一层明确不要的东西。
+ * - index.html 里没有 user-scalable=no / maximum-scale —— Safari 标签页必须能缩放；
+ *   只有从主屏幕打开（standalone）时才由 src/lib/standaloneZoomLock.ts 在运行时禁掉。
  *
  * 文件名与语义的细节见 docs/design.md 的 PWA 小节。真正的浏览器安装行为（尤其
  * iOS 的「添加到主屏幕」）没有任何 jsdom 用例能覆盖，只能上真机。
@@ -127,7 +128,7 @@ describe("PWA 安装契约", () => {
     expect(style![1]).toBe("default");
   });
 
-  it("从不禁止缩放：没有 user-scalable=no，也没有 maximum-scale", () => {
+  it("静态 viewport 不禁止缩放：没有 user-scalable=no，也没有 maximum-scale（只在 standalone 里运行时改写）", () => {
     expect(indexHtml).not.toContain("user-scalable=no");
     expect(indexHtml).not.toContain("maximum-scale");
   });

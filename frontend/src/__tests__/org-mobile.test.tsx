@@ -428,14 +428,22 @@ describe("组织面手机形态：索引两行、摘要、chips", () => {
     expect(await screen.findByTestId("org-detail-col")).toBeTruthy();
   });
 
-  it("筛选是 chips（≥44px）：点「Needs setup」只剩待配置的人，再点恢复", async () => {
+  it("筛选是 chips（视觉 32px、点按区 44px）：点「Needs setup」只剩待配置的人，再点恢复", async () => {
     mockMobileViewport();
     renderOrgAt("/org");
     await screen.findByText("Alice");
 
     const chips = screen.getByTestId("org-index-filter-chips");
     const needs = within(chips).getByRole("button", { name: "Needs setup" });
-    expect(needs.className).toContain("min-h-11");
+    // 视觉 32px（h-8），透明 ::before 上下各撑 6px 回到 44px 的点按区；与对话首页的共享
+    // SessionFilterChips 同一口径（2026-11-19 选定的 B 稿）。
+    expect(needs.className).toContain("h-8");
+    expect(needs.className).toContain("before:-inset-y-1.5");
+    expect(needs.className).not.toContain("min-h-11");
+    // 横向滚动容器会把纵向溢出一起裁掉：容器得留出上下 6px，撑出来的点按区才不被裁；
+    // 负外边距抵掉这 6px，排版与稿子一致。
+    expect(chips.className).toContain("py-1.5");
+    expect(chips.className).toContain("-my-1.5");
     expect(needs.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(needs);
 

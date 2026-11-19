@@ -298,7 +298,9 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
         </div>
         {props.isMobile && (
           <div
-            className="-mx-2.5 flex gap-2 overflow-x-auto px-2.5"
+            // chip 的点按区靠 ::before 上下各撑 6px；横向滚动会把纵向溢出一起裁掉，所以容器
+            // 上下各留 6px，再用负外边距抵掉，排版不变。
+            className="-mx-2.5 -my-1.5 flex gap-2 overflow-x-auto px-2.5 py-1.5"
             data-testid="org-index-filter-chips"
           >
             <FilterChip
@@ -586,7 +588,9 @@ function FilterChip(props: {
       aria-pressed={props.pressed}
       onClick={props.onClick}
       className={cn(
-        "inline-flex min-h-11 shrink-0 cursor-pointer items-center rounded-full px-3.5 text-xs outline-none transition-colors focus-visible:focus-outline motion-reduce:transition-none",
+        // 视觉 32px，透明 ::before 上下各撑 6px 回到 44px 的点按区（与共享 SessionFilterChips
+        // 的触屏尺寸同一口径）；左右各 4px 补满 gap-2 的缝。
+        "relative inline-flex h-8 shrink-0 cursor-pointer items-center rounded-full px-3 text-xs outline-none transition-colors before:absolute before:-inset-x-1 before:-inset-y-1.5 focus-visible:focus-outline motion-reduce:transition-none",
         props.pressed
           ? "bg-primary-soft text-primary-text"
           : "bg-button-fill text-muted-foreground",

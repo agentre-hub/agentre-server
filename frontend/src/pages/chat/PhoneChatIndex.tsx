@@ -479,7 +479,9 @@ export function PhoneChatIndex({
             items={filterItems}
             size="touch"
             onChange={onFilterChange}
-            className="overflow-x-auto px-3 pb-1"
+            // chip 视觉 32px，点按区靠 ::before 上下各撑 6px；横向滚动会把纵向溢出一起裁掉，
+            // 所以上下各留 6px（上边用 -mt-1.5 抵掉，排版不变），撑出来的 44px 才点得到。
+            className="-mt-1.5 overflow-x-auto px-3 pt-1.5 pb-2.5"
           />
         )}
       </header>

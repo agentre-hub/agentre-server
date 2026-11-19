@@ -1086,8 +1086,15 @@ send it as `application/manifest+json` (the extension is not in Go's MIME table)
 **There is no offline data**: `sw.js` precaches only `/offline.html`, navigates
 network-first so a rolling deploy still reaches users instead of pinning a cached shell,
 caches only the content-hashed `/assets/**` files, and never touches API/JSON or the
-`/v1/` relay. **Zoom is never disabled**: `user-scalable=no` and `maximum-scale` are
-absent from the viewport. iOS's focus auto-zoom is a separate thing and is avoided by
+`/v1/` relay. **Zoom is disabled only in the installed app**: `index.html` keeps a
+zoomable viewport (no `user-scalable=no`, no `maximum-scale`), so a Safari tab and desktop
+browsers can still zoom. When the page runs as a Home Screen app (`display-mode:
+standalone`), `src/lib/standaloneZoomLock.ts` appends `maximum-scale=1, user-scalable=no`
+to the viewport, cancels WebKit's `gesturestart`/`gesturechange` (iOS ignores
+`user-scalable=no` for pinch since iOS 10) and sets `touch-action: manipulation` on the root
+to stop double-tap zoom — a 2026-11-19 product decision to make the installed app feel
+native; the trade-off is that pinch-zoom is unavailable there (the OS-level Zoom
+accessibility feature still works). iOS's focus auto-zoom is a separate thing and is avoided by
 keeping every focusable control at 16px on small screens; that floor belongs to the shared
 package (`agentre-ui` primitive `Input`/`Textarea`/`SearchInput` and the composer editor),
 because a host cannot reach into a shared component's DOM contract — this host inherits it
