@@ -438,6 +438,20 @@ describe("RelayClientPool", () => {
       pool.closeAll();
     });
 
+    // 断网后恢复（地铁、换 Wi-Fi）：此前只认 visibilitychange / pageshow，页面一直在
+    // 前台时重连要等退避攒到的 15–30 秒，页头早已撤掉「没有网络」，转录却还停着。
+    it("网络恢复（online）同样立即重连", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "reconnecting";
+
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(1);
+      pool.closeAll();
+    });
+
     it("连着的连接不动", async () => {
       const { pool, sockets } = setup();
       await pool.acquire(FP1);

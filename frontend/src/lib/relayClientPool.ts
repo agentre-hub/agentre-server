@@ -332,8 +332,9 @@ export class RelayClientPool {
   }
 
   /**
-   * 前台恢复：页面切回可见（`visibilitychange` 变可见）或 `pageshow`（含 bfcache 恢复）
-   * 时，不是 open 的连接立即重连，不等退避——后台里 socket 多半已死、定时器也被节流。
+   * 前台恢复：页面切回可见（`visibilitychange` 变可见）、`pageshow`（含 bfcache 恢复）
+   * 或网络恢复（`online`）时，不是 open 的连接立即重连，不等退避——后台里 socket 多半
+   * 已死、定时器也被节流；断网期间攒下的退避则能长到 15–30 秒。
    * 各通道在新 socket 上走原有的 onOpen 补齐路径；已连着的连接不动。
    * 只在连接建出来时装一次，`closeAll` 时拆掉。
    */
@@ -358,9 +359,11 @@ export class RelayClientPool {
     };
     document.addEventListener("visibilitychange", onForeground);
     window.addEventListener("pageshow", onForeground);
+    window.addEventListener("online", onForeground);
     this.stopForegroundWatch = () => {
       document.removeEventListener("visibilitychange", onForeground);
       window.removeEventListener("pageshow", onForeground);
+      window.removeEventListener("online", onForeground);
     };
   }
 

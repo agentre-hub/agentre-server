@@ -257,7 +257,10 @@ export default function SessionComposerBand({
     <div
       data-testid="session-composer-band"
       data-scrolled={atBottom ? "false" : "true"}
-      className="relative shrink-0 px-5 pt-2 pb-3"
+      // 底部 12px 并进安全区：手机沉浸页的壳已在主区底部让出 home indicator 那条，
+      // 再叠一份 pb-3 输入框就浮在离底 46px 处。没有安全区（桌面、无刘海）时 env()
+      // 为 0，仍是 12px。
+      className="relative shrink-0 px-5 pt-2 pb-[max(0px,calc(0.75rem_-_env(safe-area-inset-bottom,0px)))]"
     >
       {atBottom ? null : (
         <div

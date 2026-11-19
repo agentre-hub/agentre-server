@@ -2,6 +2,7 @@ import type {
   ScopeAgentGroup,
   ScopeAgentItem,
   ScopeListProjectNode,
+  ScopeListProps,
   ScopeMachineItem,
   ScopeValue,
 } from "@agentre-hub/agentre-ui";
@@ -29,6 +30,8 @@ import type { PhoneScope } from "@/pages/chat/phoneScope";
 export interface ScopeTally {
   /** 键 = 同步标识 / 设备标识（字符串）。 */
   project: Map<string, ItemTally>;
+  /** 不属于任何项目的行（随手对话）。 */
+  unassigned: ItemTally;
   agent: Map<string, ItemTally>;
   machine: Map<string, ItemTally>;
 }
@@ -49,12 +52,19 @@ function bump(map: Map<string, ItemTally>, key: string, waiting: boolean) {
 export function tallyRows(rows: readonly MirrorIndexRow[]): ScopeTally {
   const tally: ScopeTally = {
     project: new Map(),
+    unassigned: { count: 0, needsYou: false },
     agent: new Map(),
     machine: new Map(),
   };
   for (const row of rows) {
     const waiting = toAgentStatus(row) === "waiting";
     bump(tally.project, row.projectSyncId, waiting);
+    if (!row.projectSyncId) {
+      tally.unassigned = {
+        count: tally.unassigned.count + 1,
+        needsYou: tally.unassigned.needsYou || waiting,
+      };
+    }
     bump(tally.agent, row.agentSyncId, waiting);
     if (row.deviceId !== undefined) {
       bump(tally.machine, String(row.deviceId), waiting);
@@ -104,6 +114,16 @@ export function buildScopeProjects(
   return (byParent.get("") ?? [])
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((root) => build(root, new Set()));
+}
+
+/**
+ * 项目档末尾那一行「随手对话」。数不出来时照样摆这一行（它是一条正当的去处），
+ * 只是不带数——与项目行同一个口径。
+ */
+export function buildScopeUnassigned(
+  tally: ScopeTally | null,
+): NonNullable<ScopeListProps["unassignedProject"]> {
+  return tally ? { ...tally.unassigned } : {};
 }
 
 /** 弹层吃的 Agent 身份：名单端点已经带着部门名与执行目标。 */
@@ -173,6 +193,8 @@ export function scopeValueOf(scope: PhoneScope): ScopeValue {
   switch (scope.kind) {
     case "project":
       return { kind: "project", id: scope.projectSyncId };
+    case "unassigned":
+      return { kind: "unassignedProject" };
     case "agent":
       return { kind: "agent", id: scope.agentSyncId };
     case "machine":
@@ -190,13 +212,12 @@ export function phoneScopeOf(value: ScopeValue): PhoneScope {
   switch (value.kind) {
     case "project":
       return { kind: "project", projectSyncId: value.id };
+    case "unassignedProject":
+      return { kind: "unassigned" };
     case "agent":
       return { kind: "agent", agentSyncId: value.id };
     case "machine":
       return { kind: "machine", deviceId: Number(value.id) };
-    // 共享包的「随手对话」行只在宿主给 unassignedProject 时才摆；本站手机清单不给，
-    // 页面范围也没有这一档。真被选到（包改了默认）就落回「全部」，不编一个范围。
-    case "unassignedProject":
     case "all":
       return { kind: "all" };
   }

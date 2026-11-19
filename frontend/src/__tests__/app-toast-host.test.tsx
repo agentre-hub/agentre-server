@@ -20,21 +20,52 @@ it("Given a shared UI action emits feedback, When App is mounted, Then the user 
 });
 
 /**
- * 手机上没有底栏了（规格 2026-11-05：底部 tab 换成左抽屉），toast 不必再让开那
- * 74px —— 仍旧让开的话，它会悬在屏幕中段、离底边一大截。贴底只留呼吸空间与安全区。
+ * 手机上 toast 落在**顶部**（2026-11-19 手机形态排查）。
+ *
+ * 贴底时它恰好盖在输入框上：复制成功 / 发送失败这几条要挂 5–7 秒，这期间输入框和
+ * 发送 / 停止键都点不到，而那正是这一屏的主操作。顶部让开状态栏那条安全区。
  */
-it("移动端:toast 只让开安全区,不再为已不存在的底栏让位", async () => {
+const originalMatchMedia = window.matchMedia;
+afterEach(() => {
+  window.matchMedia = originalMatchMedia;
+});
+
+function mockMobileViewport() {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes("max-width: 767px"),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+}
+
+it("移动端:toast 落在顶部、让开状态栏安全区,不压在输入框上", async () => {
+  mockMobileViewport();
   window.history.replaceState({}, "", "/terms");
   render(<App />, { wrapper: ThemeProvider });
   toast.success("saved");
   await screen.findByText("saved");
 
-  const host = document.querySelector("[data-sonner-toaster]");
-  expect(host).toBeTruthy();
-  // sonner 把 mobileOffset 落成 --mobile-offset-bottom 这个自定义属性。
-  const offset = (host as HTMLElement).style.getPropertyValue(
-    "--mobile-offset-bottom",
-  );
-  expect(offset).not.toContain("74px");
-  expect(offset).toContain("safe-area-inset-bottom");
+  const list = document.querySelector("[data-sonner-toaster]");
+  expect(list).toBeTruthy();
+  expect(list?.getAttribute("data-y-position")).toBe("top");
+  // sonner 把 mobileOffset 落成 --mobile-offset-top 这个自定义属性。
+  expect(
+    (list as HTMLElement).style.getPropertyValue("--mobile-offset-top"),
+  ).toContain("safe-area-inset-top");
+});
+
+it("桌面:toast 仍在右下角", async () => {
+  window.history.replaceState({}, "", "/terms");
+  render(<App />, { wrapper: ThemeProvider });
+  toast.success("desk");
+  await screen.findByText("desk");
+
+  const list = document.querySelector("[data-sonner-toaster]");
+  expect(list?.getAttribute("data-y-position")).toBe("bottom");
+  expect(list?.getAttribute("data-x-position")).toBe("right");
 });
