@@ -28,6 +28,13 @@ function binaryPayload(data: unknown): Uint8Array {
   throw new TypeError("relay: 中继帧必须是二进制");
 }
 
+/** 页面此刻对用户可见吗。没有 document（非浏览器）时按可见算。 */
+function pageVisible(): boolean {
+  return (
+    typeof document === "undefined" || document.visibilityState !== "hidden"
+  );
+}
+
 export type RelayState =
   "connecting" | "connected" | "disconnected" | "reconnecting";
 
@@ -138,6 +145,13 @@ export class RelayConnection {
   private failures = 0;
   /** 当前这条 socket 是什么时候连上的；没连上时为 null。见 stableConnectionMs。 */
   private connectedAt: number | null = null;
+  /**
+   * 可见时意外断线那一次「不等退避」的重拨还能不能用（决策 2）。
+   *
+   * 只能用一次：连上就断的循环里每次都立即重拨，就是对着一个不健康的服务端猛拨。
+   * 用掉之后要等一条连接活满 stableConnectionMs（或一次全新的 reconnect）才再给。
+   */
+  private quickRedial = true;
 
   constructor(opts: RelayConnectionOptions) {
     this.opts = { reconnect: true, reconnectDelayMs: 1000, ...opts };
@@ -205,8 +219,10 @@ export class RelayConnection {
    */
   async reconnect(): Promise<void> {
     // 人点的「重新连接」是一次全新的尝试：不该继承上一轮攒下来的退让，否则紧接着
-    // 的一次失败要等满累积的那个时长才会再试。
+    // 的一次失败要等满累积的那个时长才会再试。它换出去的那条连上之后再意外断开，
+    // 同样配得上一次立即重拨。
     this.failures = 0;
+    this.quickRedial = true;
     const generation = this.closeGeneration;
     if (this.opts.refreshCredentials) {
       const credentials = await this.opts.refreshCredentials();
@@ -217,6 +233,8 @@ export class RelayConnection {
     const superseded = this.ws;
     this.ws = null;
     this.connectPromise = null;
+    // 「连上过」说的是被顶替的那条：新这条拨不通时不能被当成「连上后意外断开」。
+    this.connectedAt = null;
     this.redial.cancel();
     for (const channel of this.channels.values()) channel.declared = false;
     // 先摘掉再关：那条被顶替的 socket 的 onclose 已经不属于当前连接，不会再跑收尾。
@@ -333,11 +351,14 @@ export class RelayConnection {
   private handleClose(): void {
     // 「连上过」不等于「连成功过」：活够 stableConnectionMs 才算，退让计数这时才归零。
     const stableMs = this.opts.stableConnectionMs ?? 10_000;
+    // 没连上就关了的是一次拨号失败，不是「意外断线」：它照旧退避。
+    const wasOpen = this.connectedAt !== null;
     if (
       this.connectedAt !== null &&
       Date.now() - this.connectedAt >= stableMs
     ) {
       this.failures = 0;
+      this.quickRedial = true;
     }
     this.connectedAt = null;
     for (const channel of this.channels.values()) channel.declared = false;
@@ -350,6 +371,16 @@ export class RelayConnection {
     }
     this.setState("reconnecting");
     if (this.redial.pending) return;
+    // 页面可见时意外断线：用户正看着，第一次重拨不等退避（决策 2）。不动失败计数，
+    // 这一次若又没成，接下来就是今天那条阶梯。后台里断的照旧退避——回到前台时由
+    // 池子换连接（RelayClientPool.watchForeground）。
+    if (wasOpen && this.quickRedial && pageVisible()) {
+      this.quickRedial = false;
+      this.redial.schedule(0, () => {
+        void this.redialOnce();
+      });
+      return;
+    }
     // 指数退让并封顶：这条连接**登录期间常驻**（信号通道是永不释放的使用方），
     // 所以连不上的时候它会一直重试下去。固定 1 秒的重试等于对着一个够不着的
     // 服务端每秒拨一次，直到标签页关掉。形状（含抖动）见 relayBackoff。

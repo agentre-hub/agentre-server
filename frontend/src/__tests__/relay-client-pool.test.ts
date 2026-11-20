@@ -24,8 +24,19 @@ class FakeConnection {
     this.connects++;
     return Promise.resolve();
   }
+  /** 置 true 时 reconnect 挂起，由 settleReconnect 落定：用来看「换连接在途」那一段。 */
+  holdReconnect = false;
+  private settle: ((err?: Error) => void) | null = null;
   async reconnect(): Promise<void> {
     this.reconnects++;
+    if (!this.holdReconnect) return;
+    await new Promise<void>((resolve, reject) => {
+      this.settle = (err) => (err ? reject(err) : resolve());
+    });
+  }
+  settleReconnect(err?: Error): void {
+    this.settle?.(err);
+    this.settle = null;
   }
   close(): void {
     this.closed++;
@@ -398,8 +409,9 @@ describe("RelayClientPool", () => {
 
   /*
     前台恢复：手机把页面切到后台后 socket 多半已死、退避计时器也被节流。回到前台
-    （visibilitychange 可见 / pageshow，含 bfcache 恢复）时，不是 open 的连接立即重连，
-    各通道在新 socket 上走原有的补齐路径；open 的不动；两个事件同到只重连一次。
+    （visibilitychange 可见 / pageshow，含 bfcache 恢复 / online）时，不是 open 的连接
+    立即重连，各通道在新 socket 上走原有的补齐路径；没进过后台（或不足 5 秒）时 open
+    的不动；两个事件同到只重连一次。
   */
   describe("前台恢复", () => {
     const setVisibility = (state: "visible" | "hidden") =>
@@ -488,6 +500,159 @@ describe("RelayClientPool", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(sockets[0].reconnects).toBe(1);
+      pool.closeAll();
+    });
+
+    /*
+      决策 1：回到前台按「在后台待了多久」判连接死活。iOS 后台断连是常态，而浏览器发
+      不了 WebSocket ping——一条自称 connected 的 socket 可能早已死掉，等它自己报关闭
+      最多要 45 秒。所以隐藏满 5 秒回来一律换新连接，不足 5 秒才信它。
+    */
+    const hideFor = async (ms: number) => {
+      setVisibility("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+
+    it.each([
+      ["visibilitychange", () => becomeVisible()],
+      [
+        "pageshow",
+        () => {
+          setVisibility("visible");
+          window.dispatchEvent(new Event("pageshow"));
+        },
+      ],
+      [
+        "online",
+        () => {
+          setVisibility("visible");
+          window.dispatchEvent(new Event("online"));
+        },
+      ],
+    ])(
+      "隐藏满 5 秒后经 %s 回来：自称连着的连接也换新",
+      async (_name, comeBack) => {
+        const { pool, sockets } = setup();
+        await pool.acquire(FP1);
+        sockets[0].state = "connected";
+
+        await hideFor(5_000);
+        comeBack();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(sockets[0].reconnects).toBe(1);
+        pool.closeAll();
+      },
+    );
+
+    it("隐藏不足 5 秒回来：连着的连接不动", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "connected";
+
+      await hideFor(4_999);
+      becomeVisible();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(0);
+      pool.closeAll();
+    });
+
+    it("隐藏满 5 秒回来时 visibilitychange 与 pageshow 接连到达只换一次", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "connected";
+
+      await hideFor(6_000);
+      becomeVisible();
+      window.dispatchEvent(new Event("pageshow"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(1);
+      pool.closeAll();
+    });
+
+    it("连接建起来时页面就在后台：那段时长同样算数", async () => {
+      setVisibility("hidden");
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "connected";
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      becomeVisible();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(1);
+      pool.closeAll();
+    });
+
+    /*
+      isResuming 给账号通道用（决策 4）：有换连接在途时，它那次「切回可见」的全页
+      刷新让给「重连成功」那次。账号通道的 visibilitychange 监听装得比池子早，会先
+      跑——所以页面一变可见、池子还没处理那个事件时，它就得答 true。
+    */
+    it("isResuming：从判定要换连接起为真，直到新连接连上", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "connected";
+      sockets[0].holdReconnect = true;
+      expect(pool.isResuming()).toBe(false);
+
+      await hideFor(5_000);
+      expect(pool.isResuming()).toBe(false);
+      // 页面已可见、池子的监听者还没跑：此刻问也要答 true。
+      setVisibility("visible");
+      expect(pool.isResuming()).toBe(true);
+
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sockets[0].reconnects).toBe(1);
+      expect(pool.isResuming()).toBe(true);
+
+      sockets[0].settleReconnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pool.isResuming()).toBe(false);
+      pool.closeAll();
+    });
+
+    it("isResuming：新连接建不起来同样落回 false", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "connected";
+      sockets[0].holdReconnect = true;
+
+      await hideFor(5_000);
+      becomeVisible();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pool.isResuming()).toBe(true);
+
+      sockets[0].settleReconnect(new Error("ticket"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pool.isResuming()).toBe(false);
+      pool.closeAll();
+    });
+
+    it("isResuming：隐藏不足 5 秒、连接连着时为 false", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "connected";
+
+      await hideFor(1_000);
+      setVisibility("visible");
+      expect(pool.isResuming()).toBe(false);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(pool.isResuming()).toBe(false);
+      pool.closeAll();
+    });
+
+    // 页面一直可见、连接只是在照常退避重连：那不是一次「回到前台」，不能借它答 true。
+    it("isResuming：一直可见时普通的退避重连不算", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "reconnecting";
+
+      expect(pool.isResuming()).toBe(false);
       pool.closeAll();
     });
 

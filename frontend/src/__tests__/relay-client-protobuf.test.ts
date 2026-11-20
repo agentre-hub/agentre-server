@@ -1003,6 +1003,17 @@ describe("RelayClient 请求超时", () => {
  *  2. 没有抖动。所有标签页看到的是同一次故障，会整整齐齐地同时回来。
  */
 describe("RelayConnection 的重连退让", () => {
+  const setVisibility = (state: "visible" | "hidden") =>
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => state,
+    });
+
+  afterEach(() => {
+    setVisibility("visible");
+    vi.restoreAllMocks();
+  });
+
   function connectionWithSockets(): {
     sockets: BinarySocket[];
     delays: number[];
@@ -1040,7 +1051,9 @@ describe("RelayConnection 的重连退让", () => {
     };
   }
 
+  // 退让本身的纪律在后台时看得最清楚：可见时的第一次重拨不等退避（决策 2），见下面那几条。
   it("连上之后立刻被断开不算一次成功，退让继续增长", async () => {
+    setVisibility("hidden");
     const { sockets, delays, fire, connection } = connectionWithSockets();
     const connecting = connection.connect();
     sockets[0].open();
@@ -1062,6 +1075,7 @@ describe("RelayConnection 的重连退让", () => {
   });
 
   it("退让带抖动，不是一个所有标签页共用的定值", async () => {
+    setVisibility("hidden");
     const { sockets, delays, connection } = connectionWithSockets();
     const connecting = connection.connect();
     sockets[0].open();
@@ -1070,6 +1084,113 @@ describe("RelayConnection 的重连退让", () => {
     sockets[0].close();
     // 半幅抖动：random=0 取下界。定值实现在这里会给出 1000。
     expect(delays).toEqual([500]);
+    connection.close();
+  });
+
+  /*
+    决策 2：页面可见时意外断线，第一次重拨不等退避；之后失败照旧退避。退避是为了
+    不在服务端出问题时猛拨，可见时那一次立即重试不改变这个性质——但只能是「一次」：
+    连上就断的循环里每次都立即重拨，就成了每秒猛拨。
+  */
+  const settle = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it("可见时意外断线：第一次重拨不等退避，之后拨不通照旧退避", async () => {
+    const { sockets, delays, fire, connection } = connectionWithSockets();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+
+    sockets[0].close();
+    expect(delays).toEqual([0]);
+
+    // 重拨出去没连上（还没 open 就关了）：从这里起与今天的退避同一条阶梯。
+    fire();
+    await settle();
+    sockets[1].close();
+    expect(delays).toEqual([0, 1000]);
+
+    fire();
+    await settle();
+    sockets[2].close();
+    expect(delays).toEqual([0, 1000, 2000]);
+    connection.close();
+  });
+
+  it("可见时连上就断的循环：只有第一次立即重拨", async () => {
+    const { sockets, delays, fire, connection } = connectionWithSockets();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+    sockets[0].close();
+
+    fire();
+    await settle();
+    sockets[1].open();
+    await settle();
+    sockets[1].close();
+
+    fire();
+    await settle();
+    sockets[2].open();
+    await settle();
+    sockets[2].close();
+
+    expect(delays).toEqual([0, 1000, 2000]);
+    connection.close();
+  });
+
+  it("稳定过的连接再断：又能立即重拨一次", async () => {
+    const { sockets, delays, fire, connection } = connectionWithSockets();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+    sockets[0].close();
+
+    fire();
+    await settle();
+    sockets[1].open();
+    await settle();
+    sockets[1].close();
+    expect(delays).toEqual([0, 1000]);
+
+    // 这一条活满了「稳定」的门槛才断。
+    connection["opts"].stableConnectionMs = 0;
+    fire();
+    await settle();
+    sockets[2].open();
+    await settle();
+    sockets[2].close();
+    expect(delays).toEqual([0, 1000, 0]);
+    connection.close();
+  });
+
+  it("隐藏时断线照旧退避：回到前台由池子换连接", async () => {
+    setVisibility("hidden");
+    const { sockets, delays, connection } = connectionWithSockets();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+
+    sockets[0].close();
+    expect(delays).toEqual([1000]);
+    connection.close();
+  });
+
+  // 换连接（前台恢复 / 人点「重新连接」）本身就是那一次不等的拨号：新连接建不起来
+  // 按现有退避重试，而不是再立即补拨一次。
+  it("reconnect 换出去的新连接拨不通：照旧退避", async () => {
+    const { sockets, delays, connection } = connectionWithSockets();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+
+    void connection.reconnect();
+    await settle();
+    sockets[1].close();
+    expect(delays).toEqual([1000]);
     connection.close();
   });
 });
