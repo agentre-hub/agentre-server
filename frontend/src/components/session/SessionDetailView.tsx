@@ -1739,6 +1739,11 @@ export default function SessionDetailView({
       },
     ];
   }, [messages, send.sendingMessage, sendingShown]);
+  /**
+   * 停止键只在这一轮被对端接下之后给（发出即见那一段里「在跑」是提前亮的，那时
+   * 还没有一轮可停）。头部与输入框提交位两处同一个判据。
+   */
+  const offeredStop = send.awaitingRun ? undefined : onStop;
 
   /*
     轮末插话的去向。它要 `send.sendMessage`，所以只能排在这里（发送那一族之后）；
@@ -2144,7 +2149,7 @@ export default function SessionDetailView({
       // **落定**时各取一份，轮次进行中它说的是上一次落定时的事。
       running={running}
       decisionPending={decisionPending}
-      onStop={onStop}
+      onStop={offeredStop}
       stopping={turnStop.stopping}
       model={fallbackModel}
       onDelete={onDelete}
@@ -2231,7 +2236,7 @@ export default function SessionDetailView({
       }}
       running={running}
       // 连不上时停止请求发不出去：头部那颗禁用，这一颗（共享输入框没有禁用档）不摆。
-      onStop={stopReachable(status) ? onStop : undefined}
+      onStop={stopReachable(status) ? offeredStop : undefined}
       stopping={turnStop.stopping}
       permissionMode={effectivePermissionMode}
       permissionModeMeta={permissionModeMeta}

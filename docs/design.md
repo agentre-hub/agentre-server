@@ -831,7 +831,8 @@ bottom 888).
   counts as closed. Desktop keeps the 420px right column and adds no history entries.
   A message you just sent is in the transcript at once, before `runtime.run` answers: its
   row is drawn by `PendingSendBubble state="sending"` (through `Transcript`'s
-  `sendingRow`), the typing dots follow it and the header turns Running. The machine's
+  `sendingRow`), the typing dots follow it and the header turns Running; Stop is offered
+only once `runtime.run` answers, since before that there is no turn to stop. The machine's
   `user_message` echo takes the same row, so the message keeps its place and is never shown twice; a
   failed send turns it into the failure bubble and withdraws the dots and Running. That
   bubble and the queued one use the real user message's alignment: the end side on a

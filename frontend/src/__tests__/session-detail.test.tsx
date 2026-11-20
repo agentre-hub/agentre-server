@@ -881,7 +881,7 @@ describe("会话详情页", () => {
     });
   });
 
-  it("发送在途：那句话以「发送中」立刻出现，输入框不再整块禁用", async () => {
+  it("发送在途：那句话以「发送中」立刻出现，提交键转成 spinner，输入框不再整块禁用", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
       throw new Error("unexpected: " + path);
@@ -901,10 +901,11 @@ describe("会话详情页", () => {
 
     // 这段窗口里 daemon 的 user_message 回声还没回来。此前 sending 被折进 disabled：
     // 输入框被清空并整块禁用，屏幕上一个字都没有他刚说的话。现在（弱网决策 12）
-    // 那句话立刻以「发送中」站在转录里，这一轮也立刻算在跑 —— 提交位让给「停止」，
-    // 与真在跑时一样；输入框照旧不整块禁用。
+    // 那句话立刻以「发送中」站在转录里；run 还没应答、没有一轮可停，提交位仍是
+    // spinner；输入框照旧不整块禁用。
     const bubble = await screen.findByTestId("send-sending");
     expect(within(bubble).getByText("把按钮改成蓝色")).toBeTruthy();
+    expect(screen.getByLabelText("Sending…")).toBeTruthy();
     expect(composerDisabled()).toBe(false);
   });
 
@@ -10290,6 +10291,27 @@ describe("会话详情：发出即见（弱网决策 12）", () => {
     expect(statusText()).toContain("Running");
 
     await act(async () => run.resolve({}));
+  });
+
+  // 「停止」要停的是一轮**已经存在**的 turn：run 应答之前那一轮还没被对端接下，
+  // 停止键在那段窗口里没有东西可停。三点与 Running 照旧立刻亮（那是「发出去了」的
+  // 回执），停止键等 run 应答才给。
+  it("Given 发送中 When run 还没应答 Then 停止键还不给，应答之后才出现", async () => {
+    const run = deferred();
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return run.promise;
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+    await screen.findByTestId("send-sending");
+    expect(statusText()).toContain("Running");
+    expect(screen.queryByTestId("session-detail-stop")).toBeNull();
+
+    await act(async () => run.resolve({}));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-stop")).toBeTruthy(),
+    );
   });
 
   it("Given 发送中 When 回声到达 Then 换成正式那条：同一格、只有一条，三点还在", async () => {

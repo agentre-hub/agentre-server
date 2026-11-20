@@ -212,6 +212,8 @@ export interface SessionSendParams {
 export interface SendingMessage extends ChatComposerSubmit {
   /** 发送那一刻转录画到的 seq。seq 比它大的 `user_message` 帧才是这一条的回声。 */
   afterSeq: number;
+  /** runtime.run 已经应答：这一轮被对端接下了。在此之前没有一轮可停。 */
+  acknowledged: boolean;
 }
 
 /** 详情视图从这一族拿到的东西。 */
@@ -222,6 +224,11 @@ export interface SessionSend {
   pendingSend: ChatComposerSubmit | null;
   /** 已经发出去、回声还没到的那一条（弱网决策 12）。 */
   sendingMessage: SendingMessage | null;
+  /**
+   * 「在跑」已经提前亮了，但 runtime.run 还没应答 —— 这一轮还没被对端接下。停止键
+   * 据此先不给：此刻没有一轮可停。
+   */
+  awaitingRun: boolean;
   /** 用户自己撤掉排着的那一条。 */
   cancelPendingSend: () => void;
   /** 没发出去的那些消息（决策 7）。 */
@@ -454,13 +461,19 @@ export function useSessionSend({
       一份，此前它是灭的（`running` 为假才走到这一支）。
      */
     if (!running) {
-      setSendingMessage({ ...message, afterSeq: transcriptSeq() });
+      setSendingMessage({
+        ...message,
+        afterSeq: transcriptSeq(),
+        acknowledged: false,
+      });
       markTurnActive(true);
       setPendingAssistant(true);
     }
     try {
       await (running ? steerTurn(c, body) : startTurn(c, message));
       noteStarted(!running);
+      if (!running && stillHere())
+        setSendingMessage((prev) => prev && { ...prev, acknowledged: true });
       return;
     } catch (err) {
       if (!running && stillHere()) {
@@ -729,6 +742,7 @@ export function useSessionSend({
     sending,
     pendingSend,
     sendingMessage,
+    awaitingRun: sendingMessage !== null && !sendingMessage.acknowledged,
     cancelPendingSend,
     failedSends,
     sendMessage,
