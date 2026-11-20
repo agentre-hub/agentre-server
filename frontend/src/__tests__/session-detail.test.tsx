@@ -7548,7 +7548,11 @@ describe("会话详情：输入框那一带的三种形态", () => {
   });
 
   it("内容到齐之后骨架就撤走,也不再报 busy", async () => {
+    // 镜像那一趟晚一拍才答（这里以失败收场）：清单与转录并行之后，标题由清单先画出来，
+    // 骨架要等转录这一边落定才撤。断言「标题出来的那一刻骨架已经没了」是在赌两条来路的
+    // 先后，CI 上偶发红过；这里把先后摆明，等骨架真的撤走。
     mockedApi.mockImplementation(async (path: string) => {
+      await new Promise((r) => setTimeout(r, 50));
       if (path === "/v1/devices") return { devices: [deviceRow] };
       throw new Error("unexpected: " + path);
     });
@@ -7560,7 +7564,9 @@ describe("会话详情：输入框那一带的三种形态", () => {
     });
     renderPage();
     await screen.findByText(/重构登录页/);
-    expect(screen.queryByTestId("transcript-skeleton")).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByTestId("transcript-skeleton")).toBeNull(),
+    );
     expect(
       screen.getByTestId("session-detail-scroll").getAttribute("aria-busy"),
     ).not.toBe("true");
