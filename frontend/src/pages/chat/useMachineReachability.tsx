@@ -390,16 +390,6 @@ export function useMachineReachability({
     setMachineState((prev) =>
       prev[fp] === state ? prev : { ...prev, [fp]: state },
     );
-    if (state === "connecting") {
-      // 清单只属于交出它时的搜索/筛选范围。新范围开始后先撤下旧清单；否则
-      // running -> unread 等待期间仍会把上一范围的行画在新 chip 下。
-      setResolved((prev) => {
-        if (!prev[fp]) return prev;
-        const next = { ...prev };
-        delete next[fp];
-        return next;
-      });
-    }
   }, []);
 
   /**

@@ -84,6 +84,16 @@ export type SaveFailure = {
     }
 );
 
+/**
+ * 一个范围（轴 + scope + 搜索词 + 筛选）上一次取回来的结果，按范围键存在本页内存里
+ * （决策 6）：切回看过的组合时先摆它，同时后台静默重取。只存第一页——翻页出来的
+ * 那几页属于那一次浏览，不属于这个范围。
+ */
+interface RangeSnapshot {
+  groups: IndexGroupPayload[];
+  unreadTotal: number;
+}
+
 /** 「对话」页与索引数据层之间的全部契约。 */
 export interface SessionIndexData {
   /** 服务端按当前轴给的组骨架（不带 scope 那一次的应答）。 */
@@ -96,8 +106,20 @@ export interface SessionIndexData {
   unreadTotal: number;
   /** 这一次取数成功过没有。 */
   loaded: boolean;
-  /** 当前范围的账号镜像尚未完成；旧范围不能参与机器快照 reconciliation。 */
+  /**
+   * 当前范围这一遍的取数还没落地；旧范围不能参与机器快照 reconciliation。
+   *
+   * 它为真时手上的行可能是两种之一：本页看过这一组合时的那份缓存（照常显示，见
+   * `refreshing`），或者上一范围留下的旧行。
+   */
   rangePending: boolean;
+  /**
+   * 换了范围、新的还没回来，手上摆的是**上一范围**的旧行（弱网规格 2026-11-20
+   * 决策 5）：它们留在原位变淡、列表 aria-busy、筛选条下出进度条，新数据到了整体
+   * 替换。本页看过的组合不算（直接显示缓存）；新范围失败了也不算（旧行恢复正常，
+   * 由失败横幅说，决策 7）。机器轴恒为假：那一档的行来自机器快照，另有一套呈现。
+   */
+  refreshing: boolean;
   /** 这一次取数的错。设备名单那一路取数失败也落在同一条横幅上，因此可写。 */
   loadError: unknown;
   setLoadError: (err: unknown) => void;
@@ -244,7 +266,32 @@ export function useSessionIndex({
   // 搜索词：真实过滤索引里的行，不是假交互。
   const [searchQuery, setSearchQuery] = useState("");
 
-  const refetch = useCallback(() => setIndexNonce((n) => n + 1), []);
+  /**
+   * 每个范围上一次的结果（决策 6）。只活在这一页的内存里，不落手机存储。
+   * 放 state 而不是 ref：切回看过的范围时渲染就要读它。
+   */
+  const [rangeCache, setRangeCache] = useState<Map<string, RangeSnapshot>>(
+    () => new Map(),
+  );
+
+  /**
+   * 这一范围有一轮取数在飞，以及它在飞期间有没有人要过重取。
+   *
+   * 重取（镜像变更的信号、回前台补齐、横幅上的重试）**不作废**在飞的那一轮（弱网
+   * 规格 2026-11-20 决策 4）：此前它直接加 indexNonce，effect 的依赖一变那一轮当场
+   * 作废、再重发一遍。信号在一轮对话跑着时一秒一条，弱网下一轮往返比一秒长，列表
+   * 于是可能永远落不了地。现在在飞期间的重取只记一笔，那一轮回来后补取**一次**。
+   * 换范围照旧作废旧的那一轮——问的已经是另一批了。
+   */
+  const roundInFlightRef = useRef(false);
+  const followUpRef = useRef(false);
+  const refetch = useCallback(() => {
+    if (roundInFlightRef.current) {
+      followUpRef.current = true;
+      return;
+    }
+    setIndexNonce((n) => n + 1);
+  }, []);
 
   // 这一页是最容易撞见「没实时同步」的地方：索引此前只在范围（轴 / 搜索 / 筛选）
   // 变化或本端派发之后才重取，别的端跑出来的新消息一律要刷新整页才看得到。
@@ -252,9 +299,7 @@ export function useSessionIndex({
   // 三份数据各订各的那一类。重取走 indexNonce 而不是另开一条取数路径：范围、分页
   // 游标、乐观增删那一整套状态都挂在那一个 effect 上（见下面 rangeParams 那一带），
   // 绕开它重取会把它们各复制一份。
-  useAccountChannel([AccountChannelMirrorChanged], () => {
-    setIndexNonce((n) => n + 1);
-  });
+  useAccountChannel([AccountChannelMirrorChanged], refetch);
 
   /**
    * 搜索词打字时不逐个字符去问服务端：**范围一变位置就得回到起点**，每敲一下都
@@ -308,6 +353,16 @@ export function useSessionIndex({
   // 新控件会短暂配上旧行，A→B→A 也可能被 B 留下的布尔状态永久卡住。
   const rangePending = appliedRangeKey !== rangeKey;
   const visibleLoadError = loadErrorRangeKey === rangeKey ? loadError : null;
+  // 切回本页看过的组合：这一遍落地之前先摆上一次的结果（决策 6）。机器轴不用它，
+  // 那一档的行等这一遍的镜像落地后才与机器快照对账，行为保持原样。
+  const cached =
+    rangePending && axis !== "machine" ? rangeCache.get(rangeKey) : undefined;
+  const refreshing =
+    rangePending &&
+    axis !== "machine" &&
+    cached === undefined &&
+    loaded &&
+    visibleLoadError === null;
   /**
    * 在这一范围里往下翻过没有。只有翻过的才需要护住游标 —— 没翻过时「还有没有
    * 下一页」本来就该以这一遍第一页的说法为准，护着一个旧游标只会留下一颗翻出
@@ -326,6 +381,17 @@ export function useSessionIndex({
 
   useAliveEffect(
     (alive) => {
+      // 这一轮起跑：它之前攒下的重取由它自己回答，不再另补一次。
+      roundInFlightRef.current = true;
+      followUpRef.current = false;
+      /** 这一轮落地（成功或失败）：在飞期间有人要过重取的话，现在补取一次。 */
+      const settleRound = () => {
+        roundInFlightRef.current = false;
+        if (followUpRef.current) {
+          followUpRef.current = false;
+          setIndexNonce((n) => n + 1);
+        }
+      };
       // 「未读」那个数要的是完整集合上的真数，因此单独问一次：它跟当前选中哪个
       // chip 无关，本地在已加载的行里数只会随滚动往上爬。
       // 收了 scope 时数的是那一组里的未读（端点要求 axis 与 scope 相符）。
@@ -453,23 +519,40 @@ export function useSessionIndex({
           // （设备页的 applyList 早就是这么写的）。
           setLoadError(null);
           setLoadErrorRangeKey(null);
+          setRangeCache((prev) =>
+            new Map(prev).set(rangeKey, {
+              groups,
+              unreadTotal: unread.total ?? 0,
+            }),
+          );
+          settleRound();
         })
         .catch((e: unknown) => {
           if (!alive()) return;
+          // 新范围没取回来时**不清**服务端给过的旧行（决策 7）：清掉之后用户既看不到
+          // 旧的也看不到新的。旧行恢复正常显示（refreshing 随错误落下），由失败横幅说。
+          //
+          // 但上一范围的翻页那一套不跟过来：游标与「下一页失败」的重试指的都是旧
+          // 范围，挂在新控件下就是一颗翻错范围（或根本没有游标）的死重试。还没被
+          // 服务端吸收的乐观保存行同理——它是「上一范围多出这一条」，不是旧行。
+          //
+          // 机器轴照旧整份清掉：那一档不摆旧行（行来自机器快照），上一范围的镜像组
+          // 只会被拿去配这一档的组计数。
           if (appliedRangeRef.current !== rangeKey) {
-            // 新范围没能成为已应用范围：旧组、旧追加页和旧游标都不能挂在新控件下。
-            // 同范围的后台刷新失败不走这里，用户正在看的稳定结果仍然保留。
-            setIndexGroups([]);
-            setAppended([]);
             setNextCursor(null);
             setLoadMoreFailed(false);
             pagedRef.current = false;
             setOptimisticSaved([]);
-            setOptimisticRemoved([]);
-            setOptimisticRead(new Map());
+            if (axis === "machine") {
+              setIndexGroups([]);
+              setAppended([]);
+              setOptimisticRemoved([]);
+              setOptimisticRead(new Map());
+            }
           }
           setLoadErrorRangeKey(rangeKey);
           setLoadError(e);
+          settleRound();
         });
     },
     [
@@ -530,16 +613,29 @@ export function useSessionIndex({
     [rangeParams],
   );
 
+  /**
+   * 摆在屏上的那一份组：命中缓存时是缓存，否则是最近一次落地的结果（范围在途时
+   * 就是上一范围的旧行）。追加页与「刚保存」那一层属于上一范围，缓存上不叠它们；
+   * 「删掉」「读过」说的是那一条对话本身，哪个范围下都成立。
+   */
+  const shownGroups = cached ? cached.groups : indexGroups;
   const mirrorRows = useMemo(
     () =>
       mergeMirrorRows({
-        indexGroups,
-        appended,
-        optimisticSaved,
+        indexGroups: shownGroups,
+        appended: cached ? [] : appended,
+        optimisticSaved: cached ? [] : optimisticSaved,
         optimisticRemoved,
         optimisticRead,
       }),
-    [indexGroups, appended, optimisticSaved, optimisticRemoved, optimisticRead],
+    [
+      shownGroups,
+      cached,
+      appended,
+      optimisticSaved,
+      optimisticRemoved,
+      optimisticRead,
+    ],
   );
   /**
    * 当前这批行的一份 ref。markRead 要回答「这一条本来算不算未读」，答案就在这批行
@@ -724,13 +820,13 @@ export function useSessionIndex({
           }),
         });
         setSaveFailure(null);
-        setIndexNonce((n) => n + 1);
+        refetch();
         onSaved?.(saveFailure.conversationId);
       } catch {
         // 还是没写成：横幅留在原地，那颗重试照常按得动。
       }
     })();
-  }, [saveFailure, doSave, onSaved]);
+  }, [saveFailure, doSave, onSaved, refetch]);
 
   const onSave = useCallback(
     (row: MirrorIndexRow) => {
@@ -771,6 +867,8 @@ export function useSessionIndex({
         body: JSON.stringify({ conversation_id: row.conversationId }),
       });
       setOptimisticRemoved((prev) => [...prev, rowKey(row.conversationId)]);
+      // 别的范围的缓存里也可能有它：整份作废，免得切过去时删掉的那条又闪回来。
+      setRangeCache(new Map());
       shiftTotals(row, -1);
       onDeleted(row);
       setPendingDelete(null);
@@ -783,12 +881,13 @@ export function useSessionIndex({
   }, [pendingDelete, shiftTotals, onDeleted]);
 
   return {
-    indexGroups,
+    indexGroups: shownGroups,
     mirrorRows,
     accountTotal,
-    unreadTotal,
+    unreadTotal: cached ? cached.unreadTotal : unreadTotal,
     loaded,
     rangePending,
+    refreshing,
     loadError: visibleLoadError,
     setLoadError,
     refetch,
@@ -799,7 +898,8 @@ export function useSessionIndex({
     setSearchQuery,
     debouncedSearch,
 
-    hasMore: !!nextCursor,
+    // 范围还没落地时手上的游标属于别的范围（或者根本没有），不给翻。
+    hasMore: !rangePending && !!nextCursor,
     loadingMore,
     loadMoreFailed,
     loadMore,

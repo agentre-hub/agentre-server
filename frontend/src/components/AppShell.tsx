@@ -32,12 +32,9 @@ import {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,
 } from "@/lib/accountChannel";
-import { fetchDevices } from "@/lib/devices";
+import { deviceRoster } from "@/lib/devices";
 import { readNavCollapsed, writeNavCollapsed } from "@/lib/navCollapsed";
-import {
-  fetchAttentionCounts,
-  type AttentionCounts,
-} from "@/lib/attentionCount";
+import { attentionRoster, type AttentionCounts } from "@/lib/attentionCount";
 import { agentreLogoUrl, cn } from "@agentre-hub/agentre-ui";
 
 /** 手机抽屉里的两组目的地（规格 2026-11-05「外壳与导航」），顺序即显示顺序。 */
@@ -152,8 +149,11 @@ export default function AppShell({
     });
   }, []);
 
+  // 设备数与角标走共享名单（`@/lib/rosterFetch`）：每个页面各挂一份外壳，换页即重新
+  // 挂载，10 秒内复用刚取回的那一份；信号到来时 use-account-channel 先作废再喊这里。
   useAliveEffect((alive) => {
-    fetchDevices()
+    deviceRoster
+      .get()
       .then((list) => {
         if (!alive()) return;
         setDeviceMeta({
@@ -170,7 +170,8 @@ export default function AppShell({
   // 离线仍要等兜底轮询：server 那边的在线态是到期即离线的 Redis 键，没有下线信号
   // （见 accountChannel 的 AccountChannelDevicePresence）。
   const reloadDeviceMeta = useCallback(() => {
-    fetchDevices()
+    deviceRoster
+      .get()
       .then((list) => {
         setDeviceMeta({
           online: list.filter((d) => d.online).length,
@@ -185,12 +186,14 @@ export default function AppShell({
   // 重取一遍设备，一台机器上下线也不该让它重数一遍对话。共用的是同一条 websocket
   // （use-account-channel 的注释），多的只是一份订阅者名单。
   const reloadAttention = useCallback(() => {
-    fetchAttentionCounts()
+    attentionRoster
+      .get()
       .then(setAttention)
       .catch(() => {});
   }, []);
   useAliveEffect((alive) => {
-    fetchAttentionCounts()
+    attentionRoster
+      .get()
       .then((counts) => {
         if (!alive()) return;
         setAttention(counts);

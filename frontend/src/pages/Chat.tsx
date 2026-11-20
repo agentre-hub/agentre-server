@@ -38,7 +38,7 @@ import type {
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import {
   deviceDisplayName,
-  fetchDevices,
+  deviceRoster,
   runsSessions,
   type DeviceItem,
 } from "@/lib/devices";
@@ -53,9 +53,9 @@ import {
   AccountChannelDevicePresence,
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
-import { fetchAgents } from "@/lib/agents";
+import { agentRoster } from "@/lib/agents";
 import { useLiveTurns } from "@/lib/liveSessions";
-import { fetchProjects, type ProjectNode as ApiProject } from "@/lib/projects";
+import { projectRoster, type ProjectNode as ApiProject } from "@/lib/projects";
 import {
   buildGroupTotals,
   buildMachineRows,
@@ -500,11 +500,17 @@ export default function Chat() {
    * 直接把 markRead 挂上去：它本就是 useCallback 的稳定引用。
    */
 
-  /** 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。 */
+  /**
+   * 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。
+   *
+   * 这几份名单（含下面的项目树）走共享取数（`@/lib/rosterFetch`）：外壳、详情与目标
+   * 设备 hook 同一屏上也在要，共用一个在飞请求、10 秒内复用。信号到来时
+   * use-account-channel 先作废再喊这里，所以信号路上直接 get 拿到的就是新的。
+   */
   useAliveEffect((alive) => {
     Promise.all([
-      fetchDevices(),
-      fetchAgents<NewConvAgent & { department_name?: string }>(),
+      deviceRoster.get(),
+      agentRoster.get<NewConvAgent & { department_name?: string }>(),
     ])
       .then(([d, a]) => {
         if (!alive()) return;
@@ -521,29 +527,38 @@ export default function Chat() {
   }, []);
 
   useAccountChannel([AccountChannelDevicePresence], () => {
-    fetchDevices()
+    deviceRoster
+      .get()
       .then(setDevices)
       // 名单取不到时保持原样：组头少一维好过把用户正在看的一列清空。
       .catch(() => {});
   });
 
   // 项目树单独取：它只喂项目轴的组头，取不到时会话照常列出（都进「未归项目」），
-  // 不该把整页拖成一条错误横幅。写完之后要重取，因此单拎成一个函数。
-  const reloadProjects = useCallback(() => {
-    fetchProjects()
+  // 不该把整页拖成一条错误横幅。
+  const loadProjects = useCallback(() => {
+    projectRoster
+      .get()
       .then(setProjects)
       .catch(() => {})
       // 取不到也算问过：那一屏不能为了一次失败永远转下去。
       .finally(() => setProjectsSettled(true));
   }, []);
   useEffect(() => {
-    reloadProjects();
-  }, [reloadProjects]);
+    loadProjects();
+  }, [loadProjects]);
+  // 写完之后（与同步版本推进时）的重取：先作废再取。项目面的 REST 写自己会作废，
+  // 但写本机路径那一路走中继、不经过 projects.ts，「写完读回实情」不能指望它。
+  const reloadProjects = useCallback(() => {
+    projectRoster.invalidate();
+    loadProjects();
+  }, [loadProjects]);
 
   // 同步版本推进：行上的 Agent 名与项目轴的组头都来自 sync_objects。放在这里而不是
   // 跟另外两条信号挤在一起，只因为它要用到上面这个 reloadProjects。
   useAccountChannel([AccountChannelSyncVersion], () => {
-    fetchAgents()
+    agentRoster
+      .get<NewConvAgent & { department_name?: string }>()
       .then(setAgents)
       .catch(() => {});
     reloadProjects();
@@ -1065,13 +1080,14 @@ export default function Chat() {
     ) : null;
 
   // 只有索引及项目、Agent、设备名单都完成后，分组结果才可靠。
+  //
+  // 换范围在途不再回到骨架（弱网规格 2026-11-20 决策 5）：手上的旧行留着变淡，
+  // 由索引自己画（sessionIndex.refreshing）。骨架只留给手上什么都没有的时候——第一次
+  // 加载，或者上一范围本来就一行都没有（那时摆旧的空态会把「还在取」说成「没有」）。
+  const listSettled =
+    indexSettled(sessionIndex) && projectsSettled && agentsSettled;
   const settled =
-    indexSettled(sessionIndex) &&
-    (axis === "machine" ||
-      !sessionIndex.rangePending ||
-      !!sessionIndex.loadError) &&
-    projectsSettled &&
-    agentsSettled;
+    listSettled && !(sessionIndex.refreshing && view.rows.length === 0);
 
   /*
     手机首页（规格 2026-11-05「首页（对话列表）」）：不按轴分组，按 需要你 / 进行中 /
@@ -1093,13 +1109,24 @@ export default function Chat() {
   );
   // 机器那一档：范围刚换、或在线机器还没交出清单时，空列表说明不了「没有对话」。
   const phoneSettled =
-    settled &&
+    listSettled &&
+    !(sessionIndex.refreshing && phoneRows.length === 0) &&
     !(
       axis === "machine" &&
       phoneBaseRows.length === 0 &&
       ((sessionIndex.rangePending && !sessionIndex.loadError) ||
         Object.values(reach.machineStates).some((s) => s === "connecting"))
     );
+
+  /*
+    机器那一档：有哪台机器正在重新列出、而手上已有行时，同样留着旧行变淡
+    （弱网规格 2026-11-20 决策 5）。手上一行都没有的才走上面的骨架。
+  */
+  const phoneRefreshing =
+    sessionIndex.refreshing ||
+    (axis === "machine" &&
+      phoneBaseRows.length > 0 &&
+      Object.values(reach.machineStates).some((s) => s === "connecting"));
 
   /*
     胶囊上的数。「需要你」「进行中」在端点那一档是「全部」或「运行中」时就数得出来
@@ -1117,7 +1144,9 @@ export default function Chat() {
     counts: PhoneCounts;
   } | null>(null);
   const held = heldCounts?.key === countsKey ? heldCounts.counts : null;
-  const statusCountsLive = phoneSettled && dataFilter !== "unread";
+  // 变淡的旧行是上一范围的，不拿它们数这一范围的数。
+  const phoneFresh = phoneSettled && !phoneRefreshing;
+  const statusCountsLive = phoneFresh && dataFilter !== "unread";
   const phoneCounts: PhoneCounts = {
     attention: statusCountsLive
       ? localCounts.attention
@@ -1126,7 +1155,7 @@ export default function Chat() {
     unread:
       axis !== "machine"
         ? sessionIndex.unreadTotal
-        : phoneSettled && dataFilter === "all"
+        : phoneFresh && dataFilter === "all"
           ? localCounts.unread
           : (held?.unread ?? 0),
   };
@@ -1221,7 +1250,7 @@ export default function Chat() {
     phoneScope.kind === "all" &&
     dataFilter === "all" &&
     sessionIndex.debouncedSearch === "" &&
-    phoneSettled;
+    phoneFresh;
   const [heldTally, setHeldTally] = useState<typeof liveTally | null>(null);
   if (isMobile && tallyFresh && heldTally !== liveTally) {
     setHeldTally(liveTally);
@@ -1474,6 +1503,7 @@ export default function Chat() {
             onSearchChange={sessionIndex.setSearchQuery}
             searchCount={phoneSearchCount}
             settled={phoneSettled}
+            refreshing={phoneRefreshing}
             rows={phoneRows}
             filter={filter}
             onFilterChange={setFilter}

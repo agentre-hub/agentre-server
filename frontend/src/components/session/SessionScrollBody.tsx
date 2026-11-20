@@ -77,6 +77,11 @@ export interface SessionScrollBodyProps {
   catchUpFailed: boolean;
 
   messages: TranscriptMessage[];
+  /**
+   * `messages` 末尾那条「发送中」的编号（弱网决策 12）。有值时转录把那一格画成
+   * 发送中的气泡（`send.sendingMessage`），三点照旧挂在它之后。
+   */
+  sendingMessageId?: number;
   /** 这个浏览器自己的指纹，用来分辨「哪条是我发的」。 */
   localFingerprint: string | undefined;
   /** 这条会话此刻在那台机器上的工作目录（中继上的实况摘要给的）。 */
@@ -133,6 +138,7 @@ export default function SessionScrollBody({
   ready,
   catchUpFailed,
   messages,
+  sendingMessageId,
   localFingerprint,
   cwd,
   backendType,
@@ -351,6 +357,23 @@ export default function SessionScrollBody({
               // 行虚拟化的滚动容器。取不到时转录整列渲染（见 Transcript 里那段
               // 「量不出视口高度就不开窗」的注释）。
               getScrollElement={getScrollElement}
+              sendingRow={
+                sendingMessageId !== undefined && send.sendingMessage
+                  ? {
+                      messageId: sendingMessageId,
+                      node: (
+                        <PendingSendBubble
+                          state="sending"
+                          // 与真用户消息同一个对齐判据（Transcript 的
+                          // userMessageAlign）：手机排在尾侧，桌面不传。
+                          align={isMobile ? "end" : undefined}
+                          text={send.sendingMessage.text}
+                          images={send.sendingMessage.images}
+                        />
+                      ),
+                    }
+                  : undefined
+              }
             />
             {/*
               可见性交给面板自己判：三个入参它全都有，同一个三段条件在这里再写
@@ -385,6 +408,8 @@ export default function SessionScrollBody({
         ))}
         {send.pendingSend && (
           <PendingSendBubble
+            // 手机上与真用户消息同一列（弱网决策 13），桌面跟真消息在起始侧。
+            align={isMobile ? "end" : undefined}
             text={send.pendingSend.text}
             images={send.pendingSend.images}
             onCancel={send.cancelPendingSend}

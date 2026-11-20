@@ -1383,7 +1383,7 @@ describe("对话页:机器轴", () => {
     await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
   });
 
-  it("切换机器筛选后完整页仍在加载时显示连接中骨架，不先宣告筛选为空", async () => {
+  it("机器重新列出时手上已有行的组留着旧行变淡，答完一次换上，不先宣告筛选为空", async () => {
     let release!: (value: unknown) => void;
     const pending = new Promise((resolve) => {
       release = resolve;
@@ -1404,18 +1404,43 @@ describe("对话页:机器轴", () => {
 
     fireEvent.click(screen.getByTestId("filter-chip-running"));
 
-    await waitFor(() =>
-      expect(screen.getByTestId("group-state-device-1").textContent).toBe(
-        "Connecting",
-      ),
-    );
-    const group = screen.getByTestId("group-device-1");
+    const group = await screen.findByTestId("group-device-1");
+    await waitFor(() => expect(group.getAttribute("aria-busy")).toBe("true"));
+    // 旧行原位留着、变淡、不出骨架，也没有「筛选为空」。
+    expect(screen.getByText("重构登录页")).toBeTruthy();
+    expect(group.className).toContain("opacity-55");
     expect(
       group.querySelector('[data-slot="session-row-skeleton"]'),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(group.textContent).not.toContain("No sessions match this filter");
 
-    release({ sessions: [] });
+    await act(async () => {
+      release({ sessions: [] });
+    });
+
+    await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
+    expect(screen.getByTestId("group-device-1").getAttribute("aria-busy")).toBe(
+      null,
+    );
+    expect(screen.getByTestId("group-device-1").className).not.toContain(
+      "opacity-55",
+    );
+  });
+
+  it("机器还一份清单都没交出时，它的组显示连接中骨架而不变淡", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(() => new Promise(() => {}));
+    renderChat("/chat?axis=machine");
+
+    const group = await screen.findByTestId("group-device-1");
+    await waitFor(() =>
+      expect(
+        group.querySelector('[data-slot="session-row-skeleton"]'),
+      ).not.toBeNull(),
+    );
+    expect(group.getAttribute("aria-busy")).toBe("true");
+    expect(group.className).not.toContain("opacity-55");
   });
 
   // 「未读」在这一档有一条额外的判据：还没保存进账号的那些不算未读——它们压根
@@ -2206,6 +2231,70 @@ describe("对话页:删除一条对话", () => {
     expect(body).toContain("the conversation itself on that computer");
   });
 
+  /**
+   * 弱网规格 2026-11-20 决策 6 的缓存不能把删掉的那条带回来：它按范围存着上一次的
+   * 结果，删掉之后切到另一个看过的范围，那份缓存里还有它。
+   */
+  it("删掉一条之后切到看过的另一个筛选：那份缓存里的它不再闪回来", async () => {
+    let deleted = false;
+    let holdRunning = false;
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (isAccountTotalProbe(params)) return { total: deleted ? 1 : 2 };
+        const doomed = mirrored({ conversation_id: "42", title: "要删的" });
+        const kept = mirrored({ conversation_id: "43", title: "留着的" });
+        if (params.get("filter") === "running") {
+          if (holdRunning) return new Promise(() => {});
+          const items = deleted ? [] : [doomed];
+          return {
+            total: items.length,
+            groups: [{ scope: "time", total: items.length, items }],
+          };
+        }
+        const items = deleted ? [kept] : [doomed, kept];
+        return {
+          total: items.length,
+          groups: [{ scope: "time", total: items.length, items }],
+        };
+      },
+    });
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/saved-sessions/delete") {
+        deleted = true;
+        return { machine_status: "deleted" };
+      }
+      return base(path, init);
+    });
+    renderChat("/chat?axis=time");
+    await screen.findByText("留着的");
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+    await waitFor(() => expect(screen.queryByText("留着的")).toBeNull());
+    fireEvent.click(screen.getByTestId("filter-chip-all"));
+    await screen.findByText("留着的");
+
+    fireEvent.contextMenu(screen.getByText("要删的"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(await screen.findByTestId("delete-session-confirm"));
+    await waitFor(() => expect(screen.queryByText("要删的")).toBeNull());
+    // 服务端随后发来的镜像变更：重取落地，乐观的「删掉」那一层随之撤掉。
+    await act(async () => {
+      deliver(accountChannel.AccountChannelMirrorChanged);
+    });
+    await waitFor(() =>
+      expect(
+        indexRequests.filter((p) => !p.has("filter") && !p.has("per_group"))
+          .length,
+      ).toBe(3),
+    );
+
+    holdRunning = true;
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+    expect(screen.queryByText("要删的")).toBeNull();
+  });
+
   it("删除没成功时不装作它没了:行还在,确认层留在原地", async () => {
     stubApi({ mirror: [mirrored()], devices: [agentred] });
     const base = mockedApi.getMockImplementation()!;
@@ -2365,7 +2454,12 @@ describe("索引按轴分页", () => {
     );
   });
 
-  it("非机器轴切换筛选时隐藏上一范围行，直到新范围完成", async () => {
+  /**
+   * 弱网规格 2026-11-20 决策 5：换范围时旧行留在原位、变淡，筛选条下一条细进度条、
+   * 列表 aria-busy；新数据到了整体替换。骨架只留给第一次加载——此前这里整块换回
+   * 骨架，弱网下每点一次筛选就闪一次。
+   */
+  it("非机器轴切换筛选时旧行留着变淡、仍可点开，新范围到了整体替换", async () => {
     let release!: (value: unknown) => void;
     const pending = new Promise((resolve) => {
       release = resolve;
@@ -2386,6 +2480,7 @@ describe("索引按轴分页", () => {
     });
     renderChat("/chat?axis=time");
     await screen.findByText("旧范围");
+    expect(screen.queryByTestId("index-refresh-bar")).toBeNull();
 
     fireEvent.click(screen.getByTestId("filter-chip-running"));
     await waitFor(() =>
@@ -2393,11 +2488,166 @@ describe("索引按轴分页", () => {
     );
 
     const list = screen.getByTestId("chat-list-col");
+    expect(within(list).getByText("旧范围")).toBeTruthy();
+    expect(list.querySelector('[data-slot="session-row-skeleton"]')).toBeNull();
+    const rows = within(list).getByTestId("session-index-rows");
+    expect(rows.getAttribute("aria-busy")).toBe("true");
+    expect(rows.className).toContain("opacity-55");
+    expect(within(list).getByTestId("index-refresh-bar")).toBeTruthy();
+
+    // 变淡不等于禁用：旧行照样点得开。
+    fireEvent.click(within(list).getByRole("link", { name: /旧范围/ }));
+    await waitFor(() => expect(currentLocation()).toMatch(/^\/chat\/42/));
+
+    await act(async () => {
+      release({
+        total: 1,
+        groups: [
+          {
+            scope: "time",
+            total: 1,
+            items: [mirrored({ conversation_id: "50", title: "新范围" })],
+          },
+        ],
+      });
+    });
+
+    expect(await within(list).findByText("新范围")).toBeTruthy();
     expect(within(list).queryByText("旧范围")).toBeNull();
+    expect(within(list).queryByTestId("index-refresh-bar")).toBeNull();
     expect(
-      list.querySelector('[data-slot="session-row-skeleton"]'),
-    ).toBeTruthy();
-    release({ total: 0, groups: [] });
+      within(list).getByTestId("session-index-rows").getAttribute("aria-busy"),
+    ).toBeNull();
+  });
+
+  /** 决策 6：本页看过的组合立即显示（不变淡），同时后台静默刷新，有变化再替换。 */
+  it("切回本页看过的筛选：立即显示上次的结果、不变淡，静默刷新后替换", async () => {
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    let allRounds = 0;
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (isAccountTotalProbe(params)) return { total: 2 };
+        if (params.get("filter") === "running") {
+          return {
+            total: 1,
+            groups: [
+              {
+                scope: "time",
+                total: 1,
+                items: [mirrored({ conversation_id: "43", title: "跑着的" })],
+              },
+            ],
+          };
+        }
+        allRounds += 1;
+        if (allRounds > 1) return pending;
+        return {
+          total: 1,
+          groups: [
+            {
+              scope: "time",
+              total: 1,
+              items: [mirrored({ title: "全部那份" })],
+            },
+          ],
+        };
+      },
+    });
+    renderChat("/chat?axis=time");
+    await screen.findByText("全部那份");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+    await screen.findByText("跑着的");
+
+    fireEvent.click(screen.getByTestId("filter-chip-all"));
+
+    const list = screen.getByTestId("chat-list-col");
+    expect(within(list).getByText("全部那份")).toBeTruthy();
+    expect(within(list).queryByText("跑着的")).toBeNull();
+    expect(within(list).queryByTestId("index-refresh-bar")).toBeNull();
+    expect(
+      within(list).getByTestId("session-index-rows").getAttribute("aria-busy"),
+    ).toBeNull();
+    await waitFor(() => expect(allRounds).toBe(2));
+
+    await act(async () => {
+      release({
+        total: 1,
+        groups: [
+          {
+            scope: "time",
+            total: 1,
+            items: [mirrored({ conversation_id: "51", title: "全部刷新后" })],
+          },
+        ],
+      });
+    });
+    expect(await within(list).findByText("全部刷新后")).toBeTruthy();
+    expect(within(list).queryByText("全部那份")).toBeNull();
+  });
+
+  /**
+   * 决策 4：刷新信号不作废在飞的那一轮列表请求——它回来照常落地；在飞期间又来的
+   * 信号攒成**一次**补取，等它回来再发。此前每条信号都当场作废上一轮再重发，弱网下
+   * 信号一秒一条，列表可能永远落不了地。
+   */
+  it("刷新信号不作废在飞的列表请求：它照常落地，之后只补取一次", async () => {
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    let releaseFollowUp!: (value: unknown) => void;
+    const followUp = new Promise((resolve) => {
+      releaseFollowUp = resolve;
+    });
+    const page = (title: string) => ({
+      total: 1,
+      groups: [{ scope: "time", total: 1, items: [mirrored({ title })] }],
+    });
+    let rounds = 0;
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        rounds += 1;
+        if (rounds === 1) return page("第一版");
+        if (rounds === 2) return pending;
+        return followUp;
+      },
+    });
+    renderChat("/chat?axis=time");
+    await screen.findByText("第一版");
+
+    await act(async () => {
+      deliver(accountChannel.AccountChannelMirrorChanged);
+    });
+    await waitFor(() => expect(rounds).toBe(2));
+    await act(async () => {
+      deliver(accountChannel.AccountChannelMirrorChanged);
+      deliver(accountChannel.AccountChannelMirrorChanged);
+    });
+    // 在飞的那一轮还没回来：不另起一轮。
+    expect(rounds).toBe(2);
+
+    await act(async () => {
+      release(page("第二版"));
+    });
+    // 那一轮没被作废：它的结果落了地，随后才补取一次。
+    expect(await screen.findByText("第二版")).toBeTruthy();
+    await waitFor(() => expect(rounds).toBe(3));
+    await act(async () => {
+      releaseFollowUp(page("第三版"));
+    });
+    expect(await screen.findByText("第三版")).toBeTruthy();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(rounds).toBe(3);
   });
 
   it("时间轴滚到底取下一页并追加，不重复已有的行", async () => {
@@ -3199,7 +3449,11 @@ describe("对话页：索引取数失败", () => {
     expect(banner.textContent).not.toContain("devices");
   });
 
-  it("新筛选请求失败时不把上一范围的行摆在错误横幅下面", async () => {
+  /**
+   * 决策 7：新范围没取回来时旧行不清空——清空之后用户既看不到旧的也看不到新的。
+   * 旧行恢复正常显示（不再变淡），上面挂既有的失败横幅与重试。
+   */
+  it("新筛选请求失败时旧行留着、恢复正常显示，上面是失败横幅与重试", async () => {
     stubApi({
       mirror: [mirrored()],
       index: (params) => {
@@ -3217,8 +3471,13 @@ describe("对话页：索引取数失败", () => {
 
     fireEvent.click(screen.getByTestId("filter-chip-running"));
 
-    expect(await screen.findByTestId("index-load-error")).toBeTruthy();
-    expect(screen.queryByText("重构登录页")).toBeNull();
+    const banner = await screen.findByTestId("index-load-error");
+    expect(within(banner).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByText("重构登录页")).toBeTruthy();
+    const rows = screen.getByTestId("session-index-rows");
+    expect(rows.getAttribute("aria-busy")).toBeNull();
+    expect(rows.className).not.toContain("opacity-55");
+    expect(screen.queryByTestId("index-refresh-bar")).toBeNull();
   });
 
   it("带一个重试,按下去真的重新取一次", async () => {

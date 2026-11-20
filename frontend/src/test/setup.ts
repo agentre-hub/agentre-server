@@ -31,6 +31,9 @@
  */
 
 import { configure } from "@testing-library/react";
+import { beforeEach } from "vitest";
+
+import { invalidateRosters } from "@/lib/rosterFetch";
 
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
@@ -161,3 +164,10 @@ if (!("isSecureContext" in window)) {
 // waitFor；`vi.waitFor` 只剩在 relay-*.test.ts 那几个纯协议用例里，它们没有 DOM、
 // 也不在偶发红的名单上，把 RTL 拉进去反而是把 act 那套装置塞给不需要它的测试。
 configure({ asyncUtilTimeout: 5_000 });
+
+// 共享名单（`@/lib/rosterFetch`）是模块级的：不清的话，上一条用例取回来的设备 / 项目
+// 会在 10 秒内原样交给下一条，而页面用例是每条各自 mock `@/lib/api` 的——红在一条
+// 自己什么都没做错的用例上。每条用例开始前全部作废，等于每条都从一个刚打开的标签页起。
+beforeEach(() => {
+  invalidateRosters(null);
+});

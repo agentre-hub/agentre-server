@@ -637,6 +637,15 @@ describe("写入失败分类:三类互不相同", () => {
     expect(classifySendFailure(undefined).kind).toBe("transport");
   });
 
+  it("Given 同步就没发出去的 RelayError When 分类 Then notSent，而中途断开仍是 transport", () => {
+    const unsent = new RelayError(-1, "relay: 连接未就绪");
+    unsent.notSent = true;
+    expect(classifySendFailure(unsent).kind).toBe("notSent");
+    expect(
+      classifySendFailure(new RelayError(-1, "relay: 连接已断开")).kind,
+    ).toBe("transport");
+  });
+
   it("Given 对端拒绝但没给说明 When 分类 Then 不编造 detail", () => {
     expect(classifySendFailure(new RelayError(-32603, "   "))).toEqual({
       kind: "rejected",

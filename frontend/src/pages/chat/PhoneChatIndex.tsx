@@ -6,6 +6,7 @@ import {
   SessionRow,
   SessionRowSkeleton,
   StatusDot,
+  cn,
   phaseSections,
   useUiTranslation,
   type AgentStatus,
@@ -33,6 +34,7 @@ import { Link } from "react-router-dom";
 
 import { EmptyState, MobileNavButton } from "@/components/console";
 import {
+  IndexRefreshBar,
   LoadMore,
   SaveButton,
   type SessionIndexAgent,
@@ -85,6 +87,11 @@ export interface PhoneChatIndexProps {
 
   /** 这一范围的结论到了没有。没到时摆骨架。 */
   settled: boolean;
+  /**
+   * 换了范围（范围 / 筛选 / 搜索）、新的还没回来，`rows` 是上一范围的旧行（弱网规格
+   * 2026-11-20 决策 5）：留在原位变淡、仍点得开，列表 aria-busy，筛选条下出细进度条。
+   */
+  refreshing?: boolean;
   /** 已按筛选收窄过的行。 */
   rows: MirrorIndexRow[];
   filter: PhoneFilter;
@@ -171,6 +178,7 @@ export function PhoneChatIndex({
   onSearchChange,
   searchCount,
   settled,
+  refreshing = false,
   rows,
   filter,
   onFilterChange,
@@ -201,12 +209,13 @@ export function PhoneChatIndex({
   const [searchOpen, setSearchOpen] = useState(() => searchQuery !== "");
   const listRef = useRef<HTMLDivElement>(null);
 
-  // 位置在列表真的摆出来之后才放回去：骨架那一刻放回去会被内容撑开时冲掉。
+  // 位置在列表真的摆出来之后才放回去：骨架那一刻放回去会被内容撑开时冲掉；摆着的
+  // 还是上一范围的旧行时同理，等新范围的行落地再放。
   useLayoutEffect(() => {
     const el = listRef.current;
-    if (!el || !settled) return;
+    if (!el || !settled || refreshing) return;
     el.scrollTop = scrollMemory.get(scopeKey) ?? 0;
-  }, [scopeKey, settled]);
+  }, [scopeKey, settled, refreshing]);
 
   const onScroll = useCallback(() => {
     const el = listRef.current;
@@ -378,7 +387,14 @@ export function PhoneChatIndex({
     );
   } else {
     body = (
-      <>
+      // 换范围在途时整块变淡但不禁用：旧行照样点得开（决策 5）。
+      <div
+        data-testid="chat-phone-rows"
+        className={cn(
+          "transition-opacity motion-reduce:transition-none",
+          refreshing && "opacity-55",
+        )}
+      >
         {sections.map((section) => (
           <section
             key={section.key}
@@ -408,7 +424,7 @@ export function PhoneChatIndex({
             {t("chat.phone.searchNote")}
           </p>
         ) : null}
-      </>
+      </div>
     );
   }
 
@@ -417,7 +433,7 @@ export function PhoneChatIndex({
       <header
         data-testid="chat-mobile-header"
         // 这一条顶栏由页面自己排（壳走 ownHeader），安全区也得自己让。
-        className="shrink-0 bg-sheet pt-[env(safe-area-inset-top,0px)]"
+        className="relative shrink-0 bg-sheet pt-[env(safe-area-inset-top,0px)]"
       >
         {searchOpen ? (
           <div className="flex h-[52px] items-center gap-1 pr-1 pl-3">
@@ -514,11 +530,15 @@ export function PhoneChatIndex({
             className="-mt-1.5 overflow-x-auto px-3 pt-1.5 pb-2.5"
           />
         )}
+        {/* 贴着页头底边（筛选条下，搜索时在命中句下），出现与消失都不推动列表。 */}
+        {refreshing && settled ? (
+          <IndexRefreshBar className="bottom-0" />
+        ) : null}
       </header>
       <div
         ref={listRef}
         data-testid="chat-phone-list"
-        aria-busy={!settled || undefined}
+        aria-busy={!settled || refreshing || undefined}
         onScroll={onScroll}
         className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,0px)]"
       >

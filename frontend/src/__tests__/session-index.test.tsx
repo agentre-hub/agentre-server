@@ -1022,8 +1022,12 @@ describe("统一会话索引：空组自己说一句", () => {
     renderIndex({ axis: "project", rows: [] });
 
     const nav = screen.getByTestId("session-index-nav");
+    // 组列表挂在列表本体下（换范围在途时变淡的那一块），本体再挂在 nav 下：
+    // 12px 只在控件行与本体之间、本体里各块之间各出现一次。
+    const body = screen.getByTestId("session-index-rows");
     const groups = bySlot("session-group-list");
-    expect(groups.parentElement).toBe(nav);
+    expect(body.parentElement).toBe(nav);
+    expect(groups.parentElement).toBe(body);
     expect(groups.contains(screen.getByTestId("group-p-server"))).toBe(true);
     expect(groups.contains(screen.getByTestId("group-p-web"))).toBe(true);
     expect(nav.className).toContain("space-y-3");

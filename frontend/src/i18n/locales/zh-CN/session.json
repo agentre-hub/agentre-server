@@ -78,6 +78,7 @@
   },
   "sendPending": {
     "title": "连上后自动发出",
+    "sending": "发送中…",
     "cancel": "撤销"
   },
   "compose": {

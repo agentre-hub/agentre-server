@@ -36,6 +36,12 @@ export interface TurnActivity {
    * 边界。左栏据它分辨「刚有动静」与「打开时它就在跑」，见 `seedLiveTurn`。
    */
   markTurnActive: (v: boolean, fromSnapshot?: boolean) => void;
+  /**
+   * 这个浏览器自己开了一轮（发出即见那一下）。与 `markTurnActive(true)` 的区别：
+   * 之后那一份**更早**问到的清单快照说「没在跑」时，不能把它收回去，见下面
+   * `ownTurnRef`。
+   */
+  markOwnTurnStarted: () => void;
   pendingAssistant: boolean;
   setPendingAssistant: Dispatch<SetStateAction<boolean>>;
   /** 目标会话换了。由详情视图的渲染期重置调用。 */
@@ -92,8 +98,19 @@ export function useTurnActivity(conversationId: string): TurnActivity {
    * （自己发送 / 回声 / 开轮帧 / 自主续轮 / attach 时的清单快照，五条路都经过它），
    * 各写一遍就会漏掉其中几条。
    */
+  /**
+   * 自己开的那一轮还没见到终点。
+   *
+   * 清单与镜像转录并行之后（弱网决策 10），清单先回来就能发送，而 attach 收尾按的
+   * 仍是**发送之前**问到的那份快照：它说「idle」时，此刻在跑的正是自己刚开的这一轮
+   * ——照它收回，三点与 Running 就在这一轮跑着的时候灭掉，直到它跑完都不再亮。
+   * 所以快照的「没在跑」让位给它；一次亲眼看到的终点（终态帧 / 发送撤回）才放下。
+   */
+  const ownTurnRef = useRef(false);
   const markTurnActive = useCallback(
     (v: boolean, fromSnapshot?: boolean) => {
+      if (fromSnapshot && !v && ownTurnRef.current) v = true;
+      if (!fromSnapshot && !v) ownTurnRef.current = false;
       setTurnActiveLocal(v);
       if (fromSnapshot) seedLiveTurn(conversationId, v);
       else noteLiveTurn(conversationId, v);
@@ -122,7 +139,12 @@ export function useTurnActivity(conversationId: string): TurnActivity {
    * 清成 false 而不是「保持不动」：新会话在不在跑,只有 attach 答得出,在它回答
    * 之前这一屏**不知道** —— 而上一条会话的答案与这个问题无关。
    */
+  const markOwnTurnStarted = useCallback(() => {
+    ownTurnRef.current = true;
+    markTurnActive(true);
+  }, [markTurnActive]);
   const reset = useCallback(() => {
+    ownTurnRef.current = false;
     setTurnActiveLocal(false);
     setPendingAssistant(false);
   }, [setTurnActiveLocal]);
@@ -131,6 +153,7 @@ export function useTurnActivity(conversationId: string): TurnActivity {
     turnActive,
     turnActiveRef,
     markTurnActive,
+    markOwnTurnStarted,
     pendingAssistant,
     setPendingAssistant,
     reset,
@@ -161,6 +184,12 @@ export interface SessionSendParams {
   status: SessionViewStatus;
   /** 执行端此刻的实况。run 的参数从它上面拿——一份离线快照拼不出来。 */
   summary: SessionSummary | null;
+  /**
+   * 执行端清单在这条连接上还没答（弱网决策 11）。连着而它为真时发送排队等清单，
+   * 不报「还没发出去」；清单答了（失败，或里面没有这一条）而 `summary` 仍空时，
+   * 排着的那条才交给失败气泡。缺省为假：调用方没有「清单在路上」这一档。
+   */
+  summaryPending?: boolean;
   relayTicket: RelayTicket | null;
   clientRef: RefObject<RelayClient | null>;
   originRef: RefObject<string | undefined>;
@@ -189,6 +218,26 @@ export interface SessionSendParams {
    * 那一行说的也是同一件事——这一轮刚由这个浏览器开起来。
    */
   onOwnTurnStarted?: () => void;
+  /**
+   * 这一屏转录此刻画到的最大 seq（不低于清单那一刻执行端的高水位：镜像那一段可能
+   * 还没回来）。「发送中」那一条记下按发送那一刻的值，回声认的是
+   * 它之后才到的那一帧 `user_message`（见 `SendingMessage.afterSeq`）。只在发送那一
+   * 刻读。缺省 0。
+   */
+  transcriptSeq?: () => number;
+}
+
+/**
+ * 自己刚发出去、回声还没到的那一条（弱网规格 2026-11-20 决策 12）。
+ *
+ * 它不进 `events`，理由与失败气泡同一条：那一份是对端说过的话。详情视图把它接在
+ * 投影出来的转录末尾，三点挂在它之后；回声一到就让位给正式那条。
+ */
+export interface SendingMessage extends ChatComposerSubmit {
+  /** 发送那一刻转录画到的 seq。seq 比它大的 `user_message` 帧才是这一条的回声。 */
+  afterSeq: number;
+  /** runtime.run 已经应答：这一轮被对端接下了。在此之前没有一轮可停。 */
+  acknowledged: boolean;
 }
 
 /** 详情视图从这一族拿到的东西。 */
@@ -197,6 +246,13 @@ export interface SessionSend {
   sending: boolean;
   /** 排着队等连接的那一条（决策 6）。 */
   pendingSend: ChatComposerSubmit | null;
+  /** 已经发出去、回声还没到的那一条（弱网决策 12）。 */
+  sendingMessage: SendingMessage | null;
+  /**
+   * 「在跑」已经提前亮了，但 runtime.run 还没应答 —— 这一轮还没被对端接下。停止键
+   * 据此先不给：此刻没有一轮可停。
+   */
+  awaitingRun: boolean;
   /** 用户自己撤掉排着的那一条。 */
   cancelPendingSend: () => void;
   /** 没发出去的那些消息（决策 7）。 */
@@ -239,6 +295,7 @@ export function useSessionSend({
   originProp,
   status,
   summary,
+  summaryPending = false,
   relayTicket,
   clientRef,
   originRef,
@@ -249,8 +306,14 @@ export function useSessionSend({
   setPinnedAgentredUnavailable,
   steerQueue,
   onOwnTurnStarted,
+  transcriptSeq = () => 0,
 }: SessionSendParams): SessionSend {
-  const { turnActiveRef, markTurnActive, setPendingAssistant } = turn;
+  const {
+    turnActiveRef,
+    markTurnActive,
+    markOwnTurnStarted,
+    setPendingAssistant,
+  } = turn;
   const [sending, setSending] = useState(false);
   /**
    * 没发出去的那些消息（决策 7）。它们不进 `events`：转录那一份是**对端说过的
@@ -269,12 +332,26 @@ export function useSessionSend({
   const [pendingSend, setPendingSend] = useState<ChatComposerSubmit | null>(
     null,
   );
+  /**
+   * 发出即见的那一条（弱网决策 12）。只在开新一轮的那条路上挂：插话那条由
+   * steerQueue 的 chip 当场承载，再挂一份就是同一句话出两遍。
+   *
+   * 发送成功后**不**清：回声常常晚于 run 的应答，先清掉的话这句话会在两者之间的
+   * 缝里消失一下。何时让位由详情视图按回声判（见那里的 `sendingShown`）。
+   */
+  const [sendingMessage, setSendingMessage] = useState<SendingMessage | null>(
+    null,
+  );
 
   const targetChanged = useTargetChanged(did, sid, originProp);
   if (targetChanged) {
     // 失败气泡属于**那一条**会话：换一条不该还挂着上一条没发出去的字。
     setFailedSends([]);
     setPendingSend(null);
+    setSendingMessage(null);
+    // 发出即见那一下是这里点亮的「在跑」（见 sendRouted）：它属于上一条会话，这里
+    // 自己收回，不指望调用方恰好也重置了轮次状态。reset 只动这一屏的两格，渲染期可调。
+    turn.reset();
     // 上一条那次发送还在飞，而它的结果从此不再写这里的任何状态（见下面的守卫）
     // ——包括 finally 里那次 setSending(false)。不在这里放下，新会话的输入框会
     // 顶着一个永远转不完的发送键。
@@ -403,11 +480,36 @@ export function useSessionSend({
         onOwnTurnStarted?.();
       }
     };
+    /*
+      发出即见（弱网决策 12）：开新一轮的这条路上，不等 run 应答就把这条摆出来、
+      点亮三点与头部的 Running。弱网下这一两秒里用户此前看不到任何东西，分不清
+      发没发出去。
+
+      在**选路之后**才点亮：`running` 已经按此刻的 ref 读过了，这里改它不影响这一次
+      的路由。失败时（被拒 / 没发出去 / 断开）一并撤回 —— 撤回的就是这里点亮的那
+      一份，此前它是灭的（`running` 为假才走到这一支）。
+     */
+    if (!running) {
+      setSendingMessage({
+        ...message,
+        afterSeq: transcriptSeq(),
+        acknowledged: false,
+      });
+      markOwnTurnStarted();
+      setPendingAssistant(true);
+    }
     try {
       await (running ? steerTurn(c, body) : startTurn(c, message));
       noteStarted(!running);
+      if (!running && stillHere())
+        setSendingMessage((prev) => prev && { ...prev, acknowledged: true });
       return;
     } catch (err) {
+      if (!running && stillHere()) {
+        setSendingMessage(null);
+        markTurnActive(false);
+        setPendingAssistant(false);
+      }
       // 只有对端真的收到并拒绝了，才值得换一条路重试。请求没走到对端（传输失败）
       // 时不回落：它可能已经送达，重发会多出一条消息。
       if (classifySendFailure(err).kind !== "rejected") throw err;
@@ -469,8 +571,15 @@ export function useSessionSend({
 
       只对 `reconnecting` 这么做。`lost` 与 B / C 档不排队：那几档要么已经不再
       自动重连、要么等的是那台机器，排进去就是许一个不会到的承诺。
+
+      握手完成而清单还在路上（弱网决策 11）走同一条路：输入框此刻已经可用，清单
+      到了这一条自动发出；清单失败或里面没有这一条时，下面那只 effect 把它交给
+      失败气泡。
     */
-    if (status === "reconnecting") {
+    if (
+      status === "reconnecting" ||
+      (status === "connected" && summaryPending && !summary)
+    ) {
       // 从一条失败气泡上重发的:它现在排着队了,原来那条气泡就该撤掉。同一条消息
       // 同时以两个身份摆在屏幕上（一个说排着队、一个说没发出去）比哪一个都糟。
       if (replacing) dropFailedSend(replacing);
@@ -580,9 +689,12 @@ export function useSessionSend({
     // 路上，而 sendMessage 要它才拼得出 run 的参数。差一样就等下一拍——摘要落地
     // 时这个 effect 会因为 summary 变了再跑一遍。少了这一条，排着的那句会在
     // 「连上了但还没就绪」的缝里被静默丢掉。
+    //
+    // 但只等**还会来**的那一份：清单已经答过（失败，或里面没有这一条）而摘要仍空，
+    // 这一条就再也拼不出参数了（弱网决策 11），落到下面的失败气泡。
     const ready =
       status === "connected" && clientRef.current && summary && relayTicket;
-    if (status === "connected" && !ready) return;
+    if (status === "connected" && !ready && (summary || summaryPending)) return;
     const queued = pendingSend;
     // 状态更新推到 effect 之后：`react-hooks/set-state-in-effect` 禁止在 effect
     // 体里裸调 setState，而这里本来就要跟着一次异步发送走。
@@ -599,7 +711,7 @@ export function useSessionSend({
     // 只跟这几样的变化走。sendMessage / queueFailedSend 每次渲染都是新函数，
     // 列进依赖会让这个 effect 每渲染跑一遍，同一条消息发好几次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, pendingSend, summary, relayTicket]);
+  }, [status, pendingSend, summary, summaryPending, relayTicket]);
 
   /**
    * 往流里挂一条失败气泡。重发失败时原地替换 `replacing` 那一条。
@@ -658,6 +770,8 @@ export function useSessionSend({
   return {
     sending,
     pendingSend,
+    sendingMessage,
+    awaitingRun: sendingMessage !== null && !sendingMessage.acknowledged,
     cancelPendingSend,
     failedSends,
     sendMessage,

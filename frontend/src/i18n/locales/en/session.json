@@ -78,6 +78,7 @@
   },
   "sendPending": {
     "title": "Will send once connected",
+    "sending": "Sending…",
     "cancel": "Cancel"
   },
   "compose": {

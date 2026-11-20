@@ -881,7 +881,7 @@ describe("会话详情页", () => {
     });
   });
 
-  it("发送在途：提交键转成 spinner，输入框不再整块禁用", async () => {
+  it("发送在途：那句话以「发送中」立刻出现，提交键转成 spinner，输入框不再整块禁用", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
       throw new Error("unexpected: " + path);
@@ -899,10 +899,13 @@ describe("会话详情页", () => {
     await screen.findByText(/重构登录页/);
     await sendInComposer("把按钮改成蓝色");
 
-    // 这段窗口里用户那句话在转录里还不存在（要等 daemon 的 user_message 回声过一个
-    // 往返），三点也要等 runtime.run 应答才点亮。此前 sending 被折进 disabled：
-    // 输入框被清空并整块禁用，屏幕上一个字都没有他刚说的话。
-    await waitFor(() => expect(screen.getByLabelText("Sending…")).toBeTruthy());
+    // 这段窗口里 daemon 的 user_message 回声还没回来。此前 sending 被折进 disabled：
+    // 输入框被清空并整块禁用，屏幕上一个字都没有他刚说的话。现在（弱网决策 12）
+    // 那句话立刻以「发送中」站在转录里；run 还没应答、没有一轮可停，提交位仍是
+    // spinner；输入框照旧不整块禁用。
+    const bubble = await screen.findByTestId("send-sending");
+    expect(within(bubble).getByText("把按钮改成蓝色")).toBeTruthy();
+    expect(screen.getByLabelText("Sending…")).toBeTruthy();
     expect(composerDisabled()).toBe(false);
   });
 
@@ -3057,6 +3060,33 @@ describe("会话详情页:发送失败的三类诊断(缺口二)", () => {
         (c) => c[0] === rpcMethods.runtimeSteer,
       ),
     ).toBe(false);
+  });
+
+  // Given 发送那一刻连接没就绪、send 同步抛出（RelayError 带 notSent，一个字节没出去）
+  // When  用户发消息
+  // Then  「还没发出去」气泡，说重发是干净的；不是「可能已送达」，也不自动重发。
+  it("Given 连接未就绪同步失败 When 发消息 Then notSent 气泡且不自动重发", async () => {
+    mount((m) => {
+      if (m === rpcMethods.runtimeRun) {
+        const err = new RelayError(-1, "relay: 连接未就绪");
+        err.notSent = true;
+        throw err;
+      }
+      throw new Error("unexpected: " + m);
+    });
+
+    await renderAndSend("继续");
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(bubble.textContent).toContain(
+      i18n.t("session.sendFailure.notSent.body"),
+    );
+    expect(bubble.textContent).not.toMatch(/may already have arrived/i);
+    const runs = fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeRun,
+    );
+    expect(runs.length).toBe(1);
   });
 
   // Given 请求根本没走到 daemon（socket 刚断，RelayError code=-1）
@@ -7518,7 +7548,11 @@ describe("会话详情：输入框那一带的三种形态", () => {
   });
 
   it("内容到齐之后骨架就撤走,也不再报 busy", async () => {
+    // 镜像那一趟晚一拍才答（这里以失败收场）：清单与转录并行之后，标题由清单先画出来，
+    // 骨架要等转录这一边落定才撤。断言「标题出来的那一刻骨架已经没了」是在赌两条来路的
+    // 先后，CI 上偶发红过；这里把先后摆明，等骨架真的撤走。
     mockedApi.mockImplementation(async (path: string) => {
+      await new Promise((r) => setTimeout(r, 50));
       if (path === "/v1/devices") return { devices: [deviceRow] };
       throw new Error("unexpected: " + path);
     });
@@ -7530,7 +7564,9 @@ describe("会话详情：输入框那一带的三种形态", () => {
     });
     renderPage();
     await screen.findByText(/重构登录页/);
-    expect(screen.queryByTestId("transcript-skeleton")).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByTestId("transcript-skeleton")).toBeNull(),
+    );
     expect(
       screen.getByTestId("session-detail-scroll").getAttribute("aria-busy"),
     ).not.toBe("true");
@@ -7793,7 +7829,8 @@ describe("会话详情页:一轮在跑时的三点", () => {
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
-        seq: 1,
+        // 回声排在清单那一刻执行端的高水位（summary.latestSeq = 2）之后。
+        seq: 3,
       }),
     );
 
@@ -8029,14 +8066,15 @@ describe("会话详情页:一轮在跑时的三点", () => {
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
-        seq: 1,
+        // 回声排在清单那一刻执行端的高水位（summary.latestSeq = 2）之后。
+        seq: 3,
       }),
     );
     act(() =>
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "text_delta", text: "在的" },
-        seq: 2,
+        seq: 4,
       }),
     );
 
@@ -8070,7 +8108,8 @@ describe("会话详情页:一轮在跑时的三点", () => {
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
-        seq: 1,
+        // 回声排在清单那一刻执行端的高水位（summary.latestSeq = 2）之后。
+        seq: 3,
       }),
     );
     act(() =>
@@ -9936,5 +9975,564 @@ describe("会话详情：登录过期失败卡", () => {
     );
     expect(screen.queryByText("claude /login")).toBeNull();
     expect(screen.queryByText("codex login")).toBeNull();
+  });
+});
+
+/**
+ * 弱网规格决策 10 / 11（`docs/specs/2026-11-20-pwa-weak-network.md`「打开对话与
+ * 发送」）：打开对话时执行端清单与镜像转录并行去问；游标对齐、attach、补齐仍要等
+ * 两边都答过；清单还没回来时发送进入排队，清单到了自动发出，清单失败或里面没有
+ * 这一条时排着的那条变成「还没发出去」。
+ */
+describe("会话详情：清单与转录并行（弱网决策 10 / 11）", () => {
+  /** 手动放行的一次往返。 */
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  /** 镜像转录的一页：一帧，seq = 5。 */
+  const transcriptPage = {
+    frames: [
+      {
+        seq: 5,
+        method: "runtime.event",
+        params: {
+          conversationId: "42",
+          event: { kind: "text_delta", text: "镜像里的那一句" },
+        },
+      },
+    ],
+    cursor: 5,
+    has_more: false,
+    oldest_seq: 5,
+    has_before: false,
+  };
+
+  /**
+   * 转录与清单各由一只 deferred 把着；不传的那一边立即应答（转录 = 上面那一页，
+   * 清单 = 带这一条的摘要）。
+   */
+  function mountWith(opts: {
+    transcript?: Promise<unknown>;
+    list?: Promise<unknown>;
+  }) {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return opts.transcript ?? transcriptPage;
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return opts.list ?? { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+    return renderPage();
+  }
+
+  function listCalls() {
+    return fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.sessionList,
+    );
+  }
+
+  function runCalls() {
+    return fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeRun,
+    );
+  }
+
+  it("转录还在路上时清单已经问出去，但对齐、attach、补齐都等转录回来", async () => {
+    const transcript = deferred<unknown>();
+    mountWith({ transcript: transcript.promise });
+
+    // 清单不再排在转录后面：转录一帧都没回来，清单这一问已经出去了。
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    // 镜像那一边还没答：游标起点未知，不能接。
+    await act(async () => {});
+    expect(fakeClient.setCursor).not.toHaveBeenCalled();
+    expect(fakeClient.attach).not.toHaveBeenCalled();
+    expect(fakeClient.catchUp).not.toHaveBeenCalled();
+
+    await act(async () => {
+      transcript.resolve(transcriptPage);
+    });
+
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    // 游标对齐到镜像那一段的末尾，并且排在 attach 之前。
+    expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 5, undefined);
+    expect(fakeClient.setCursor.mock.invocationCallOrder[0]).toBeLessThan(
+      fakeClient.attach.mock.invocationCallOrder[0],
+    );
+    // 两边都答过只接一次，清单也只问一次。
+    expect(fakeClient.attach).toHaveBeenCalledTimes(1);
+    expect(listCalls().length).toBe(1);
+  });
+
+  it("转录先回来先画；清单没回来之前不 attach、不补齐", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+
+    expect(await screen.findByText(/镜像里的那一句/)).toBeTruthy();
+    await act(async () => {});
+    expect(fakeClient.attach).not.toHaveBeenCalled();
+    expect(fakeClient.catchUp).not.toHaveBeenCalled();
+
+    await act(async () => {
+      list.resolve({ sessions: [summary] });
+    });
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    expect(fakeClient.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("清单还没回来时发送：进入排队，清单到了自动发出", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+    await screen.findByText(/镜像里的那一句/);
+
+    await sendInComposer("先把这句排上");
+
+    const queued = await screen.findByTestId("send-pending");
+    expect(queued.textContent).toContain("先把这句排上");
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+    expect(runCalls().length).toBe(0);
+
+    await act(async () => {
+      list.resolve({ sessions: [summary] });
+    });
+
+    await waitFor(() => expect(runCalls().length).toBe(1));
+    expect((runCalls()[0][1] as { userText?: string }).userText).toBe(
+      "先把这句排上",
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-pending")).toBeNull(),
+    );
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+  });
+
+  it("清单失败：排着的那条变成「还没发出去」", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+    await screen.findByText(/镜像里的那一句/);
+    await sendInComposer("清单会失败");
+    await screen.findByTestId("send-pending");
+
+    await act(async () => {
+      list.reject(new RelayError(-1, "relay: timeout"));
+    });
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(bubble.textContent).toContain("清单会失败");
+    expect(screen.queryByTestId("send-pending")).toBeNull();
+    expect(runCalls().length).toBe(0);
+  });
+
+  it("清单失败后重连：清单重问一遍，答到了照常 attach + 补齐", async () => {
+    let relayState: RelayState = "connected";
+    let listFails = true;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return transcriptPage;
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) {
+        if (listFails) throw new RelayError(-1, "relay: timeout");
+        return { sessions: [summary] };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState,
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    const tree = () => (
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    const view = render(tree());
+
+    await screen.findByText(/镜像里的那一句/);
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    await act(async () => {});
+    expect(fakeClient.attach).not.toHaveBeenCalled();
+
+    listFails = false;
+    relayState = "reconnecting";
+    await act(async () => view.rerender(tree()));
+    relayState = "connected";
+    await act(async () => view.rerender(tree()));
+
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    expect(listCalls().length).toBe(2);
+    expect(fakeClient.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("清单里没有这一条：排着的那条变成「还没发出去」", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+    await screen.findByText(/镜像里的那一句/);
+    await sendInComposer("这条对话不在机器上");
+    await screen.findByTestId("send-pending");
+
+    await act(async () => {
+      list.resolve({ sessions: [] });
+    });
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(bubble.textContent).toContain("这条对话不在机器上");
+    expect(screen.queryByTestId("send-pending")).toBeNull();
+    expect(runCalls().length).toBe(0);
+  });
+
+  /** 镜像里有一句**旧的**用户消息（seq 3）的那一页。 */
+  const transcriptWithOldUser = {
+    frames: [
+      {
+        seq: 3,
+        method: "runtime.event",
+        params: {
+          conversationId: "42",
+          event: { kind: "user_message", text: "很久以前那一句" },
+        },
+      },
+      ...transcriptPage.frames,
+    ],
+    cursor: 5,
+    has_more: false,
+    oldest_seq: 3,
+    has_before: false,
+  };
+
+  // 清单先回来、镜像转录还在路上时发送：发送那一刻转录是空的，记下的起点是 0。镜像
+  // 那一段后到，里面那句旧的用户消息不是这一条的回声——「发送中」不能被它顶掉。
+  it("Given 转录还没回来就发出 When 镜像那一段后到 Then 里面的旧用户消息不被当成回声", async () => {
+    const transcript = deferred<unknown>();
+    const run = deferred<unknown>();
+    // 清单那一刻执行端的高水位就是镜像末尾那一帧（5）：镜像只会落在执行端后面。
+    mountWith({
+      transcript: transcript.promise,
+      list: Promise.resolve({ sessions: [{ ...summary, latestSeq: 5 }] }),
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, latestSeq: 5 }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return run.promise;
+      throw new Error("unexpected: " + method);
+    });
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    await sendInComposer("新的这一句");
+    await waitFor(() => expect(runCalls().length).toBe(1));
+
+    await act(async () => {
+      transcript.resolve(transcriptWithOldUser);
+    });
+    expect(await screen.findByText("很久以前那一句")).toBeTruthy();
+
+    const bubble = await screen.findByTestId("send-sending");
+    expect(within(bubble).getByText("新的这一句")).toBeTruthy();
+    await act(async () => run.resolve({}));
+  });
+
+  // 同一个窗口：run 已经被对端接下，之后 attach 收尾按的是**发送之前**问到的那份清单
+  // 快照（idle）。它说不出这之后自己开的一轮，不能把三点与 Running 收回去。
+  it("Given 转录还没回来就发出且 run 已应答 When attach 按旧清单快照收尾 Then 自己开的这一轮仍在跑", async () => {
+    const transcript = deferred<unknown>();
+    mountWith({ transcript: transcript.promise });
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    await sendInComposer("新的这一句");
+    await waitFor(() => expect(runCalls().length).toBe(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-status").textContent).toContain(
+        "Running",
+      ),
+    );
+
+    await act(async () => {
+      transcript.resolve(transcriptPage);
+    });
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(screen.getByTestId("session-detail-status").textContent).toContain(
+      "Running",
+    );
+    expect(screen.queryByRole("status", { name: "Generating" })).toBeTruthy();
+  });
+});
+
+/*
+  弱网规格 2026-11-20 决策 12「发出即见」：按下发送，这条立刻以「发送中」站在转录
+  末尾，三点挂在它之后、头部翻成 Running —— 不等 runtime.run 应答，也不等回声。
+  回声一到它就是正式那条：同一格、只有一条。run 被拒时它变成「拒绝」失败气泡，
+  三点与 Running 一起撤回；一个字节都没发出去时同样撤回，归「还没发出去」。
+*/
+describe("会话详情：发出即见（弱网决策 12）", () => {
+  function deferred<T = unknown>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function wire(onSend: (method: unknown) => unknown) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return onSend(method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮说完了" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done" },
+        seq: 2,
+      });
+    });
+  }
+
+  const typing = () => screen.queryByRole("status", { name: "Generating" });
+  const statusText = () =>
+    screen.getByTestId("session-detail-status").textContent;
+
+  async function openAndSend(text: string) {
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+    await sendInComposer(text);
+  }
+
+  it("Given 空闲会话 When 发送而 run 还没应答 Then 这条以「发送中」站在转录末尾，三点在它之后，头部已是 Running", async () => {
+    const run = deferred();
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return run.promise;
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+
+    const bubble = await screen.findByTestId("send-sending");
+    expect(bubble.getAttribute("role")).toBe("status");
+    expect(bubble.textContent).toContain("Sending…");
+    expect(within(bubble).getByText("再改一处")).toBeTruthy();
+    // 在转录里面，不是挂在转录下面的另一块。
+    expect(
+      bubble.closest('[data-testid="session-detail-transcript"]'),
+    ).toBeTruthy();
+    // 桌面上真用户消息在起始侧，它跟着。
+    expect(bubble.getAttribute("data-align")).toBeNull();
+    const dots = typing();
+    expect(dots).toBeTruthy();
+    expect(
+      bubble.compareDocumentPosition(dots!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(statusText()).toContain("Running");
+
+    await act(async () => run.resolve({}));
+  });
+
+  // 「停止」要停的是一轮**已经存在**的 turn：run 应答之前那一轮还没被对端接下，
+  // 停止键在那段窗口里没有东西可停。三点与 Running 照旧立刻亮（那是「发出去了」的
+  // 回执），停止键等 run 应答才给。
+  it("Given 发送中 When run 还没应答 Then 停止键还不给，应答之后才出现", async () => {
+    const run = deferred();
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return run.promise;
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+    await screen.findByTestId("send-sending");
+    expect(statusText()).toContain("Running");
+    expect(screen.queryByTestId("session-detail-stop")).toBeNull();
+
+    await act(async () => run.resolve({}));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-stop")).toBeTruthy(),
+    );
+  });
+
+  it("Given 发送中 When 回声到达 Then 换成正式那条：同一格、只有一条，三点还在", async () => {
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+
+    const bubble = await screen.findByTestId("send-sending");
+    const slot = bubble
+      .closest("[data-message-id]")
+      ?.getAttribute("data-message-id");
+    expect(slot).toBeTruthy();
+    // run 已经应答过了：回声还没到，这一条仍在「发送中」，不先消失。
+    await waitFor(() => expect(statusText()).toContain("Running"));
+    expect(screen.getByTestId("send-sending")).toBeTruthy();
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "user_message",
+          text: "再改一处",
+          sourceDevice: "fp-web",
+        },
+        seq: 3,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-sending")).toBeNull(),
+    );
+    const shown = screen.getAllByText("再改一处");
+    expect(shown).toHaveLength(1);
+    expect(
+      shown[0].closest("[data-message-id]")?.getAttribute("data-message-id"),
+    ).toBe(slot);
+    expect(typing()).toBeTruthy();
+  });
+
+  // 只贴图不打字的那一条没有 `user_message` 帧：回声就是那一帧附件（共享包
+  // frames.ts 的 openUserMessage）。只认 user_message 的话正式那条落地了、这条还挂着。
+  it("Given 只贴了图 When 回声（附件帧）到达 Then 也让位，不出两条", async () => {
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    });
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+    await awaitComposer();
+    fireEvent.change(
+      screen.getByLabelText("Add image", { selector: "input" }),
+      {
+        target: {
+          files: [
+            new File([new Uint8Array([1, 2, 3])], "shot.png", {
+              type: "image/png",
+            }),
+          ],
+        },
+      },
+    );
+    await screen.findByAltText("shot.png");
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+    await screen.findByTestId("send-sending");
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "image",
+          mediaType: "image/png",
+          source: { inline: "AQID" },
+        },
+        seq: 3,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-sending")).toBeNull(),
+    );
+    expect(
+      screen
+        .getAllByRole("img")
+        .filter(
+          (el) => el.getAttribute("src") === "data:image/png;base64,AQID",
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("Given 发送中 When run 被拒（回落的 steer 也被拒）Then 变成「拒绝」失败气泡，三点与 Running 撤回", async () => {
+    const run = deferred();
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return run.promise;
+      if (m === rpcMethods.runtimeSteer)
+        throw new RelayError(-32603, "该后端不支持插话", {
+          code: -32603,
+          message: "该后端不支持插话",
+        });
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+    await screen.findByTestId("send-sending");
+    expect(typing()).toBeTruthy();
+
+    await act(async () => run.reject(busyError()));
+
+    const failure = await screen.findByTestId("send-failure");
+    expect(failure.getAttribute("data-failure-kind")).toBe("rejected");
+    expect(within(failure).getByText("再改一处")).toBeTruthy();
+    expect(screen.queryByTestId("send-sending")).toBeNull();
+    await waitFor(() => expect(typing()).toBeNull());
+    expect(statusText()).toContain("Idle");
+  });
+
+  it("Given 一个字节都没发出去 When 发送 Then 「还没发出去」气泡，三点与 Running 撤回", async () => {
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) {
+        const err = new RelayError(-1, "relay: 连接未就绪", null);
+        err.notSent = true;
+        throw err;
+      }
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+
+    const failure = await screen.findByTestId("send-failure");
+    expect(failure.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(screen.queryByTestId("send-sending")).toBeNull();
+    await waitFor(() => expect(typing()).toBeNull());
+    expect(statusText()).toContain("Idle");
   });
 });

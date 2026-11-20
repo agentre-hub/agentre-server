@@ -31,6 +31,7 @@ import {
   type SessionRowLinkRenderer,
   type SessionRowModel,
   Button,
+  cn,
 } from "@agentre-hub/agentre-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -529,6 +530,11 @@ export interface SessionIndexProps {
    */
   narrowed?: boolean;
   /**
+   * 换了范围、新的还没回来，`rows` 是上一范围的旧行（弱网规格 2026-11-20 决策 5）。
+   * 它们留在原位、变淡（仍点得开），列表 aria-busy，筛选条下出一条细进度条。
+   */
+  refreshing?: boolean;
+  /**
    * 筛选 chip 由**宿主**持有（规格 2026-08-19 决策 9）：筛选现在在服务端的完整
    * 集合上做，留在这一层就只筛得到已加载的那些，「等你处理」会漏掉真在等的对话。
    */
@@ -617,6 +623,7 @@ export default function SessionIndex({
   onDelete,
   rowStatusLabel = false,
   narrowed = false,
+  refreshing = false,
   filter,
   onFilterChange,
   unreadCount = 0,
@@ -1034,7 +1041,7 @@ export default function SessionIndex({
       */}
       <div
         data-testid="index-controls"
-        className="flex flex-wrap items-center gap-1.5"
+        className="relative flex flex-wrap items-center gap-1.5"
       >
         {/* 可选轴清单由宿主给（共享包决策 17）：本站四档全给，桌面端只 offer 三档。 */}
         <AxisPicker value={axis} axes={INDEX_AXES} onChange={onAxisChange} />
@@ -1068,203 +1075,231 @@ export default function SessionIndex({
             <FolderPlus className="size-4" aria-hidden="true" />
           </button>
         ) : null}
+        {/* 落在控件行与列表之间那 12px 的空隙里（absolute），出现与消失都不推动列表。 */}
+        {refreshing ? <IndexRefreshBar className="top-full mt-[5px]" /> : null}
       </div>
-      {/* 机器轴、项目轴与 Agent 轴上一条行都没有不等于「你还没有对话」：
+      {/* 列表本体。换范围在途时整块变淡但不禁用：旧行照样点得开（决策 5）。 */}
+      <div
+        data-testid="session-index-rows"
+        aria-busy={refreshing || undefined}
+        className={cn(
+          "space-y-3 transition-opacity motion-reduce:transition-none",
+          refreshing && "opacity-55",
+        )}
+      >
+        {/* 机器轴、项目轴与 Agent 轴上一条行都没有不等于「你还没有对话」：
           权威名单里的空组会用共享组内空态如实说明，页面级再说一遍就是重复。收窄之后
           才需要页面级这一句——「没有匹配这次搜索」「这一档不收」是组头说不出的。
           但「组头自己会说」得真有组头才成立：一台能跑会话的机器 / 一个项目都没有
           时这一轴连一个组都出不来，不说话就是一块无言的空白。 */}
-      {showIndexEmpty ? (
-        <SessionIndexEmpty
-          filter={filter}
-          searching={narrowed}
-          total={accountTotal}
-          onShowAll={() => onFilterChange("all")}
-          onClearSearch={onClearSearch}
-        />
-      ) : null}
-      {/* 机器轴的组头本身就是答案的一部分（哪台机器在、它此刻什么状态），
+        {showIndexEmpty ? (
+          <SessionIndexEmpty
+            filter={filter}
+            searching={narrowed}
+            total={accountTotal}
+            onShowAll={() => onFilterChange("all")}
+            onClearSearch={onClearSearch}
+          />
+        ) : null}
+        {/* 机器轴的组头本身就是答案的一部分（哪台机器在、它此刻什么状态），
           因此一行都没有时组照样列。项目轴与 Agent 轴也由宿主权威名单建空组；
           项目组头还是「机器与路径…」「成员…」「未配置」角标唯一的挂点，
           组头不在，刚建出来的项目就再也配不了路径——而没配路径的项目开不出
           对话，于是它永远长不出行、永远回不来（规格 2026-08-21-root-project-entry
           决策 6）。这两轴的「有哪些组」都不是从会话推出来的，是宿主直接给的名单。 */}
-      {showGroups ? (
-        <SessionGroupList>
-          {/* 项目轴按树渲染（与桌面端同一份 nestProjectGroups）：收起父项目要真的把
+        {showGroups ? (
+          <SessionGroupList>
+            {/* 项目轴按树渲染（与桌面端同一份 nestProjectGroups）：收起父项目要真的把
               子项目一起收起来，父项目自己的会话也只有知道它有子项目才下沉进「会话」
               子分组。其余轴 depth 恒为 0，每组都是没有子节点的根。 */}
-          {nestProjectGroups(groups).map(function renderNode(
-            node: IndexGroupNode<MirrorIndexGroup>,
-          ): React.ReactNode {
-            const group = node.group;
-            // 包的树节点只认得 IndexGroupRow；行是本站摊进去的 MirrorIndexGroupRow，
-            // 与上面 buildAxisGroups 的那一处同一个理由。
-            const subtreeRows = node.subtreeRows as MirrorIndexGroupRow[];
-            const scope = scopeOfGroup(group);
-            const overflow =
-              group.kind !== "all" &&
-              scope &&
-              loadGroupPage &&
-              group.total !== undefined &&
-              group.total > group.rows.length
-                ? group.total
-                : undefined;
-            const machineDeviceId = Number(group.key.replace(/^device-/, ""));
-            const machineState = machineStates?.[machineDeviceId];
-            const answered =
-              machineStates === undefined || machineState === "connected";
-            const silentWhenEmpty =
-              scoped ||
-              (group.kind === "machine" && (group.offline || !answered));
-            const emptyLabel = silentWhenEmpty
-              ? null
-              : group.kind === "machine"
-                ? machineEmptyLabel
-                : undefined;
-            const pending =
-              group.kind === "machine" &&
-              group.rows.length === 0 &&
-              machineState === "connecting";
-            const sessions = group.rows.map(sessionModel);
+            {nestProjectGroups(groups).map(function renderNode(
+              node: IndexGroupNode<MirrorIndexGroup>,
+            ): React.ReactNode {
+              const group = node.group;
+              // 包的树节点只认得 IndexGroupRow；行是本站摊进去的 MirrorIndexGroupRow，
+              // 与上面 buildAxisGroups 的那一处同一个理由。
+              const subtreeRows = node.subtreeRows as MirrorIndexGroupRow[];
+              const scope = scopeOfGroup(group);
+              const overflow =
+                group.kind !== "all" &&
+                scope &&
+                loadGroupPage &&
+                group.total !== undefined &&
+                group.total > group.rows.length
+                  ? group.total
+                  : undefined;
+              const machineDeviceId = Number(group.key.replace(/^device-/, ""));
+              const machineState = machineStates?.[machineDeviceId];
+              const answered =
+                machineStates === undefined || machineState === "connected";
+              const silentWhenEmpty =
+                scoped ||
+                (group.kind === "machine" && (group.offline || !answered));
+              const emptyLabel = silentWhenEmpty
+                ? null
+                : group.kind === "machine"
+                  ? machineEmptyLabel
+                  : undefined;
+              const pending =
+                group.kind === "machine" &&
+                group.rows.length === 0 &&
+                machineState === "connecting";
+              // 重新列出中、手上还有上一份的组：旧行留着变淡、仍点得开（弱网规格
+              // 2026-11-20 决策 5），同一套呈现，只是范围缩到这一组。
+              const relisting =
+                group.kind === "machine" &&
+                group.rows.length > 0 &&
+                machineState === "connecting";
+              const sessions = group.rows.map(sessionModel);
 
-            return (
-              <ProjectSessionGroup
-                key={`${group.key}:${overflowRangeKey}`}
-                data-testid={`group-${group.key}`}
-                aria-busy={pending || undefined}
-                aria-label={group.label || undefined}
-                persistenceKey={
-                  group.kind === "all"
-                    ? undefined
-                    : `server.index.${axis}.${group.key}`
-                }
-                defaultExpanded
-                renderHeader={
-                  group.kind === "all"
-                    ? () => null
-                    : ({ expanded, toggle }) => (
-                        <GroupHeader
-                          group={group}
-                          state={machineState}
-                          note={machineNotes?.[machineDeviceId]}
-                          count={
-                            group.kind === "machine" &&
-                            machineState === "connected"
-                              ? (group.total ?? group.rows.length)
-                              : undefined
-                          }
-                          onRetry={
-                            onRetryMachine
-                              ? () => onRetryMachine(machineDeviceId)
-                              : undefined
-                          }
-                          expanded={expanded}
-                          toggle={toggle}
-                          onExpandedChange={onGroupExpandedChange}
-                          projectHandlers={projectHandlers}
-                          onAgentNewSession={onAgentNewSession}
-                          onImport={setImportPrefill}
-                          agentAvatarIcon={
-                            group.kind === "agent"
-                              ? agentById.get(group.key)?.avatarIcon
-                              : undefined
-                          }
-                        />
-                      )
-                }
-                sessions={sessions}
-                selectedSessionId={selectedKey ?? undefined}
-                attentionSessions={[]}
-                // 折叠态气泡冒整棵子树：收起父项目时子项目也不在屏幕上了。
-                collapsedAttentionSessions={subtreeRows
-                  .filter((row) => attentionReasonOf(row) !== null)
-                  .map((row) =>
-                    attentionModel(
-                      row,
-                      row.deviceId === undefined
-                        ? undefined
-                        : sessionPath({ ...row, deviceId: row.deviceId }),
-                    ),
+              return (
+                <ProjectSessionGroup
+                  key={`${group.key}:${overflowRangeKey}`}
+                  data-testid={`group-${group.key}`}
+                  aria-busy={pending || relisting || undefined}
+                  className={cn(
+                    "transition-opacity motion-reduce:transition-none",
+                    relisting && "opacity-55",
                   )}
-                renderLink={renderSessionLink}
-                onSessionSelect={
-                  onSelect
-                    ? (id, options) => {
-                        if (options?.newTab) return;
-                        const row = group.rows.find((item) => item.key === id);
-                        if (row) {
-                          setCursorKey(row.key);
-                          openRow(row);
-                        }
-                      }
-                    : undefined
-                }
-                onDeleteSession={
-                  onDelete
-                    ? (id) => {
-                        const row = group.rows.find((item) => item.key === id);
-                        if (row) onDelete(row);
-                      }
-                    : undefined
-                }
-                canDeleteSession={
-                  onDelete
-                    ? (id) =>
-                        group.rows.some(
-                          (row) => row.key === id && row.saved !== false,
-                        )
-                    : undefined
-                }
-                totalSessions={overflow}
-                renderSessionsPopover={
-                  overflow && scope && loadGroupPage
-                    ? (close, trigger) => {
-                        const rect = trigger?.getBoundingClientRect();
-                        const side =
-                          rect && window.innerHeight - rect.bottom < rect.top
-                            ? "top"
-                            : "bottom";
-                        return (
-                          <SessionGroupOverflow
-                            key={overflowRangeKey}
-                            title={group.label}
-                            side={side}
-                            align="start"
-                            onClose={close}
-                            loadPage={overflowLoader(
-                              group.key,
-                              scope,
-                              overflowRangeKey,
-                            )}
-                            getRowKey={(row) => row.key}
-                            renderRow={renderOverflowRow}
+                  aria-label={group.label || undefined}
+                  persistenceKey={
+                    group.kind === "all"
+                      ? undefined
+                      : `server.index.${axis}.${group.key}`
+                  }
+                  defaultExpanded
+                  renderHeader={
+                    group.kind === "all"
+                      ? () => null
+                      : ({ expanded, toggle }) => (
+                          <GroupHeader
+                            group={group}
+                            state={machineState}
+                            note={machineNotes?.[machineDeviceId]}
+                            count={
+                              group.kind === "machine" &&
+                              machineState === "connected"
+                                ? (group.total ?? group.rows.length)
+                                : undefined
+                            }
+                            onRetry={
+                              onRetryMachine
+                                ? () => onRetryMachine(machineDeviceId)
+                                : undefined
+                            }
+                            expanded={expanded}
+                            toggle={toggle}
+                            onExpandedChange={onGroupExpandedChange}
+                            projectHandlers={projectHandlers}
+                            onAgentNewSession={onAgentNewSession}
+                            onImport={setImportPrefill}
+                            agentAvatarIcon={
+                              group.kind === "agent"
+                                ? agentById.get(group.key)?.avatarIcon
+                                : undefined
+                            }
                           />
-                        );
-                      }
-                    : undefined
-                }
-                pending={pending ? <SessionRowSkeleton rows={2} /> : undefined}
-                emptyLabel={emptyLabel}
-                subprojects={
-                  node.children.length > 0
-                    ? node.children.map(renderNode)
-                    : undefined
-                }
-                ownSessionsName={group.label}
-                ownSessionsCount={group.total}
-              />
-            );
-          })}
-        </SessionGroupList>
-      ) : null}
-      {(hasMore || loadMoreFailed) && onLoadMore && (
-        <LoadMore
-          loading={loadingMore}
-          failed={loadMoreFailed}
-          onLoadMore={onLoadMore}
-        />
-      )}
+                        )
+                  }
+                  sessions={sessions}
+                  selectedSessionId={selectedKey ?? undefined}
+                  attentionSessions={[]}
+                  // 折叠态气泡冒整棵子树：收起父项目时子项目也不在屏幕上了。
+                  collapsedAttentionSessions={subtreeRows
+                    .filter((row) => attentionReasonOf(row) !== null)
+                    .map((row) =>
+                      attentionModel(
+                        row,
+                        row.deviceId === undefined
+                          ? undefined
+                          : sessionPath({ ...row, deviceId: row.deviceId }),
+                      ),
+                    )}
+                  renderLink={renderSessionLink}
+                  onSessionSelect={
+                    onSelect
+                      ? (id, options) => {
+                          if (options?.newTab) return;
+                          const row = group.rows.find(
+                            (item) => item.key === id,
+                          );
+                          if (row) {
+                            setCursorKey(row.key);
+                            openRow(row);
+                          }
+                        }
+                      : undefined
+                  }
+                  onDeleteSession={
+                    onDelete
+                      ? (id) => {
+                          const row = group.rows.find(
+                            (item) => item.key === id,
+                          );
+                          if (row) onDelete(row);
+                        }
+                      : undefined
+                  }
+                  canDeleteSession={
+                    onDelete
+                      ? (id) =>
+                          group.rows.some(
+                            (row) => row.key === id && row.saved !== false,
+                          )
+                      : undefined
+                  }
+                  totalSessions={overflow}
+                  renderSessionsPopover={
+                    overflow && scope && loadGroupPage
+                      ? (close, trigger) => {
+                          const rect = trigger?.getBoundingClientRect();
+                          const side =
+                            rect && window.innerHeight - rect.bottom < rect.top
+                              ? "top"
+                              : "bottom";
+                          return (
+                            <SessionGroupOverflow
+                              key={overflowRangeKey}
+                              title={group.label}
+                              side={side}
+                              align="start"
+                              onClose={close}
+                              loadPage={overflowLoader(
+                                group.key,
+                                scope,
+                                overflowRangeKey,
+                              )}
+                              getRowKey={(row) => row.key}
+                              renderRow={renderOverflowRow}
+                            />
+                          );
+                        }
+                      : undefined
+                  }
+                  pending={
+                    pending ? <SessionRowSkeleton rows={2} /> : undefined
+                  }
+                  emptyLabel={emptyLabel}
+                  subprojects={
+                    node.children.length > 0
+                      ? node.children.map(renderNode)
+                      : undefined
+                  }
+                  ownSessionsName={group.label}
+                  ownSessionsCount={group.total}
+                />
+              );
+            })}
+          </SessionGroupList>
+        ) : null}
+        {(hasMore || loadMoreFailed) && onLoadMore && (
+          <LoadMore
+            loading={loadingMore}
+            failed={loadMoreFailed}
+            onLoadMore={onLoadMore}
+          />
+        )}
+      </div>
       {/*
         导入对话框整条都在包里，本站只给 ports 与「导完去哪」。**条件渲染**而不是
         常驻 open={false}：里面那份候选列表一挂载就去问机器，常驻等于每次进会话页
@@ -1282,6 +1317,29 @@ export default function SessionIndex({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * 换范围在途的那一条细进度条（弱网规格 2026-11-20 决策 5），桌面索引与手机首页共用。
+ *
+ * 宿主给它一个 `relative` 的容器和落位（className），它自己贴满宽。对读屏隐藏：
+ * 列表上的 aria-busy 已经说了「在取」，一条量不出进度的装饰条再念一遍只是噪音。
+ * 关键帧与连接中那条同一份（globals.css 的 session-connect）；`motion-reduce` 下停成
+ * 一条静止的浅色线。
+ */
+export function IndexRefreshBar({ className }: { className?: string }) {
+  return (
+    <span
+      data-testid="index-refresh-bar"
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none absolute inset-x-0 h-0.5 overflow-hidden",
+        className,
+      )}
+    >
+      <span className="absolute inset-y-0 w-2/5 animate-[session-connect_1.25s_cubic-bezier(0.4,0,0.2,1)_infinite] rounded-full bg-primary motion-reduce:inset-x-0 motion-reduce:w-full motion-reduce:animate-none motion-reduce:opacity-40" />
+    </span>
   );
 }
 

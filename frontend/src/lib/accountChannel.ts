@@ -85,7 +85,15 @@ export type AccountChannelState = "connected" | "connecting" | "disconnected";
 export type AccountSignalSource = Pick<
   typeof relayClientPool,
   "subscribeSignals"
->;
+> &
+  /** 可选：不提供的替身 / 调用方按「池子没在换连接」处理。 */
+  Partial<Pick<typeof relayClientPool, "isResuming">>;
+
+/**
+ * 回前台时让出补齐后的兜底期限：池子在换连接而一直没等到「连上」（换连接失败、
+ * 在退避里），这时仍要补一次，不能让页面一直不刷新。
+ */
+const ResumeRefreshFallbackMs = 10_000;
 
 export interface AccountChannelOptions {
   /**
@@ -272,7 +280,28 @@ export function startAccountChannel(
   function onVisibilityChange(): void {
     if (stopped || !visible()) return;
     closeWindow();
+    // 池子正在换连接（决策 4）：换成功后「连上」那次 refresh(null) 拿到的才是新数据，
+    // 这里再补一次就是全页刷新两遍。让出去，但留兜底：换连接失败时仍要刷新一次。
+    if (source.isResuming?.()) {
+      deferResumeRefresh();
+      return;
+    }
     refresh(null);
+  }
+
+  let resumeFallback: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelResumeFallback(): void {
+    if (resumeFallback !== null) clearTimeout(resumeFallback);
+    resumeFallback = null;
+  }
+
+  function deferResumeRefresh(): void {
+    cancelResumeFallback();
+    resumeFallback = setTimeout(() => {
+      resumeFallback = null;
+      refresh(null);
+    }, ResumeRefreshFallbackMs);
   }
 
   doc?.addEventListener("visibilitychange", onVisibilityChange);
@@ -311,6 +340,8 @@ export function startAccountChannel(
         if (next === "connected") {
           live = true;
           setState("connected");
+          // 连上了，让出去的那次补齐由下面这一次兑现。
+          cancelResumeFallback();
           // 连上（首次或重连都一样）：立刻主动拉一次，断线期间的变更由它补齐。
           refresh(null);
           return;
@@ -327,6 +358,7 @@ export function startAccountChannel(
       stopped = true;
       clearInterval(poll);
       closeWindow();
+      cancelResumeFallback();
       // 留在 document 上的监听会把这个 handle 连同它闭包里那一份调用方状态一起
       // 吊住，页面切一次就漏一份。
       doc?.removeEventListener("visibilitychange", onVisibilityChange);

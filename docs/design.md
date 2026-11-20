@@ -131,7 +131,10 @@ shipped by the shared package):
 What stays legitimate, because the lines carry meaning: the focus ring
 (`focus-visible:focus-outline`, `focus-outline-inset`), the unchecked edge of a checkbox,
 radio or switch (`border-control-border`), a status colour bar (`border-l-2
-border-l-status-running`) and a drag-and-drop target (`border-dashed border-ring`) — none
+border-l-status-running`), a drag-and-drop target (`border-dashed border-ring`) and the
+"sending…" message that has left the browser but whose echo has not arrived yet
+(`PendingSendBubble state="sending"`: `border-dashed border-muted-foreground/40`), which
+the queued message shares on a phone (on desktop the queued one keeps its filled block) — none
 of these is a divider colour, so the rules do not see them. A genuine keeper the class
 table cannot recognise gets `// eslint-disable-next-line no-restricted-syntax -- <reason>`
 on the line; the reason is mandatory. Tests and `eslint-rules/` are exempt, as for the other
@@ -827,6 +830,14 @@ bottom 888).
   `location.state`. The back button and system `popstate` both close only the layer and keep
   the conversation tabs; closing the last tab pops that entry. A stale marker with no tabs
   counts as closed. Desktop keeps the 420px right column and adds no history entries.
+  A message you just sent is in the transcript at once, before `runtime.run` answers: its
+  row is drawn by `PendingSendBubble state="sending"` (through `Transcript`'s
+  `sendingRow`), the typing dots follow it and the header turns Running; Stop is offered
+only once `runtime.run` answers, since before that there is no turn to stop. The machine's
+  `user_message` echo takes the same row, so the message keeps its place and is never shown twice; a
+  failed send turns it into the failure bubble and withdraws the dots and Running. That
+  bubble and the queued one use the real user message's alignment: the end side on a
+  phone, the start side on desktop.
 - **Composer** (`SessionComposerBand`, `shrink-0 px-5 pt-2 pb-3`) — no top border and no
   background of its own: it shares the sheet with the transcript, and a short fade from
   `sheet` above it says "there is more below" when the transcript is not scrolled to the
@@ -1331,7 +1342,18 @@ real device.
 ## Async state
 
 **There is no shared query layer.** Each page or feature hook owns its own `loading` /
-`error` state and calls `api()` directly. The one shared piece is `useAliveEffect`
+`error` state and calls `api()` directly. The exception is the four account rosters that
+one screen asks for from several places — devices, agents, projects and the "needs you"
+count. They go through `frontend/src/lib/rosterFetch.ts` (`deviceRoster`, `agentRoster`,
+`projectRoster`, `attentionRoster`): callers at the same moment share one in-flight
+request, and a result is reused for 10 seconds. It is deliberately not a library or a
+cache of arbitrary endpoints, and its invalidation is part of the contract — the matching
+account-channel signal (`use-account-channel` invalidates before it wakes subscribers),
+`refresh(null)`, and every write the owning module makes (`renameDevice`, the project
+writes) drop it; a failure is never cached. A read that must see this moment, such as a
+re-read after a write elsewhere or the reconnect probe, calls the plain `fetch*` function
+instead. Page tests get a clean cache per case from `src/test/setup.ts`. The other shared
+piece is `useAliveEffect`
 (`frontend/src/hooks/use-alive-effect.ts`): it stops a round's callbacks from writing state
 once that round no longer counts. Its own doc comment owns why, including the fetch race
 it prevents. Mount-guard + loading + error are deliberately *not* folded into a shared
@@ -1382,6 +1404,25 @@ replaces.
 channel's `sync_version` signals refresh the org chart in place; only the first load
 paints the skeleton.
 
+**Nor does a change of range: the old rows stay, dimmed, until the new ones replace
+them.** The Chat session list (desktop index column and phone home, both through
+`useSessionIndex`) treats a change of scope, filter or search as a range change. While the
+new range is in flight (`refreshing`), the previous rows stay in place at `opacity-55` and
+stay clickable, the list carries `aria-busy`, and a thin indeterminate bar
+(`IndexRefreshBar`, sharing the `session-connect` keyframe in `globals.css` and going still
+under `motion-reduce`) sits under the filter row. It is positioned absolutely, so it does
+not push the list. The answer replaces the rows in one swap. A range already seen on this
+page is shown from an in-memory cache straight away, without the dim, while it re-fetches
+in the background (the cache lives for the page's lifetime and is never written to
+storage). If the new range fails, the old rows return to full opacity under the existing
+load-failure banner and its retry; only a list with nothing in hand falls back to the
+error empty state. The skeleton is left for the first load, or for a range change with no
+rows in hand. A refresh signal never aborts an in-flight round. It is queued as a single
+follow-up fetch for when that round lands. The by-machine axis follows the same rule per
+group: a machine that is re-listing keeps the rows it already handed over, dimmed and
+`aria-busy` (the phone list dims as a whole), and the answer replaces them in one swap;
+only a machine group with nothing in hand yet shows its skeleton.
+
 **Nor does its label move before its numbers do.** `Overview` keeps the range that the
 figures on screen actually came from (`loadedRange`, settled with the response) and labels
 them with that, not with the range the user just clicked. Flipping the label first leaves a
@@ -1423,7 +1464,8 @@ as a look-alike display element taken out of the focus order.
 accessible name must not change with the sidebar's width.
 
 **Announce by urgency.** In-place, non-urgent state uses `role="status"`
-(`PendingSendBubble`, `DecisionPanel`, the composer's model and effort controls, and
+(`PendingSendBubble` in both states, so a screen reader reads "Sending…" or "Will send
+once connected" with the message, `DecisionPanel`, the composer's model and effort controls, and
 `SessionConnectionIndicator`, which adds `aria-live="polite"`). A failure uses
 `role="alert"` (`SendFailureBubble`, `DraftSession`, `Issues`, `Org`, `ChatIndexPanel`).
 When the change has no visible text of its own, add an `sr-only` announcer, as

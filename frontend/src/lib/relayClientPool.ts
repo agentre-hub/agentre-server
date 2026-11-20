@@ -50,6 +50,15 @@ const DEFAULT_IDLE_GRACE_MS = 30_000;
 const TICKET_RENEW_MARGIN_MS = 30_000;
 
 /**
+ * 在后台待满这么久回来，就不信那条连接还活着了（决策 1）。
+ *
+ * 中继协议里没有服务端自己应答的消息，浏览器也发不了 WebSocket ping，判不了一条
+ * 自称 connected 的 socket 是不是早已死掉；而 iOS 把页面放进后台时断连是常态，死连接
+ * 要等最多 45 秒才自己报关闭。猜错的代价是一次多余的重连（约 1 秒、界面不清空）。
+ */
+const FOREGROUND_REPLACE_AFTER_MS = 5_000;
+
+/**
  * 一个使用方的收件口。全是可选的：一次性调用只是想借条通道发个请求，什么都不听。
  */
 export interface RelayListener {
@@ -138,6 +147,8 @@ export class RelayClientPool {
   private readonly signalSubscribers = new Set<RelaySignalSubscriber>();
   /** 前台恢复那一次重连正在途中：两个事件接连到达不重复重连。 */
   private resuming = false;
+  /** 页面这一次是什么时候转到后台的；可见时为 null。回到前台时据它判连接死活。 */
+  private hiddenAt: number | null = null;
   private stopForegroundWatch: (() => void) | null = null;
 
   constructor(deps: RelayClientPoolDeps = {}) {
@@ -278,6 +289,19 @@ export class RelayClientPool {
     };
   }
 
+  /**
+   * 回到前台的那次换连接是否已判定或正在途中：从判定那一刻起，到新连接连上或建
+   * 不起来为止（决策 4 的依据）。
+   *
+   * 「已判定」包括池子还没来得及处理的那一下：页面刚从后台转为可见、可见性事件还
+   * 排在别的监听者后面时，这里按池子即将做出的判断作答——账号通道的
+   * visibilitychange 监听装得比池子早，会先跑。一直可见时照常的退避重连不算。
+   */
+  isResuming(): boolean {
+    if (this.resuming) return true;
+    return this.hiddenAt !== null && this.foregroundWillReconnect();
+  }
+
   // ── 内部 ──────────────────────────────────────────────────────────────
 
   private ensureConnection(): Promise<{
@@ -333,25 +357,33 @@ export class RelayClientPool {
 
   /**
    * 前台恢复：页面切回可见（`visibilitychange` 变可见）、`pageshow`（含 bfcache 恢复）
-   * 或网络恢复（`online`）时，不是 open 的连接立即重连，不等退避——后台里 socket 多半
-   * 已死、定时器也被节流；断网期间攒下的退避则能长到 15–30 秒。
-   * 各通道在新 socket 上走原有的 onOpen 补齐路径；已连着的连接不动。
+   * 或网络恢复（`online`）时立即重连，不等退避——后台里 socket 多半已死、定时器也被
+   * 节流；断网期间攒下的退避则能长到 15–30 秒。
+   *
+   * 在后台待满 FOREGROUND_REPLACE_AFTER_MS 回来的，连着的也换（决策 1）；不足的信它，
+   * 只重连不是 open 的那条——之后它若断开，页面可见，连接自己立即重拨（决策 2）。
+   * 每次重连都在 refreshCredentials 里现换一张票：一张票只换一条连接。
+   * 各通道在新 socket 上走原有的 onOpen 补齐路径。
    * 只在连接建出来时装一次，`closeAll` 时拆掉。
    */
   private watchForeground(): void {
     if (this.stopForegroundWatch || typeof document === "undefined") return;
+    // 连接是在后台建起来的：那段时长从这里算起。登出（closeAll）前留下的那一次不作数。
+    this.hiddenAt = document.visibilityState === "hidden" ? Date.now() : null;
     const onForeground = () => {
-      if (document.visibilityState === "hidden") return;
-      const connection = this.connection;
-      if (!connection || this.resuming) return;
-      // connecting：首次握手 / 一次重连已在途中。
-      if (connection.state === "connected" || connection.state === "connecting")
+      if (document.visibilityState === "hidden") {
+        this.hiddenAt ??= Date.now();
         return;
+      }
+      const connection = this.connection;
+      const decided = this.foregroundWillReconnect();
+      this.hiddenAt = null;
+      if (!connection || !decided) return;
       this.resuming = true;
       connection
         .reconnect()
         .catch(() => {
-          // 取票失败：原有的退避计时器还在，由它接着重试。
+          // 取票失败 / 新连接拨不通：连接自己照现有的退避接着重试。
         })
         .finally(() => {
           this.resuming = false;
@@ -365,6 +397,25 @@ export class RelayClientPool {
       window.removeEventListener("pageshow", onForeground);
       window.removeEventListener("online", onForeground);
     };
+  }
+
+  /**
+   * 页面此刻可见的话，前台恢复会不会换连接。纯判断，不动任何状态：前台事件与
+   * isResuming 共用它，两边因此不会各说各话。
+   */
+  private foregroundWillReconnect(): boolean {
+    const connection = this.connection;
+    if (!connection || this.resuming) return false;
+    if (typeof document === "undefined") return false;
+    if (document.visibilityState === "hidden") return false;
+    const longAway =
+      this.hiddenAt !== null &&
+      Date.now() - this.hiddenAt >= FOREGROUND_REPLACE_AFTER_MS;
+    if (longAway) return true;
+    // connecting：首次握手 / 一次重连已在途中。
+    return (
+      connection.state !== "connected" && connection.state !== "connecting"
+    );
   }
 
   /**

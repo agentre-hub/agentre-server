@@ -1,5 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
+  EventImage,
   EventSteerConsumed,
   EventUserMessage,
   sessionListFromProtobuf,
@@ -83,7 +84,8 @@ import {
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
 import { useEngineCatalog } from "@/lib/engineCatalog";
-import { fetchProjects, type ProjectNode } from "@/lib/projects";
+import { agentRoster } from "@/lib/agents";
+import { projectRoster, type ProjectNode } from "@/lib/projects";
 import {
   classifySendFailure,
   deriveSessionViewStatus,
@@ -356,6 +358,29 @@ export default function SessionDetailView({
   >(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   /**
+   * 装载那一遍的执行端清单答过没有、答的是什么（弱网决策 10）。
+   *
+   * 清单与镜像转录并行去问，两边谁先回来都行；游标对齐、attach 与补齐要两边都答过
+   * 才跑（见 attach effect）。所以清单的答复要先存下来等镜像，而不是在同一趟异步
+   * 里接着往下走。
+   *
+   * 记着是在**哪一个客户端**上问的：通道在 ready 之前换了客户端，上一个客户端答的
+   * 那一份不算数（origin 与游标都是那条连接上的账）。连接一断就作废（见中继 hook
+   * 之后那一段渲染期重置）——与从前一样，重连回来从清单起整趟再走一遍。
+   *
+   * `summary` 不能顶这一格：清单里没有这一条时 summary 如实是 null，而「还没答」
+   * 与「答了但没有」对发送是两回事——前者排队等它，后者是「还没发出去」（决策 11）。
+   */
+  const [listed, setListed] = useState<
+    | {
+        client: import("@/lib/relayClient").RelayClient;
+        ok: true;
+        summary: SessionSummary | null;
+      }
+    | { client: import("@/lib/relayClient").RelayClient; ok: false }
+    | null
+  >(null);
+  /**
    * 账号镜像那一行派生出来的摘要 —— 头部的**替补**来路。
    *
    * 与 summary 分开存，不合成一个：中继的摘要是执行端此刻的实况，镜像那一行是账号
@@ -548,6 +573,7 @@ export default function SessionDetailView({
     setLastTarget({ did, sid, originProp });
     setHistory({ settled: false, loaded: false });
     setSummary(null);
+    setListed(null);
     setMirrorSummary(null);
     setEvents([]);
     setPreviewTail([]);
@@ -795,6 +821,11 @@ export default function SessionDetailView({
   // 断线原因探测排在中继之后：它看的正是中继吐出来的 relayState。
   useReconnectProbe(target.probe, did, relayState);
 
+  // 清单的答复属于**那一条**连接：断了就作废，重连回来装载那一遍从清单起整趟重走
+  // （与从前清单、attach、补齐写在同一趟里时一样）。渲染期重置，理由同上面换目标
+  // 那一段：effect 里禁 setState。
+  if (listed !== null && relayState !== "connected") setListed(null);
+
   useEffect(() => {
     clientRef.current = client;
   }, [client]);
@@ -804,10 +835,12 @@ export default function SessionDetailView({
   }, [events]);
 
   // Agent 清单（头部要「是哪个 Agent 在跑」）。锦上添花：取不到就退回状态文字，
-  // 不阻塞详情渲染，也不伪造名字。
+  // 不阻塞详情渲染，也不伪造名字。与对话页同一屏，走共享名单（`@/lib/rosterFetch`），
+  // 项目树同理。
   useAliveEffect((alive) => {
-    api<{ agents?: WorkspaceAgent[] }>("/v1/workspace/agents")
-      .then((res) => alive() && setAgents(res.agents ?? []))
+    agentRoster
+      .get<WorkspaceAgent>()
+      .then((got) => alive() && setAgents(got))
       .catch(() => {})
       // 取不到也算问过：转录抬头不能为了一次失败永远吊着不写名字。
       .finally(() => alive() && setAgentsSettled(true));
@@ -817,7 +850,8 @@ export default function SessionDetailView({
   // 不阻塞详情渲染。这里不设 settled 那一格 —— 项目名解不开时整段不摆，没有
   // 「先摆个中性的、等一下换掉」这种中间态要区分。
   useAliveEffect((alive) => {
-    fetchProjects()
+    projectRoster
+      .get()
       .then((got) => alive() && setProjects(got))
       .catch(() => {});
   }, []);
@@ -1026,7 +1060,45 @@ export default function SessionDetailView({
     [sid],
   );
 
-  // 已连接 → 取会话摘要 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
+  /**
+   * 已连接 → 取会话摘要（装载那一遍的第一步）。
+   *
+   * 与镜像转录**并行**（弱网决策 10）：两者没有数据依赖，从前排在 `history.settled`
+   * 之后只是写成了先后，弱网下就是白等一整趟 HTTP 才开始问机器。镜像那边只决定补齐
+   * 从哪儿接，这一份先回来就先存着（`listed`），attach effect 等两边都答过再走。
+   *
+   * 摘要先落地还有一层用处：输入框在握手完成时就能用，清单没回来之前的那一次发送排
+   * 着队（决策 11），等的就是这里的 `setSummary`。
+   */
+  useAliveEffect(
+    (alive) => {
+      if (!client || relayState !== "connected" || ready) return;
+      if (listed?.client === client) return;
+      void (async () => {
+        try {
+          // 点名要这一条,而不是把整台机器的清单翻一遍去找它:那台机器上可能有
+          // 几千条对话,而这里从头到尾只关心一条。
+          const listRaw = await client.request(rpcMethods.sessionList, {
+            conversationIds: [sid],
+          });
+          if (!alive()) return;
+          const list = sessionListFromProtobuf(listRaw);
+          const s = list.sessions.find((x) => x.conversationId === sid) ?? null;
+          setSummary(s);
+          setListed({ client, ok: true, summary: s });
+        } catch {
+          // 清单都问不到：读不到这台机器上的这一条，与补齐失败同一种呈现（要出声）。
+          // 重连之后 `listed` 作废，整趟重走。
+          if (!alive()) return;
+          setListed({ client, ok: false });
+          setCatchUpFailed(true);
+        }
+      })();
+    },
+    [client, relayState, ready, listed, sid],
+  );
+
+  // 清单 + 镜像都答过 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
   useAliveEffect(
     (alive) => {
       // 镜像历史先落地：它不走客户端的游标去重，补齐若抢在前面，同一段转录会被两条
@@ -1041,21 +1113,15 @@ export default function SessionDetailView({
         void reattachOnNewClient(client, alive);
         return;
       }
+      // 清单还没在这个客户端上答过（或答的是失败，那一头已经出过声）：origin 与
+      // 高水位都还不知道，等它。
+      if (listed?.client !== client || !listed.ok) return;
+      const s = listed.summary;
       (async () => {
         try {
-          // 点名要这一条,而不是把整台机器的清单翻一遍去找它:那台机器上可能有
-          // 几千条对话,而这里从头到尾只关心一条。
-          const listRaw = await client.request(rpcMethods.sessionList, {
-            conversationIds: [sid],
-          });
-          const list = sessionListFromProtobuf(listRaw);
-          const s = list.sessions.find((x) => x.conversationId === sid);
           // origin 在 attach 之前就得学到（下一行就要用它）。
           const origin = s?.peerFingerprint?.trim() || undefined;
           originRef.current = origin;
-          if (alive()) {
-            setSummary(s ?? null);
-          }
           // 补齐从镜像那一段的末尾接上：server 已经交出来的不再向执行端要一遍，而真
           // 跳了号的那一段仍由客户端回执行端补洞（applyDedup）。
           //
@@ -1159,6 +1225,7 @@ export default function SessionDetailView({
       relayState,
       ready,
       history.settled,
+      listed,
       did,
       sid,
       device?.fingerprint,
@@ -1603,6 +1670,8 @@ export default function SessionDetailView({
     originProp,
     status,
     summary,
+    // 装载那一遍还在等这个客户端上的清单（ready 之后摘要由轮次边界刷新，不再等）。
+    summaryPending: !ready && listed?.client !== client,
     relayTicket,
     clientRef,
     originRef,
@@ -1614,7 +1683,71 @@ export default function SessionDetailView({
     steerQueue,
     // 自己开的这一轮，起点就是此刻 —— 那条 meta 的耗时从这里开始走。
     onOwnTurnStarted: () => liveTurn.beginTurn(Date.now()),
+    // 「发送中」那一条的回声判据从这一刻的 seq 算起。只在发送那一刻读（提交后快照）。
+    //
+    // 清单的高水位一并算进去：清单先回来就能发送（弱网决策 10），那时镜像那一段可能
+    // 还在路上、转录是空的。它后到时里面的旧用户消息 seq 都不超过清单那一刻执行端的
+    // 高水位，不能被当成这一条的回声；这一条的回声只会在那之后。
+    transcriptSeq: () => {
+      let shown = summary?.latestSeq ?? 0;
+      for (const f of eventsRef.current) {
+        if (f.seq !== undefined && f.seq > shown) shown = f.seq;
+      }
+      return shown;
+    },
   });
+
+  /**
+   * 「发送中」那一条此刻还该不该摆（弱网决策 12）。
+   *
+   * 让位的判据是**回声**：发送那一刻之后到的一帧 `user_message`（持久与预览两路都
+   * 认，见 `framesForProjection`）—— 它就是这一条的正式版本，再摆一次就是同一句话
+   * 说两遍。只贴图不打字的那一条没有 `user_message`，回声是它的附件帧（共享包
+   * frames.ts 的 openUserMessage），一并认。预览帧不带 seq，它们本来就只活在这一轮
+   * 里，按「之后到的」算。
+   *
+   * 另一个出口是这一轮已经不在跑、请求也不在飞：回声没来而这一轮已经结束（或被
+   * 撤回），继续说「发送中」就是在替远端撒谎。
+   */
+  const sendingShown = useMemo(() => {
+    const pending = send.sendingMessage;
+    if (!pending || !(send.sending || running)) return false;
+    return !framesForProjection.some((f) => {
+      const kind = (f.event as { kind?: string } | undefined)?.kind;
+      return (
+        (kind === EventUserMessage || kind === EventImage) &&
+        (f.seq === undefined || f.seq > pending.afterSeq)
+      );
+    });
+  }, [send.sendingMessage, send.sending, running, framesForProjection]);
+  /**
+   * 交给转录那一份：投影出来的 + 「发送中」那一条接在末尾。
+   *
+   * 编号取末尾的下一个：投影器给消息的编号就是它在转录里的次序，回声落地后正式那
+   * 条拿到的正是这一个 —— 行 key 不变，虚拟器的测量接得上，位置不跳。
+   */
+  const transcriptMessages = useMemo(() => {
+    const pending = send.sendingMessage;
+    if (!pending || !sendingShown) return messages;
+    const nextId = messages.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+    return [
+      ...messages,
+      {
+        ...pendingUserMessage(
+          pending.text,
+          TranscriptSessionId,
+          pending.images,
+        ),
+        id: nextId,
+        seq: messages.at(-1)?.seq ?? 0,
+      },
+    ];
+  }, [messages, send.sendingMessage, sendingShown]);
+  /**
+   * 停止键只在这一轮被对端接下之后给（发出即见那一段里「在跑」是提前亮的，那时
+   * 还没有一轮可停）。头部与输入框提交位两处同一个判据。
+   */
+  const offeredStop = send.awaitingRun ? undefined : onStop;
 
   /*
     轮末插话的去向。它要 `send.sendMessage`，所以只能排在这里（发送那一族之后）；
@@ -2020,7 +2153,7 @@ export default function SessionDetailView({
       // **落定**时各取一份，轮次进行中它说的是上一次落定时的事。
       running={running}
       decisionPending={decisionPending}
-      onStop={onStop}
+      onStop={offeredStop}
       stopping={turnStop.stopping}
       model={fallbackModel}
       onDelete={onDelete}
@@ -2062,7 +2195,10 @@ export default function SessionDetailView({
       handedOver={handedOverText}
       ready={ready}
       catchUpFailed={catchUpFailed}
-      messages={messages}
+      messages={transcriptMessages}
+      sendingMessageId={
+        sendingShown ? transcriptMessages.at(-1)?.id : undefined
+      }
       localFingerprint={relayTicket?.peerFingerprint}
       agentName={agent?.name}
       agentAvatar={rowAvatar}
@@ -2104,7 +2240,7 @@ export default function SessionDetailView({
       }}
       running={running}
       // 连不上时停止请求发不出去：头部那颗禁用，这一颗（共享输入框没有禁用档）不摆。
-      onStop={stopReachable(status) ? onStop : undefined}
+      onStop={stopReachable(status) ? offeredStop : undefined}
       stopping={turnStop.stopping}
       permissionMode={effectivePermissionMode}
       permissionModeMeta={permissionModeMeta}
