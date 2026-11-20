@@ -50,7 +50,11 @@ class FakeSignalSource {
   private onSignalClosed: (() => void) | null = null;
   private onStateChange: ((state: RelayState) => void) | null = null;
 
+  /** 池子此刻是否在做前台换连接；替身默认不在。 */
+  resuming = false;
+
   readonly source: AccountSignalSource = {
+    isResuming: () => this.resuming,
     subscribeSignals: (onSignal, subscriber = {}) => {
       this.subscriptions += 1;
       this.onSignal = onSignal;
@@ -717,6 +721,49 @@ describe("标签页不可见时", () => {
 
     // 隐藏期间可能什么都变过，也可能什么都没变——补齐路径只有这一条，
     // 与重连后那一次同形，因此它不能是按种类的，也不能是两次。
+    expect(view.onRefresh.mock.calls).toEqual([[null]]);
+  });
+
+  it("池子正在换连接时，恢复可见不补，换连接成功那一次才补，全程恰好一次", () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    setVisibility("hidden");
+    fake.resuming = true;
+    setVisibility("visible");
+    expect(view.onRefresh).not.toHaveBeenCalled();
+
+    fake.connected();
+    fake.resuming = false;
+    expect(view.onRefresh.mock.calls).toEqual([[null]]);
+  });
+
+  it("换连接失败（一直没连上）时，让出去的那次补齐有兜底，只补一次", async () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    setVisibility("hidden");
+    fake.resuming = true;
+    setVisibility("visible");
+    fake.reconnecting();
+    fake.resuming = false;
+    expect(view.onRefresh).not.toHaveBeenCalled();
+
+    // 兜底期限（10 秒）先于 30 秒轮询：用户在轮询之前就拿到那一次刷新。
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(view.onRefresh.mock.calls).toEqual([[null]]);
+  });
+
+  it("池子没有在换连接时，恢复可见照旧自己补一次", () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+    fake.resuming = false;
+
+    setVisibility("hidden");
+    setVisibility("visible");
     expect(view.onRefresh.mock.calls).toEqual([[null]]);
   });
 
