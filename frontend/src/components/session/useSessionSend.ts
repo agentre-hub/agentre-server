@@ -161,6 +161,12 @@ export interface SessionSendParams {
   status: SessionViewStatus;
   /** 执行端此刻的实况。run 的参数从它上面拿——一份离线快照拼不出来。 */
   summary: SessionSummary | null;
+  /**
+   * 执行端清单在这条连接上还没答（弱网决策 11）。连着而它为真时发送排队等清单，
+   * 不报「还没发出去」；清单答了（失败，或里面没有这一条）而 `summary` 仍空时，
+   * 排着的那条才交给失败气泡。缺省为假：调用方没有「清单在路上」这一档。
+   */
+  summaryPending?: boolean;
   relayTicket: RelayTicket | null;
   clientRef: RefObject<RelayClient | null>;
   originRef: RefObject<string | undefined>;
@@ -239,6 +245,7 @@ export function useSessionSend({
   originProp,
   status,
   summary,
+  summaryPending = false,
   relayTicket,
   clientRef,
   originRef,
@@ -469,8 +476,15 @@ export function useSessionSend({
 
       只对 `reconnecting` 这么做。`lost` 与 B / C 档不排队：那几档要么已经不再
       自动重连、要么等的是那台机器，排进去就是许一个不会到的承诺。
+
+      握手完成而清单还在路上（弱网决策 11）走同一条路：输入框此刻已经可用，清单
+      到了这一条自动发出；清单失败或里面没有这一条时，下面那只 effect 把它交给
+      失败气泡。
     */
-    if (status === "reconnecting") {
+    if (
+      status === "reconnecting" ||
+      (status === "connected" && summaryPending && !summary)
+    ) {
       // 从一条失败气泡上重发的:它现在排着队了,原来那条气泡就该撤掉。同一条消息
       // 同时以两个身份摆在屏幕上（一个说排着队、一个说没发出去）比哪一个都糟。
       if (replacing) dropFailedSend(replacing);
@@ -580,9 +594,12 @@ export function useSessionSend({
     // 路上，而 sendMessage 要它才拼得出 run 的参数。差一样就等下一拍——摘要落地
     // 时这个 effect 会因为 summary 变了再跑一遍。少了这一条，排着的那句会在
     // 「连上了但还没就绪」的缝里被静默丢掉。
+    //
+    // 但只等**还会来**的那一份：清单已经答过（失败，或里面没有这一条）而摘要仍空，
+    // 这一条就再也拼不出参数了（弱网决策 11），落到下面的失败气泡。
     const ready =
       status === "connected" && clientRef.current && summary && relayTicket;
-    if (status === "connected" && !ready) return;
+    if (status === "connected" && !ready && (summary || summaryPending)) return;
     const queued = pendingSend;
     // 状态更新推到 effect 之后：`react-hooks/set-state-in-effect` 禁止在 effect
     // 体里裸调 setState，而这里本来就要跟着一次异步发送走。
@@ -599,7 +616,7 @@ export function useSessionSend({
     // 只跟这几样的变化走。sendMessage / queueFailedSend 每次渲染都是新函数，
     // 列进依赖会让这个 effect 每渲染跑一遍，同一条消息发好几次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, pendingSend, summary, relayTicket]);
+  }, [status, pendingSend, summary, summaryPending, relayTicket]);
 
   /**
    * 往流里挂一条失败气泡。重发失败时原地替换 `replacing` 那一条。

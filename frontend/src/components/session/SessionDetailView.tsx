@@ -357,6 +357,29 @@ export default function SessionDetailView({
   >(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   /**
+   * 装载那一遍的执行端清单答过没有、答的是什么（弱网决策 10）。
+   *
+   * 清单与镜像转录并行去问，两边谁先回来都行；游标对齐、attach 与补齐要两边都答过
+   * 才跑（见 attach effect）。所以清单的答复要先存下来等镜像，而不是在同一趟异步
+   * 里接着往下走。
+   *
+   * 记着是在**哪一个客户端**上问的：通道在 ready 之前换了客户端，上一个客户端答的
+   * 那一份不算数（origin 与游标都是那条连接上的账）。连接一断就作废（见中继 hook
+   * 之后那一段渲染期重置）——与从前一样，重连回来从清单起整趟再走一遍。
+   *
+   * `summary` 不能顶这一格：清单里没有这一条时 summary 如实是 null，而「还没答」
+   * 与「答了但没有」对发送是两回事——前者排队等它，后者是「还没发出去」（决策 11）。
+   */
+  const [listed, setListed] = useState<
+    | {
+        client: import("@/lib/relayClient").RelayClient;
+        ok: true;
+        summary: SessionSummary | null;
+      }
+    | { client: import("@/lib/relayClient").RelayClient; ok: false }
+    | null
+  >(null);
+  /**
    * 账号镜像那一行派生出来的摘要 —— 头部的**替补**来路。
    *
    * 与 summary 分开存，不合成一个：中继的摘要是执行端此刻的实况，镜像那一行是账号
@@ -549,6 +572,7 @@ export default function SessionDetailView({
     setLastTarget({ did, sid, originProp });
     setHistory({ settled: false, loaded: false });
     setSummary(null);
+    setListed(null);
     setMirrorSummary(null);
     setEvents([]);
     setPreviewTail([]);
@@ -796,6 +820,11 @@ export default function SessionDetailView({
   // 断线原因探测排在中继之后：它看的正是中继吐出来的 relayState。
   useReconnectProbe(target.probe, did, relayState);
 
+  // 清单的答复属于**那一条**连接：断了就作废，重连回来装载那一遍从清单起整趟重走
+  // （与从前清单、attach、补齐写在同一趟里时一样）。渲染期重置，理由同上面换目标
+  // 那一段：effect 里禁 setState。
+  if (listed !== null && relayState !== "connected") setListed(null);
+
   useEffect(() => {
     clientRef.current = client;
   }, [client]);
@@ -1030,7 +1059,45 @@ export default function SessionDetailView({
     [sid],
   );
 
-  // 已连接 → 取会话摘要 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
+  /**
+   * 已连接 → 取会话摘要（装载那一遍的第一步）。
+   *
+   * 与镜像转录**并行**（弱网决策 10）：两者没有数据依赖，从前排在 `history.settled`
+   * 之后只是写成了先后，弱网下就是白等一整趟 HTTP 才开始问机器。镜像那边只决定补齐
+   * 从哪儿接，这一份先回来就先存着（`listed`），attach effect 等两边都答过再走。
+   *
+   * 摘要先落地还有一层用处：输入框在握手完成时就能用，清单没回来之前的那一次发送排
+   * 着队（决策 11），等的就是这里的 `setSummary`。
+   */
+  useAliveEffect(
+    (alive) => {
+      if (!client || relayState !== "connected" || ready) return;
+      if (listed?.client === client) return;
+      void (async () => {
+        try {
+          // 点名要这一条,而不是把整台机器的清单翻一遍去找它:那台机器上可能有
+          // 几千条对话,而这里从头到尾只关心一条。
+          const listRaw = await client.request(rpcMethods.sessionList, {
+            conversationIds: [sid],
+          });
+          if (!alive()) return;
+          const list = sessionListFromProtobuf(listRaw);
+          const s = list.sessions.find((x) => x.conversationId === sid) ?? null;
+          setSummary(s);
+          setListed({ client, ok: true, summary: s });
+        } catch {
+          // 清单都问不到：读不到这台机器上的这一条，与补齐失败同一种呈现（要出声）。
+          // 重连之后 `listed` 作废，整趟重走。
+          if (!alive()) return;
+          setListed({ client, ok: false });
+          setCatchUpFailed(true);
+        }
+      })();
+    },
+    [client, relayState, ready, listed, sid],
+  );
+
+  // 清单 + 镜像都答过 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
   useAliveEffect(
     (alive) => {
       // 镜像历史先落地：它不走客户端的游标去重，补齐若抢在前面，同一段转录会被两条
@@ -1045,21 +1112,15 @@ export default function SessionDetailView({
         void reattachOnNewClient(client, alive);
         return;
       }
+      // 清单还没在这个客户端上答过（或答的是失败，那一头已经出过声）：origin 与
+      // 高水位都还不知道，等它。
+      if (listed?.client !== client || !listed.ok) return;
+      const s = listed.summary;
       (async () => {
         try {
-          // 点名要这一条,而不是把整台机器的清单翻一遍去找它:那台机器上可能有
-          // 几千条对话,而这里从头到尾只关心一条。
-          const listRaw = await client.request(rpcMethods.sessionList, {
-            conversationIds: [sid],
-          });
-          const list = sessionListFromProtobuf(listRaw);
-          const s = list.sessions.find((x) => x.conversationId === sid);
           // origin 在 attach 之前就得学到（下一行就要用它）。
           const origin = s?.peerFingerprint?.trim() || undefined;
           originRef.current = origin;
-          if (alive()) {
-            setSummary(s ?? null);
-          }
           // 补齐从镜像那一段的末尾接上：server 已经交出来的不再向执行端要一遍，而真
           // 跳了号的那一段仍由客户端回执行端补洞（applyDedup）。
           //
@@ -1163,6 +1224,7 @@ export default function SessionDetailView({
       relayState,
       ready,
       history.settled,
+      listed,
       did,
       sid,
       device?.fingerprint,
@@ -1607,6 +1669,8 @@ export default function SessionDetailView({
     originProp,
     status,
     summary,
+    // 装载那一遍还在等这个客户端上的清单（ready 之后摘要由轮次边界刷新，不再等）。
+    summaryPending: !ready && listed?.client !== client,
     relayTicket,
     clientRef,
     originRef,

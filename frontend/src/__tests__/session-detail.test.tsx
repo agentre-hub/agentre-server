@@ -9938,3 +9938,246 @@ describe("会话详情：登录过期失败卡", () => {
     expect(screen.queryByText("codex login")).toBeNull();
   });
 });
+
+/**
+ * 弱网规格决策 10 / 11（`docs/specs/2026-11-20-pwa-weak-network.md`「打开对话与
+ * 发送」）：打开对话时执行端清单与镜像转录并行去问；游标对齐、attach、补齐仍要等
+ * 两边都答过；清单还没回来时发送进入排队，清单到了自动发出，清单失败或里面没有
+ * 这一条时排着的那条变成「还没发出去」。
+ */
+describe("会话详情：清单与转录并行（弱网决策 10 / 11）", () => {
+  /** 手动放行的一次往返。 */
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  /** 镜像转录的一页：一帧，seq = 5。 */
+  const transcriptPage = {
+    frames: [
+      {
+        seq: 5,
+        method: "runtime.event",
+        params: {
+          conversationId: "42",
+          event: { kind: "text_delta", text: "镜像里的那一句" },
+        },
+      },
+    ],
+    cursor: 5,
+    has_more: false,
+    oldest_seq: 5,
+    has_before: false,
+  };
+
+  /**
+   * 转录与清单各由一只 deferred 把着；不传的那一边立即应答（转录 = 上面那一页，
+   * 清单 = 带这一条的摘要）。
+   */
+  function mountWith(opts: {
+    transcript?: Promise<unknown>;
+    list?: Promise<unknown>;
+  }) {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return opts.transcript ?? transcriptPage;
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return opts.list ?? { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+    return renderPage();
+  }
+
+  function listCalls() {
+    return fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.sessionList,
+    );
+  }
+
+  function runCalls() {
+    return fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeRun,
+    );
+  }
+
+  it("转录还在路上时清单已经问出去，但对齐、attach、补齐都等转录回来", async () => {
+    const transcript = deferred<unknown>();
+    mountWith({ transcript: transcript.promise });
+
+    // 清单不再排在转录后面：转录一帧都没回来，清单这一问已经出去了。
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    // 镜像那一边还没答：游标起点未知，不能接。
+    await act(async () => {});
+    expect(fakeClient.setCursor).not.toHaveBeenCalled();
+    expect(fakeClient.attach).not.toHaveBeenCalled();
+    expect(fakeClient.catchUp).not.toHaveBeenCalled();
+
+    await act(async () => {
+      transcript.resolve(transcriptPage);
+    });
+
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    // 游标对齐到镜像那一段的末尾，并且排在 attach 之前。
+    expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 5, undefined);
+    expect(fakeClient.setCursor.mock.invocationCallOrder[0]).toBeLessThan(
+      fakeClient.attach.mock.invocationCallOrder[0],
+    );
+    // 两边都答过只接一次，清单也只问一次。
+    expect(fakeClient.attach).toHaveBeenCalledTimes(1);
+    expect(listCalls().length).toBe(1);
+  });
+
+  it("转录先回来先画；清单没回来之前不 attach、不补齐", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+
+    expect(await screen.findByText(/镜像里的那一句/)).toBeTruthy();
+    await act(async () => {});
+    expect(fakeClient.attach).not.toHaveBeenCalled();
+    expect(fakeClient.catchUp).not.toHaveBeenCalled();
+
+    await act(async () => {
+      list.resolve({ sessions: [summary] });
+    });
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    expect(fakeClient.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("清单还没回来时发送：进入排队，清单到了自动发出", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+    await screen.findByText(/镜像里的那一句/);
+
+    await sendInComposer("先把这句排上");
+
+    const queued = await screen.findByTestId("send-pending");
+    expect(queued.textContent).toContain("先把这句排上");
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+    expect(runCalls().length).toBe(0);
+
+    await act(async () => {
+      list.resolve({ sessions: [summary] });
+    });
+
+    await waitFor(() => expect(runCalls().length).toBe(1));
+    expect((runCalls()[0][1] as { userText?: string }).userText).toBe(
+      "先把这句排上",
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-pending")).toBeNull(),
+    );
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+  });
+
+  it("清单失败：排着的那条变成「还没发出去」", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+    await screen.findByText(/镜像里的那一句/);
+    await sendInComposer("清单会失败");
+    await screen.findByTestId("send-pending");
+
+    await act(async () => {
+      list.reject(new RelayError(-1, "relay: timeout"));
+    });
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(bubble.textContent).toContain("清单会失败");
+    expect(screen.queryByTestId("send-pending")).toBeNull();
+    expect(runCalls().length).toBe(0);
+  });
+
+  it("清单失败后重连：清单重问一遍，答到了照常 attach + 补齐", async () => {
+    let relayState: RelayState = "connected";
+    let listFails = true;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return transcriptPage;
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) {
+        if (listFails) throw new RelayError(-1, "relay: timeout");
+        return { sessions: [summary] };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState,
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    const tree = () => (
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    const view = render(tree());
+
+    await screen.findByText(/镜像里的那一句/);
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    await act(async () => {});
+    expect(fakeClient.attach).not.toHaveBeenCalled();
+
+    listFails = false;
+    relayState = "reconnecting";
+    await act(async () => view.rerender(tree()));
+    relayState = "connected";
+    await act(async () => view.rerender(tree()));
+
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    expect(listCalls().length).toBe(2);
+    expect(fakeClient.attach).toHaveBeenCalledTimes(1);
+  });
+
+  it("清单里没有这一条：排着的那条变成「还没发出去」", async () => {
+    const list = deferred<unknown>();
+    mountWith({ list: list.promise });
+    await screen.findByText(/镜像里的那一句/);
+    await sendInComposer("这条对话不在机器上");
+    await screen.findByTestId("send-pending");
+
+    await act(async () => {
+      list.resolve({ sessions: [] });
+    });
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(bubble.textContent).toContain("这条对话不在机器上");
+    expect(screen.queryByTestId("send-pending")).toBeNull();
+    expect(runCalls().length).toBe(0);
+  });
+});
