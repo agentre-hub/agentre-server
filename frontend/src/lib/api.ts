@@ -20,6 +20,20 @@ export class ApiError extends Error {
   }
 }
 
+/** REST 请求超过这么久没回：按失败处理，不再无限转圈。 */
+export const API_TIMEOUT_MS = 15_000;
+
+/** 请求在 API_TIMEOUT_MS 内没有应答。呈现上与断网同类（describeFailure 认它）。 */
+export class ApiTimeoutError extends Error {
+  constructor(
+    public path: string,
+    public timeoutMs: number,
+  ) {
+    super(`request timed out after ${timeoutMs}ms: ${path}`);
+    this.name = "ApiTimeoutError";
+  }
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -28,8 +42,32 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   if (method !== "GET" && method !== "HEAD" && csrfToken)
     headers.set("X-CSRF-Token", csrfToken);
-  const res = await fetch(path, { ...init, headers, credentials: "include" });
-  const envelope: ApiEnvelope<T> = await res.json();
+  // 超时与调用方自带的 signal 合并：任何一个先到都中止请求。不用 AbortSignal.any，
+  // 旧 iOS Safari 没有它。
+  const ctl = new AbortController();
+  const callerSignal = init.signal;
+  const onCallerAbort = () => ctl.abort(callerSignal?.reason);
+  if (callerSignal?.aborted) onCallerAbort();
+  else callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  const timer = setTimeout(
+    () => ctl.abort(new ApiTimeoutError(path, API_TIMEOUT_MS)),
+    API_TIMEOUT_MS,
+  );
+  let envelope: ApiEnvelope<T>;
+  let res: Response;
+  try {
+    // 响应体也在计时之内：头到了、体不来同样是卡住。
+    res = await fetch(path, {
+      ...init,
+      headers,
+      credentials: "include",
+      signal: ctl.signal,
+    });
+    envelope = await res.json();
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
+  }
   if (!res.ok || envelope.code !== 0) {
     throw new ApiError(envelope.code, envelope.msg, res.status);
   }

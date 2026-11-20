@@ -18,7 +18,7 @@ import {
   ErrCodeUnauthorized,
 } from "@agentre-hub/agentre-wire";
 
-import { ApiError } from "@/lib/api";
+import { ApiError, ApiTimeoutError } from "@/lib/api";
 import { DispatchConnectionError } from "@/lib/dispatch";
 import { FAILURE_CODES } from "@/lib/errorCodes";
 import { readProtocolRejection } from "@/lib/protocolMismatch";
@@ -132,6 +132,10 @@ function classify(err: unknown): Verdict {
   if (coded instanceof RelayError) return classifyRelay(coded);
   if (findInChain(err, (e) => e instanceof DispatchConnectionError)) {
     return OFFLINE_MACHINE;
+  }
+  // REST 超时：与断网同一种呈现（可重试），不另起文案。
+  if (findInChain(err, (e) => e instanceof ApiTimeoutError)) {
+    return OFFLINE_NETWORK;
   }
   // 唯一没有码可认的一类：fetch 自己失败时只抛一个 TypeError，各浏览器的原话不同
   // （Chromium「Failed to fetch」、Firefox「NetworkError …」、Safari「Load failed」）。

@@ -14,7 +14,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { ApiError } from "@/lib/api";
+import { ApiError, ApiTimeoutError } from "@/lib/api";
 import { describeFailure } from "@/lib/describeFailure";
 import { DispatchConnectionError, DispatchRunError } from "@/lib/dispatch";
 import { loadErrorText } from "@/lib/loadError";
@@ -47,6 +47,13 @@ describe("describeFailure · 离线 / 断网", () => {
     expect(f.exit).toBe("retry");
     expect(f.message).toBe("看板没取回来，网络好像断了。");
     expect(f.diagnostic).toContain("Failed to fetch");
+  });
+
+  it("REST 请求 15 秒超时：与断网同一种呈现，给重试", () => {
+    const f = describeFailure(new ApiTimeoutError("/v1/x", 15000), zhCtx);
+    expect(f.category).toBe("offline");
+    expect(f.exit).toBe("retry");
+    expect(f.message).toBe("看板没取回来，网络好像断了。");
   });
 
   it("浏览器报离线时，哪怕错误本身说不清，也是断网", () => {
