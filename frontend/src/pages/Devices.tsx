@@ -67,6 +67,7 @@ import {
   deviceDisplayName,
   fetchDevices,
   renameDevice,
+  revokeDevice,
   runsSessions,
   type DeviceItem,
 } from "@/lib/devices";
@@ -1206,10 +1207,7 @@ export default function Devices() {
     setSubmitting(true);
     setRevokeError(null);
     try {
-      await api(`/v1/oauth/token/revoke`, {
-        method: "POST",
-        body: JSON.stringify({ device_id: revoking.id }),
-      });
+      await revokeDevice(revoking.id);
       setRevoking(null);
     } catch {
       // 失败时保留对话上下文并显示真实错误，设备行不动

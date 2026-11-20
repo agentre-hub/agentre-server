@@ -49,10 +49,13 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const onCallerAbort = () => ctl.abort(callerSignal?.reason);
   if (callerSignal?.aborted) onCallerAbort();
   else callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
-  const timer = setTimeout(
-    () => ctl.abort(new ApiTimeoutError(path, API_TIMEOUT_MS)),
-    API_TIMEOUT_MS,
-  );
+  // 超时由这里自己记一笔，不靠 fetch 把中止原因原样交回：较旧的 WebKit 只拒绝一个
+  // 通用的 AbortError，认不出它就不会按断网给重试。
+  let timedOut: ApiTimeoutError | null = null;
+  const timer = setTimeout(() => {
+    timedOut = new ApiTimeoutError(path, API_TIMEOUT_MS);
+    ctl.abort(timedOut);
+  }, API_TIMEOUT_MS);
   let envelope: ApiEnvelope<T>;
   let res: Response;
   try {
@@ -64,6 +67,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       signal: ctl.signal,
     });
     envelope = await res.json();
+  } catch (err) {
+    throw timedOut ?? err;
   } finally {
     clearTimeout(timer);
     callerSignal?.removeEventListener("abort", onCallerAbort);

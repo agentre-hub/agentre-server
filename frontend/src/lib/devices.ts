@@ -117,3 +117,19 @@ export async function renameDevice(
     deviceRoster.invalidate();
   }
 }
+
+/**
+ * 撤销一台设备的授权。设备名单随之作废（与改名同一条规矩）：外壳的设备数与对话页
+ * 的组头不能在这之后 10 秒内还把它算进去。
+ */
+export async function revokeDevice(id: number): Promise<void> {
+  try {
+    await api(`/v1/oauth/token/revoke`, {
+      method: "POST",
+      body: JSON.stringify({ device_id: id }),
+    });
+  } finally {
+    // 失败也作废：请求可能已经写进去了，只是应答没回来。
+    deviceRoster.invalidate();
+  }
+}

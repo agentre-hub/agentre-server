@@ -84,6 +84,25 @@ describe("api()", () => {
       );
     });
 
+    // 较旧的 WebKit 中止 fetch 时不交出 signal.reason，只拒绝一个通用的 AbortError
+    // ——正是这里为之不用 AbortSignal.any 的那批 iOS Safari。超时仍要被认成超时，
+    // 否则 describeFailure 认不出它、不按断网给重试。
+    it("fetch 只给通用 AbortError、不交出中止原因时，超时仍是 ApiTimeoutError", async () => {
+      vi.useFakeTimers();
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (_p: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Fetch is aborted", "AbortError")),
+            );
+          }),
+      );
+      let outcome: unknown = "pending";
+      api("/v1/x").catch((e) => (outcome = e));
+      await vi.advanceTimersByTimeAsync(15_001);
+      expect(outcome).toBeInstanceOf(ApiTimeoutError);
+    });
+
     it("传了 signal 时超时照样生效", async () => {
       vi.useFakeTimers();
       hangingFetch();

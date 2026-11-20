@@ -1684,8 +1684,12 @@ export default function SessionDetailView({
     // 自己开的这一轮，起点就是此刻 —— 那条 meta 的耗时从这里开始走。
     onOwnTurnStarted: () => liveTurn.beginTurn(Date.now()),
     // 「发送中」那一条的回声判据从这一刻的 seq 算起。只在发送那一刻读（提交后快照）。
+    //
+    // 清单的高水位一并算进去：清单先回来就能发送（弱网决策 10），那时镜像那一段可能
+    // 还在路上、转录是空的。它后到时里面的旧用户消息 seq 都不超过清单那一刻执行端的
+    // 高水位，不能被当成这一条的回声；这一条的回声只会在那之后。
     transcriptSeq: () => {
-      let shown = 0;
+      let shown = summary?.latestSeq ?? 0;
       for (const f of eventsRef.current) {
         if (f.seq !== undefined && f.seq > shown) shown = f.seq;
       }

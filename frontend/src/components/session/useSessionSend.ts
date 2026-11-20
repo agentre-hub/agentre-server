@@ -36,6 +36,12 @@ export interface TurnActivity {
    * 边界。左栏据它分辨「刚有动静」与「打开时它就在跑」，见 `seedLiveTurn`。
    */
   markTurnActive: (v: boolean, fromSnapshot?: boolean) => void;
+  /**
+   * 这个浏览器自己开了一轮（发出即见那一下）。与 `markTurnActive(true)` 的区别：
+   * 之后那一份**更早**问到的清单快照说「没在跑」时，不能把它收回去，见下面
+   * `ownTurnRef`。
+   */
+  markOwnTurnStarted: () => void;
   pendingAssistant: boolean;
   setPendingAssistant: Dispatch<SetStateAction<boolean>>;
   /** 目标会话换了。由详情视图的渲染期重置调用。 */
@@ -92,8 +98,19 @@ export function useTurnActivity(conversationId: string): TurnActivity {
    * （自己发送 / 回声 / 开轮帧 / 自主续轮 / attach 时的清单快照，五条路都经过它），
    * 各写一遍就会漏掉其中几条。
    */
+  /**
+   * 自己开的那一轮还没见到终点。
+   *
+   * 清单与镜像转录并行之后（弱网决策 10），清单先回来就能发送，而 attach 收尾按的
+   * 仍是**发送之前**问到的那份快照：它说「idle」时，此刻在跑的正是自己刚开的这一轮
+   * ——照它收回，三点与 Running 就在这一轮跑着的时候灭掉，直到它跑完都不再亮。
+   * 所以快照的「没在跑」让位给它；一次亲眼看到的终点（终态帧 / 发送撤回）才放下。
+   */
+  const ownTurnRef = useRef(false);
   const markTurnActive = useCallback(
     (v: boolean, fromSnapshot?: boolean) => {
+      if (fromSnapshot && !v && ownTurnRef.current) v = true;
+      if (!fromSnapshot && !v) ownTurnRef.current = false;
       setTurnActiveLocal(v);
       if (fromSnapshot) seedLiveTurn(conversationId, v);
       else noteLiveTurn(conversationId, v);
@@ -122,7 +139,12 @@ export function useTurnActivity(conversationId: string): TurnActivity {
    * 清成 false 而不是「保持不动」：新会话在不在跑,只有 attach 答得出,在它回答
    * 之前这一屏**不知道** —— 而上一条会话的答案与这个问题无关。
    */
+  const markOwnTurnStarted = useCallback(() => {
+    ownTurnRef.current = true;
+    markTurnActive(true);
+  }, [markTurnActive]);
   const reset = useCallback(() => {
+    ownTurnRef.current = false;
     setTurnActiveLocal(false);
     setPendingAssistant(false);
   }, [setTurnActiveLocal]);
@@ -131,6 +153,7 @@ export function useTurnActivity(conversationId: string): TurnActivity {
     turnActive,
     turnActiveRef,
     markTurnActive,
+    markOwnTurnStarted,
     pendingAssistant,
     setPendingAssistant,
     reset,
@@ -196,7 +219,8 @@ export interface SessionSendParams {
    */
   onOwnTurnStarted?: () => void;
   /**
-   * 这一屏转录此刻画到的最大 seq。「发送中」那一条记下按发送那一刻的值，回声认的是
+   * 这一屏转录此刻画到的最大 seq（不低于清单那一刻执行端的高水位：镜像那一段可能
+   * 还没回来）。「发送中」那一条记下按发送那一刻的值，回声认的是
    * 它之后才到的那一帧 `user_message`（见 `SendingMessage.afterSeq`）。只在发送那一
    * 刻读。缺省 0。
    */
@@ -284,7 +308,12 @@ export function useSessionSend({
   onOwnTurnStarted,
   transcriptSeq = () => 0,
 }: SessionSendParams): SessionSend {
-  const { turnActiveRef, markTurnActive, setPendingAssistant } = turn;
+  const {
+    turnActiveRef,
+    markTurnActive,
+    markOwnTurnStarted,
+    setPendingAssistant,
+  } = turn;
   const [sending, setSending] = useState(false);
   /**
    * 没发出去的那些消息（决策 7）。它们不进 `events`：转录那一份是**对端说过的
@@ -466,7 +495,7 @@ export function useSessionSend({
         afterSeq: transcriptSeq(),
         acknowledged: false,
       });
-      markTurnActive(true);
+      markOwnTurnStarted();
       setPendingAssistant(true);
     }
     try {

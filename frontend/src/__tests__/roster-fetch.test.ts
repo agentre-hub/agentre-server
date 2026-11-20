@@ -14,9 +14,10 @@ import * as accountChannel from "@/lib/accountChannel";
 import { agentRoster } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { attentionRoster } from "@/lib/attentionCount";
-import { deviceRoster, renameDevice } from "@/lib/devices";
+import { deviceRoster, renameDevice, revokeDevice } from "@/lib/devices";
 import { createProject, projectRoster } from "@/lib/projects";
 import { invalidateRosters, RosterReuseMs } from "@/lib/rosterFetch";
+import { updateAgent, updateDepartment } from "@/pages/org/writes";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -51,7 +52,11 @@ function serve() {
       case "/v1/devices/1":
         return { display_name: "x" };
       case "/v1/workspace/org/projects":
+      case "/v1/workspace/org/agents/update":
+      case "/v1/workspace/org/departments/update":
         return { sync_id: "p", version: 1 };
+      case "/v1/oauth/token/revoke":
+        return {};
       default:
         throw new Error("unexpected: " + path);
     }
@@ -211,6 +216,35 @@ describe("作废", () => {
     await deviceRoster.get();
 
     expect(callsTo("/v1/devices")).toBe(2);
+  });
+
+  it("撤销设备之后设备名单作废", async () => {
+    await deviceRoster.get();
+    await revokeDevice(1);
+    await deviceRoster.get();
+
+    expect(callsTo("/v1/devices")).toBe(2);
+    expect(mockedApi).toHaveBeenCalledWith("/v1/oauth/token/revoke", {
+      method: "POST",
+      body: JSON.stringify({ device_id: 1 }),
+    });
+  });
+
+  // Agent 名单带着部门名（对话页按它分组），所以组织面的每一个写都让它过期。
+  it("组织面写操作之后 Agent 名单作废——失败也作废", async () => {
+    await agentRoster.get();
+    await updateAgent("a1", { name: "n" });
+    await agentRoster.get();
+    expect(callsTo("/v1/workspace/agents")).toBe(2);
+
+    await updateDepartment("d1", { name: "n" });
+    await agentRoster.get();
+    expect(callsTo("/v1/workspace/agents")).toBe(3);
+
+    mockedApi.mockRejectedValueOnce(new Error("timeout"));
+    await expect(updateAgent("a1", { name: "n" })).rejects.toThrow("timeout");
+    await agentRoster.get();
+    expect(callsTo("/v1/workspace/agents")).toBe(4);
   });
 
   it("项目写操作之后项目树作废——失败也作废，服务端可能已经写进去了", async () => {

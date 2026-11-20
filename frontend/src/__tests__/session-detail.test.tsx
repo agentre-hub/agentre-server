@@ -7823,7 +7823,8 @@ describe("会话详情页:一轮在跑时的三点", () => {
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
-        seq: 1,
+        // 回声排在清单那一刻执行端的高水位（summary.latestSeq = 2）之后。
+        seq: 3,
       }),
     );
 
@@ -8059,14 +8060,15 @@ describe("会话详情页:一轮在跑时的三点", () => {
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
-        seq: 1,
+        // 回声排在清单那一刻执行端的高水位（summary.latestSeq = 2）之后。
+        seq: 3,
       }),
     );
     act(() =>
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "text_delta", text: "在的" },
-        seq: 2,
+        seq: 4,
       }),
     );
 
@@ -8100,7 +8102,8 @@ describe("会话详情页:一轮在跑时的三点", () => {
       capturedOpts.onEvent?.({
         conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
-        seq: 1,
+        // 回声排在清单那一刻执行端的高水位（summary.latestSeq = 2）之后。
+        seq: 3,
       }),
     );
     act(() =>
@@ -10209,6 +10212,87 @@ describe("会话详情：清单与转录并行（弱网决策 10 / 11）", () =>
     expect(bubble.textContent).toContain("这条对话不在机器上");
     expect(screen.queryByTestId("send-pending")).toBeNull();
     expect(runCalls().length).toBe(0);
+  });
+
+  /** 镜像里有一句**旧的**用户消息（seq 3）的那一页。 */
+  const transcriptWithOldUser = {
+    frames: [
+      {
+        seq: 3,
+        method: "runtime.event",
+        params: {
+          conversationId: "42",
+          event: { kind: "user_message", text: "很久以前那一句" },
+        },
+      },
+      ...transcriptPage.frames,
+    ],
+    cursor: 5,
+    has_more: false,
+    oldest_seq: 3,
+    has_before: false,
+  };
+
+  // 清单先回来、镜像转录还在路上时发送：发送那一刻转录是空的，记下的起点是 0。镜像
+  // 那一段后到，里面那句旧的用户消息不是这一条的回声——「发送中」不能被它顶掉。
+  it("Given 转录还没回来就发出 When 镜像那一段后到 Then 里面的旧用户消息不被当成回声", async () => {
+    const transcript = deferred<unknown>();
+    const run = deferred<unknown>();
+    // 清单那一刻执行端的高水位就是镜像末尾那一帧（5）：镜像只会落在执行端后面。
+    mountWith({
+      transcript: transcript.promise,
+      list: Promise.resolve({ sessions: [{ ...summary, latestSeq: 5 }] }),
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, latestSeq: 5 }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return run.promise;
+      throw new Error("unexpected: " + method);
+    });
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    await sendInComposer("新的这一句");
+    await waitFor(() => expect(runCalls().length).toBe(1));
+
+    await act(async () => {
+      transcript.resolve(transcriptWithOldUser);
+    });
+    expect(await screen.findByText("很久以前那一句")).toBeTruthy();
+
+    const bubble = await screen.findByTestId("send-sending");
+    expect(within(bubble).getByText("新的这一句")).toBeTruthy();
+    await act(async () => run.resolve({}));
+  });
+
+  // 同一个窗口：run 已经被对端接下，之后 attach 收尾按的是**发送之前**问到的那份清单
+  // 快照（idle）。它说不出这之后自己开的一轮，不能把三点与 Running 收回去。
+  it("Given 转录还没回来就发出且 run 已应答 When attach 按旧清单快照收尾 Then 自己开的这一轮仍在跑", async () => {
+    const transcript = deferred<unknown>();
+    mountWith({ transcript: transcript.promise });
+    await waitFor(() => expect(listCalls().length).toBe(1));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    await sendInComposer("新的这一句");
+    await waitFor(() => expect(runCalls().length).toBe(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-status").textContent).toContain(
+        "Running",
+      ),
+    );
+
+    await act(async () => {
+      transcript.resolve(transcriptPage);
+    });
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(screen.getByTestId("session-detail-status").textContent).toContain(
+      "Running",
+    );
+    expect(screen.queryByRole("status", { name: "Generating" })).toBeTruthy();
   });
 });
 
