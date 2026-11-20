@@ -1331,7 +1331,18 @@ real device.
 ## Async state
 
 **There is no shared query layer.** Each page or feature hook owns its own `loading` /
-`error` state and calls `api()` directly. The one shared piece is `useAliveEffect`
+`error` state and calls `api()` directly. The exception is the four account rosters that
+one screen asks for from several places — devices, agents, projects and the "needs you"
+count. They go through `frontend/src/lib/rosterFetch.ts` (`deviceRoster`, `agentRoster`,
+`projectRoster`, `attentionRoster`): callers at the same moment share one in-flight
+request, and a result is reused for 10 seconds. It is deliberately not a library or a
+cache of arbitrary endpoints, and its invalidation is part of the contract — the matching
+account-channel signal (`use-account-channel` invalidates before it wakes subscribers),
+`refresh(null)`, and every write the owning module makes (`renameDevice`, the project
+writes) drop it; a failure is never cached. A read that must see this moment, such as a
+re-read after a write elsewhere or the reconnect probe, calls the plain `fetch*` function
+instead. Page tests get a clean cache per case from `src/test/setup.ts`. The other shared
+piece is `useAliveEffect`
 (`frontend/src/hooks/use-alive-effect.ts`): it stops a round's callbacks from writing state
 once that round no longer counts. Its own doc comment owns why, including the fetch race
 it prevents. Mount-guard + loading + error are deliberately *not* folded into a shared

@@ -13,7 +13,10 @@
  * `last_message_at > last_read_at`，侧栏没跟上。两个判据毫无关系，联调库上因此出现
  * 侧栏说 1 条、点进去未读筛选是 0 条。
  */
+import { AccountChannelMirrorChanged } from "@agentre-hub/agentre-wire";
+
 import { api } from "@/lib/api";
+import { createRoster } from "@/lib/rosterFetch";
 
 /**
  * 账号里此刻需要你的对话条数，按理由分开给。
@@ -40,3 +43,11 @@ export async function fetchAttentionCounts(): Promise<AttentionCounts> {
   );
   return { needsAttention: r.needs_attention ?? 0, unread: r.unread ?? 0 };
 }
+
+/**
+ * 共享的那一份计数（`@/lib/rosterFetch`）：外壳随每个页面重新挂上，10 秒内复用上一次
+ * 的数，不为一次换页再数一遍。镜像变了的信号作废它——数字只会落后到下一条信号为止。
+ */
+export const attentionRoster = createRoster(fetchAttentionCounts, [
+  AccountChannelMirrorChanged,
+]);

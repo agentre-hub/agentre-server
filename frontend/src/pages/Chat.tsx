@@ -38,7 +38,7 @@ import type {
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import {
   deviceDisplayName,
-  fetchDevices,
+  deviceRoster,
   runsSessions,
   type DeviceItem,
 } from "@/lib/devices";
@@ -53,9 +53,9 @@ import {
   AccountChannelDevicePresence,
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
-import { fetchAgents } from "@/lib/agents";
+import { agentRoster } from "@/lib/agents";
 import { useLiveTurns } from "@/lib/liveSessions";
-import { fetchProjects, type ProjectNode as ApiProject } from "@/lib/projects";
+import { projectRoster, type ProjectNode as ApiProject } from "@/lib/projects";
 import {
   buildGroupTotals,
   buildMachineRows,
@@ -500,11 +500,17 @@ export default function Chat() {
    * 直接把 markRead 挂上去：它本就是 useCallback 的稳定引用。
    */
 
-  /** 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。 */
+  /**
+   * 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。
+   *
+   * 这几份名单（含下面的项目树）走共享取数（`@/lib/rosterFetch`）：外壳、详情与目标
+   * 设备 hook 同一屏上也在要，共用一个在飞请求、10 秒内复用。信号到来时
+   * use-account-channel 先作废再喊这里，所以信号路上直接 get 拿到的就是新的。
+   */
   useAliveEffect((alive) => {
     Promise.all([
-      fetchDevices(),
-      fetchAgents<NewConvAgent & { department_name?: string }>(),
+      deviceRoster.get(),
+      agentRoster.get<NewConvAgent & { department_name?: string }>(),
     ])
       .then(([d, a]) => {
         if (!alive()) return;
@@ -521,29 +527,38 @@ export default function Chat() {
   }, []);
 
   useAccountChannel([AccountChannelDevicePresence], () => {
-    fetchDevices()
+    deviceRoster
+      .get()
       .then(setDevices)
       // 名单取不到时保持原样：组头少一维好过把用户正在看的一列清空。
       .catch(() => {});
   });
 
   // 项目树单独取：它只喂项目轴的组头，取不到时会话照常列出（都进「未归项目」），
-  // 不该把整页拖成一条错误横幅。写完之后要重取，因此单拎成一个函数。
-  const reloadProjects = useCallback(() => {
-    fetchProjects()
+  // 不该把整页拖成一条错误横幅。
+  const loadProjects = useCallback(() => {
+    projectRoster
+      .get()
       .then(setProjects)
       .catch(() => {})
       // 取不到也算问过：那一屏不能为了一次失败永远转下去。
       .finally(() => setProjectsSettled(true));
   }, []);
   useEffect(() => {
-    reloadProjects();
-  }, [reloadProjects]);
+    loadProjects();
+  }, [loadProjects]);
+  // 写完之后（与同步版本推进时）的重取：先作废再取。项目面的 REST 写自己会作废，
+  // 但写本机路径那一路走中继、不经过 projects.ts，「写完读回实情」不能指望它。
+  const reloadProjects = useCallback(() => {
+    projectRoster.invalidate();
+    loadProjects();
+  }, [loadProjects]);
 
   // 同步版本推进：行上的 Agent 名与项目轴的组头都来自 sync_objects。放在这里而不是
   // 跟另外两条信号挤在一起，只因为它要用到上面这个 reloadProjects。
   useAccountChannel([AccountChannelSyncVersion], () => {
-    fetchAgents()
+    agentRoster
+      .get<NewConvAgent & { department_name?: string }>()
       .then(setAgents)
       .catch(() => {});
     reloadProjects();

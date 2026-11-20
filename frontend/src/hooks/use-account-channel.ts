@@ -29,6 +29,7 @@ import {
   type AccountChannelHandle,
   type AccountChannelState,
 } from "@/lib/accountChannel";
+import { invalidateRosters } from "@/lib/rosterFetch";
 
 interface Subscriber {
   /**
@@ -62,6 +63,9 @@ let channelState: AccountChannelState = "connecting";
  * 所以喊醒所有人 —— 按某一类去分发会漏掉别的。
  */
 function fanOut(signalType: string | null): void {
+  // 先作废共享名单再喊人：订阅者被喊醒去重取时拿到的必须是新的那一份，而不是
+  // 10 秒内复用的旧的（见 `@/lib/rosterFetch`）。漏传的 undefined 与 null 同侧。
+  invalidateRosters(typeof signalType === "string" ? signalType : null);
   // 复制一份再遍历：某个订阅者的 refresh 触发 setState，可能同步卸载掉别的订阅者。
   for (const subscriber of [...subscribers]) {
     // 判据写成「拿到了一个种类，而它不在我的名单里」而不是「不为 null」：说不出

@@ -1,4 +1,7 @@
+import { AccountChannelDevicePresence } from "@agentre-hub/agentre-wire";
+
 import { api } from "@/lib/api";
+import { createRoster } from "@/lib/rosterFetch";
 
 /**
  * GET /v1/devices 的响应契约。
@@ -62,13 +65,22 @@ export function runsSessions(d: { kind: string }): boolean {
  * 其中三处还自带一份更窄的别名（AppShell 的 DeviceRow、Settings 与 enginePorts
  * 各一个 DeviceDTO）——同一份契约漂移换了个名字接着漂。
  *
- * 不做缓存也不去重：调用方各有各的重取时机（在线态信号、页面切换、手动刷新），
- * 收在这里只会变成另一层要维护的失效判据。
+ * 它本身每次都打一个新请求：写完之后要读回实情的地方（设备页改名、撤销之后）、
+ * 断线探因（useReconnectProbe）要的就是这一刻的名单。同一屏上好几处只是「要一份
+ * 名单」的，走下面的 `deviceRoster`。
  */
 export async function fetchDevices(): Promise<DeviceItem[]> {
   const res = await api<{ devices?: DeviceItem[] }>("/v1/devices");
   return res.devices ?? [];
 }
+
+/**
+ * 共享的那一份设备名单（`@/lib/rosterFetch`）：外壳、对话页与目标设备 hook 同一屏上
+ * 共用一个在飞请求、10 秒内复用。设备上下线的信号作废它。
+ */
+export const deviceRoster = createRoster(fetchDevices, [
+  AccountChannelDevicePresence,
+]);
 
 /**
  * 这一行到底叫什么：用户设过备注名就用它，没设就回落到设备自报名。
@@ -94,9 +106,14 @@ export async function renameDevice(
   id: number,
   displayName: string,
 ): Promise<string> {
-  const res = await api<{ display_name: string }>(`/v1/devices/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ display_name: displayName }),
-  });
-  return res.display_name;
+  try {
+    const res = await api<{ display_name: string }>(`/v1/devices/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ display_name: displayName }),
+    });
+    return res.display_name;
+  } finally {
+    // 失败也作废：请求可能已经写进去了，只是应答没回来。
+    deviceRoster.invalidate();
+  }
 }

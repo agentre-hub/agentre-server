@@ -9,7 +9,10 @@
  * 路径那一族是例外，只有「设」与「删」：账号内自然键是（项目同步标识, 指纹），
  * 服务端按它先找存活的那一行，有就改、没有就建，因此调用方不需要知道这次是哪一种。
  */
+import { AccountChannelSyncVersion } from "@agentre-hub/agentre-wire";
+
 import { api } from "@/lib/api";
+import { createRoster } from "@/lib/rosterFetch";
 
 export interface OrgWriteResponse {
   sync_id: string;
@@ -64,8 +67,14 @@ export interface ProjectFields {
   sort_order?: number;
 }
 
+/**
+ * 项目面的每一个写都从这里过，所以项目树的作废也只写在这里。失败也作废：请求可能
+ * 已经写进去了，只是应答没回来。
+ */
 function post<T>(path: string, body: unknown): Promise<T> {
-  return api<T>(path, { method: "POST", body: JSON.stringify(body) });
+  return api<T>(path, { method: "POST", body: JSON.stringify(body) }).finally(
+    () => projectRoster.invalidate(),
+  );
 }
 
 // ---------- 项目树 ----------
@@ -99,6 +108,14 @@ export async function fetchProjects(): Promise<ProjectNode[]> {
     })),
   }));
 }
+
+/**
+ * 共享的那一份项目树（`@/lib/rosterFetch`）：对话页与详情同一屏上共用一个在飞请求、
+ * 10 秒内复用。同步版本推进与本文件里的每一个写作废它。
+ */
+export const projectRoster = createRoster(fetchProjects, [
+  AccountChannelSyncVersion,
+]);
 
 export function createProject(
   fields: ProjectFields,

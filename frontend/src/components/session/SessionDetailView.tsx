@@ -83,7 +83,8 @@ import {
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
 import { useEngineCatalog } from "@/lib/engineCatalog";
-import { fetchProjects, type ProjectNode } from "@/lib/projects";
+import { agentRoster } from "@/lib/agents";
+import { projectRoster, type ProjectNode } from "@/lib/projects";
 import {
   classifySendFailure,
   deriveSessionViewStatus,
@@ -804,10 +805,12 @@ export default function SessionDetailView({
   }, [events]);
 
   // Agent 清单（头部要「是哪个 Agent 在跑」）。锦上添花：取不到就退回状态文字，
-  // 不阻塞详情渲染，也不伪造名字。
+  // 不阻塞详情渲染，也不伪造名字。与对话页同一屏，走共享名单（`@/lib/rosterFetch`），
+  // 项目树同理。
   useAliveEffect((alive) => {
-    api<{ agents?: WorkspaceAgent[] }>("/v1/workspace/agents")
-      .then((res) => alive() && setAgents(res.agents ?? []))
+    agentRoster
+      .get<WorkspaceAgent>()
+      .then((got) => alive() && setAgents(got))
       .catch(() => {})
       // 取不到也算问过：转录抬头不能为了一次失败永远吊着不写名字。
       .finally(() => alive() && setAgentsSettled(true));
@@ -817,7 +820,8 @@ export default function SessionDetailView({
   // 不阻塞详情渲染。这里不设 settled 那一格 —— 项目名解不开时整段不摆，没有
   // 「先摆个中性的、等一下换掉」这种中间态要区分。
   useAliveEffect((alive) => {
-    fetchProjects()
+    projectRoster
+      .get()
       .then((got) => alive() && setProjects(got))
       .catch(() => {});
   }, []);

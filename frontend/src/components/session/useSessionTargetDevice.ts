@@ -2,7 +2,7 @@ import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { ApiError } from "@/lib/api";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { deviceRoster, fetchDevices, type DeviceItem } from "@/lib/devices";
 
 /**
  * 「这条会话跑在哪台机器上、它此刻还够不够得着」这一片状态。
@@ -63,9 +63,21 @@ export function useSessionTargetDevice(did: number): SessionTargetDevice {
 
   // 取设备。换设备时同时重新允许一次 reconnecting 原因探测（R11）——旧设备的探测
   // 结论不属于新设备。
+  //
+  // 走共享名单：外壳与对话页同一屏上也在要它，没有理由再单独打一遍（规格 2026-11-20
+  // 决策 8）。下面的断线探因不走——它要的是这一刻的在线态。
+  //
+  // 复用来的名单里没有这一台时不当场判「找不到」：它可能是这 10 秒里刚配对的。作废
+  // 再取一份新的，用新的下结论——旧名单不能把新事实藏住。
   useAliveEffect(
     (alive) => {
-      fetchDevices()
+      deviceRoster
+        .get()
+        .then((list) => {
+          if (list.some((d) => d.id === did)) return list;
+          deviceRoster.invalidate();
+          return deviceRoster.get();
+        })
         .then((list) => {
           if (!alive()) return;
           const found = list.find((d) => d.id === did);

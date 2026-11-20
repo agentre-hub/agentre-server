@@ -351,6 +351,52 @@ describe("控制台外壳：设备 Meta 跟着通道走", () => {
   });
 });
 
+// 规格 2026-11-20 决策 8：每个页面各挂一份外壳，换页就是一次重新挂载。设备数与角标
+// 问的是同一件事，10 秒内不该为一次换页再打一遍；但信号一到必须拿到新的。
+describe("控制台外壳：设备数与角标共用名单取数", () => {
+  beforeEach(() => {
+    mockedStartChannel.mockClear();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return me;
+      if (path === "/v1/devices") return { devices };
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 2, unread: 0 };
+      throw new Error("unexpected: " + path);
+    });
+  });
+  const calls = (path: string) =>
+    mockedApi.mock.calls.filter(([p]) => String(p) === path).length;
+
+  it("换页重新挂载时复用刚取回的设备与角标，不再各打一遍", async () => {
+    const first = renderShell();
+    await screen.findByText("2/3");
+    await within(screen.getByRole("link", { name: /^Chat/ })).findByText("2");
+    first.unmount();
+
+    renderShell();
+    await screen.findByText("2/3");
+    await within(screen.getByRole("link", { name: /^Chat/ })).findByText("2");
+
+    expect(calls("/v1/devices")).toBe(1);
+    expect(calls("/v1/agent-sessions/attention-count")).toBe(1);
+  });
+
+  it("重连（null）作废全部：设备与角标都重取", async () => {
+    renderShell();
+    await screen.findByText("2/3");
+    await within(screen.getByRole("link", { name: /^Chat/ })).findByText("2");
+
+    act(() => {
+      mockedStartChannel.mock.calls.at(-1)![0].onRefresh(null);
+    });
+
+    await waitFor(() => expect(calls("/v1/devices")).toBe(2));
+    await waitFor(() =>
+      expect(calls("/v1/agent-sessions/attention-count")).toBe(2),
+    );
+  });
+});
+
 describe("侧栏「对话」角标（等你处理 + 未读）", () => {
   function serve(counts: unknown, unread = 0) {
     mockedApi.mockImplementation(async (path: string) => {
