@@ -1407,8 +1407,10 @@ storage). If the new range fails, the old rows return to full opacity under the 
 load-failure banner and its retry; only a list with nothing in hand falls back to the
 error empty state. The skeleton is left for the first load, or for a range change with no
 rows in hand. A refresh signal never aborts an in-flight round. It is queued as a single
-follow-up fetch for when that round lands. The by-machine axis is the exception: its rows
-come from the machines' own snapshots and keep their per-machine skeleton.
+follow-up fetch for when that round lands. The by-machine axis follows the same rule per
+group: a machine that is re-listing keeps the rows it already handed over, dimmed and
+`aria-busy` (the phone list dims as a whole), and the answer replaces them in one swap;
+only a machine group with nothing in hand yet shows its skeleton.
 
 **Nor does its label move before its numbers do.** `Overview` keeps the range that the
 figures on screen actually came from (`loadedRange`, settled with the response) and labels

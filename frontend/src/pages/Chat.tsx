@@ -1119,6 +1119,16 @@ export default function Chat() {
     );
 
   /*
+    机器那一档：有哪台机器正在重新列出、而手上已有行时，同样留着旧行变淡
+    （弱网规格 2026-11-20 决策 5）。手上一行都没有的才走上面的骨架。
+  */
+  const phoneRefreshing =
+    sessionIndex.refreshing ||
+    (axis === "machine" &&
+      phoneBaseRows.length > 0 &&
+      Object.values(reach.machineStates).some((s) => s === "connecting"));
+
+  /*
     胶囊上的数。「需要你」「进行中」在端点那一档是「全部」或「运行中」时就数得出来
     （两档都含全部在跑的行）；选到「未读」时手上只剩未读的行，数不出来，沿用同一范围
     下最后数出来的那一份，免得点一下「未读」另外两枚的数就消失。「未读」在服务端那几
@@ -1135,7 +1145,7 @@ export default function Chat() {
   } | null>(null);
   const held = heldCounts?.key === countsKey ? heldCounts.counts : null;
   // 变淡的旧行是上一范围的，不拿它们数这一范围的数。
-  const phoneFresh = phoneSettled && !sessionIndex.refreshing;
+  const phoneFresh = phoneSettled && !phoneRefreshing;
   const statusCountsLive = phoneFresh && dataFilter !== "unread";
   const phoneCounts: PhoneCounts = {
     attention: statusCountsLive
@@ -1493,7 +1503,7 @@ export default function Chat() {
             onSearchChange={sessionIndex.setSearchQuery}
             searchCount={phoneSearchCount}
             settled={phoneSettled}
-            refreshing={sessionIndex.refreshing}
+            refreshing={phoneRefreshing}
             rows={phoneRows}
             filter={filter}
             onFilterChange={setFilter}

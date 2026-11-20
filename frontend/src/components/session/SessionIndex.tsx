@@ -1144,13 +1144,23 @@ export default function SessionIndex({
                 group.kind === "machine" &&
                 group.rows.length === 0 &&
                 machineState === "connecting";
+              // 重新列出中、手上还有上一份的组：旧行留着变淡、仍点得开（弱网规格
+              // 2026-11-20 决策 5），同一套呈现，只是范围缩到这一组。
+              const relisting =
+                group.kind === "machine" &&
+                group.rows.length > 0 &&
+                machineState === "connecting";
               const sessions = group.rows.map(sessionModel);
 
               return (
                 <ProjectSessionGroup
                   key={`${group.key}:${overflowRangeKey}`}
                   data-testid={`group-${group.key}`}
-                  aria-busy={pending || undefined}
+                  aria-busy={pending || relisting || undefined}
+                  className={cn(
+                    "transition-opacity motion-reduce:transition-none",
+                    relisting && "opacity-55",
+                  )}
                   aria-label={group.label || undefined}
                   persistenceKey={
                     group.kind === "all"

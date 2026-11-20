@@ -321,6 +321,50 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
   });
 
+  it("机器轴:机器重新列出时手上已有的行留着变淡，答完换上，不回骨架", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat("/chat?axis=machine");
+    expect(await screen.findByText("机器上才有的")).toBeTruthy();
+
+    let release!: (value: unknown) => void;
+    fakeClient.request.mockImplementationOnce(
+      () =>
+        new Promise<{ sessions: [] }>((resolve) => {
+          release = resolve as (value: unknown) => void;
+        }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Search conversation titles" }),
+    );
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search conversation titles" }),
+      { target: { value: "机器" } },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-phone-rows").className).toContain(
+        "opacity-55",
+      ),
+    );
+    expect(
+      screen.getByTestId("chat-phone-list").getAttribute("aria-busy"),
+    ).toBe("true");
+    // 搜索词会把标题拆成高亮片段，所以按整块文本找。
+    expect(screen.getByTestId("chat-phone-rows").textContent).toContain(
+      "机器上才有的",
+    );
+
+    await act(async () => {
+      release({ sessions: [] });
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("chat-phone-list").getAttribute("aria-busy"),
+      ).toBe(null),
+    );
+  });
+
   it("账号镜像里的行行尾不摆动作(它们都已经保存过了)", async () => {
     stubApi([waitingMirrored]);
     renderChat();

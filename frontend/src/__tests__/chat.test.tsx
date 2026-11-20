@@ -1383,7 +1383,7 @@ describe("对话页:机器轴", () => {
     await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
   });
 
-  it("切换机器筛选后完整页仍在加载时显示连接中骨架，不先宣告筛选为空", async () => {
+  it("机器重新列出时手上已有行的组留着旧行变淡，答完一次换上，不先宣告筛选为空", async () => {
     let release!: (value: unknown) => void;
     const pending = new Promise((resolve) => {
       release = resolve;
@@ -1404,18 +1404,43 @@ describe("对话页:机器轴", () => {
 
     fireEvent.click(screen.getByTestId("filter-chip-running"));
 
-    await waitFor(() =>
-      expect(screen.getByTestId("group-state-device-1").textContent).toBe(
-        "Connecting",
-      ),
-    );
-    const group = screen.getByTestId("group-device-1");
+    const group = await screen.findByTestId("group-device-1");
+    await waitFor(() => expect(group.getAttribute("aria-busy")).toBe("true"));
+    // 旧行原位留着、变淡、不出骨架，也没有「筛选为空」。
+    expect(screen.getByText("重构登录页")).toBeTruthy();
+    expect(group.className).toContain("opacity-55");
     expect(
       group.querySelector('[data-slot="session-row-skeleton"]'),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(group.textContent).not.toContain("No sessions match this filter");
 
-    release({ sessions: [] });
+    await act(async () => {
+      release({ sessions: [] });
+    });
+
+    await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
+    expect(screen.getByTestId("group-device-1").getAttribute("aria-busy")).toBe(
+      null,
+    );
+    expect(screen.getByTestId("group-device-1").className).not.toContain(
+      "opacity-55",
+    );
+  });
+
+  it("机器还一份清单都没交出时，它的组显示连接中骨架而不变淡", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(() => new Promise(() => {}));
+    renderChat("/chat?axis=machine");
+
+    const group = await screen.findByTestId("group-device-1");
+    await waitFor(() =>
+      expect(
+        group.querySelector('[data-slot="session-row-skeleton"]'),
+      ).not.toBeNull(),
+    );
+    expect(group.getAttribute("aria-busy")).toBe("true");
+    expect(group.className).not.toContain("opacity-55");
   });
 
   // 「未读」在这一档有一条额外的判据：还没保存进账号的那些不算未读——它们压根
