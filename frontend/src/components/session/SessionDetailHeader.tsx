@@ -235,7 +235,7 @@ export function SessionPageStateShell({
     <AppShell flush immersive>
       <div className="flex h-full min-h-0 flex-col">
         {/* 与落地后的手机页头同高（52px）同色：认出来之后换成真头部时它不跳。 */}
-        <div className="flex h-[52px] shrink-0 items-center bg-sheet-header px-5">
+        <div className="flex h-[52px] shrink-0 items-center bg-sheet px-5">
           <SessionBackLink to={backTo} className="-ml-2 size-11" phone />
         </div>
         {/* 与非 flush 壳的主区同一副内边距与滚动：这几态原本就排在那里面。 */}
@@ -375,12 +375,8 @@ function PhoneSessionHeader({
       node: <span className="min-w-0 truncate">{agent.name}</span>,
     });
   }
-  if (machineName) {
-    metaParts.push({
-      key: "machine",
-      node: <span className="min-w-0 truncate">{machineName}</span>,
-    });
-  }
+  // 机器名不进副行（2026-11-20）：各段按自身宽度比例一起收缩，最长的机器名留得最多，
+  // 状态字与 Agent 名反被截成「空..」「Claude ...」。它在 ••• 的信息面板里。
 
   // 与列表行长按菜单里的「删除」同一句（共享包的行菜单词）。
   const deleteLabel = uiT("sessionRow.menu.delete");
@@ -414,13 +410,16 @@ function PhoneSessionHeader({
     <div
       data-testid="session-detail-header"
       // relative：连接指示器的进度条按头部定位，铺满它的底边。
-      // 手机页头统一 52px（2026-11-20 第 14 项）；底色保留对话页自己的 sheet-header。
-      className="relative flex h-[52px] shrink-0 flex-col bg-sheet-header px-5"
+      // 手机页头统一 52px（2026-11-20 第 14 项）。底色是 --sheet 白：iOS 主屏幕 App 的
+      // default 状态栏由系统画成纯白、页面改不了，灰的 sheet-header 夹在白状态栏与白转录
+      // 之间就成了一条断开的色带。不画分隔线（无边框规则）：正文滚到页头底下时，
+      // 由转录滚动带上沿那段渐隐（transcript-fade-top）把它淡掉。
+      className="relative flex h-[52px] shrink-0 flex-col bg-sheet px-5"
     >
       <SessionHeaderBand
         testId="session-detail-identity"
         metaTestId="session-detail-meta"
-        className="h-[52px]"
+        className="h-[52px] bg-sheet"
         leading={
           <SessionBackLink to={backTo} className="-ml-2 size-11" phone />
         }

@@ -5,7 +5,8 @@
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover 打开安全区，安全区底下的 env(safe-area-inset-*) 才有值。
          interactive-widget=resizes-content 让软键盘把内容区顶起来，输入框不会被
-         键盘盖住。刻意不禁止缩放：这一层不写任何锁死缩放比例的项（见
+         键盘盖住——只有 Android Chrome 认；iOS 由 AppShell 跟着 visualViewport 收高度
+         （src/components/use-keyboard-viewport.ts）。刻意不禁止缩放：这一层不写任何锁死缩放比例的项（见
          docs/design.md 的 PWA 小节）。 -->
     <meta
       name="viewport"

@@ -717,6 +717,94 @@ describe("沉浸形态（immersive）", () => {
 });
 
 /**
+ * iOS 软键盘（2026-11-20 用户截图）：iOS 弹键盘时不缩布局视口，只把可视区往上推，
+ * 钉在顶边、高 100dvh 的外壳根整个跟着被推上去，页头出了屏幕，输入框与键盘之间还
+ * 空着底部横条那 34px。`interactive-widget=resizes-content` 只有 Android Chrome 认。
+ * 外壳因此跟着 visualViewport 走：键盘弹着时根的高度与位置对齐到键盘以上那一块，
+ * 并打上 data-keyboard="open"，让底部安全区留白收掉。
+ */
+describe("软键盘：外壳跟着 visualViewport 走", () => {
+  class FakeViewport extends EventTarget {
+    height = 768;
+    offsetTop = 0;
+    scale = 1;
+  }
+  const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
+  let vv: FakeViewport;
+
+  beforeEach(() => {
+    vv = new FakeViewport();
+    Object.defineProperty(window, "visualViewport", {
+      configurable: true,
+      value: vv,
+    });
+  });
+  afterEach(() => {
+    if (original) Object.defineProperty(window, "visualViewport", original);
+    else delete (window as { visualViewport?: unknown }).visualViewport;
+  });
+
+  function move(height: number, offsetTop: number, scale = 1) {
+    act(() => {
+      vv.height = height;
+      vv.offsetTop = offsetTop;
+      vv.scale = scale;
+      vv.dispatchEvent(new Event("resize"));
+      vv.dispatchEvent(new Event("scroll"));
+    });
+  }
+
+  it("键盘弹起：根的高度与位置对齐到可视区，并标出 data-keyboard=open", () => {
+    renderShell(<AppShell immersive>page content</AppShell>);
+    const root = screen.getByTestId("app-shell");
+    expect(root.dataset.keyboard).toBeUndefined();
+
+    move(400, 300);
+
+    expect(root.style.height).toBe("400px");
+    expect(root.style.top).toBe("300px");
+    expect(root.dataset.keyboard).toBe("open");
+    // 顶边那个全宽 fixed 容器不能丢：iOS 顶部模糊的判定靠它（见根上的注释）。
+    expect(root.className).toMatch(/(^|\s)fixed(\s|$)/);
+  });
+
+  it("键盘收起：回到 100dvh，不留内联尺寸", () => {
+    renderShell(<AppShell immersive>page content</AppShell>);
+    const root = screen.getByTestId("app-shell");
+    move(400, 300);
+    move(768, 0);
+
+    expect(root.style.height).toBe("");
+    expect(root.style.top).toBe("");
+    expect(root.dataset.keyboard).toBeUndefined();
+  });
+
+  it("双指放大也会缩小可视区，那不是键盘：不动外壳", () => {
+    renderShell(<AppShell immersive>page content</AppShell>);
+    const root = screen.getByTestId("app-shell");
+    move(384, 100, 2);
+
+    expect(root.style.height).toBe("");
+    expect(root.dataset.keyboard).toBeUndefined();
+  });
+
+  it("键盘弹着时沉浸页主区不再给底部横条留白", () => {
+    renderShell(<AppShell immersive>page content</AppShell>);
+    const root = screen.getByTestId("app-shell");
+    expect(root.className).toMatch(/(^|\s)group\/shell(\s|$)/);
+    expect(screen.getByRole("main").className).toContain(
+      "group-data-[keyboard=open]/shell:pb-0",
+    );
+  });
+
+  it("没有 visualViewport 的浏览器照旧渲染", () => {
+    delete (window as { visualViewport?: unknown }).visualViewport;
+    renderShell(<AppShell immersive>page content</AppShell>);
+    expect(screen.getByTestId("app-shell").style.height).toBe("");
+  });
+});
+
+/**
  * 外框 + 内容页（规格 2026-10-15「无边框改版」外壳一节）。
  *
  * 侧边导航、顶栏、移动端底部 Tab 都落在外框色（chrome）上，彼此之间、与工作区

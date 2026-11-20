@@ -23,6 +23,7 @@ import {
   MobileNavButton,
 } from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
+import { useKeyboardViewport } from "@/components/use-keyboard-viewport";
 import { UserMenu } from "@/components/UserMenu";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
@@ -134,6 +135,7 @@ export default function AppShell({
 }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const keyboard = useKeyboardViewport();
   const { me } = useMe();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
@@ -432,10 +434,21 @@ export default function AppShell({
     的元素有一个 fixed/sticky、宽度不小于视口九成的祖先时才把它换成实色（全屏的也算）。
     各页页头形态不一（离顶 16px、没有底色、在滚动区里），由根统一担这个容器，页头就不会
     被糊掉。根本来就不随文档滚动，钉成 fixed 不改变布局。
+
+    软键盘（iOS）：弹键盘时可视区被往上推、布局视口不变，这个根会整个跟着上去、页头出屏。
+    键盘弹着时高度与 top 改用可视区那一块（useKeyboardViewport），fixed 与全宽都不变，
+    上面那条模糊判定照样成立；data-keyboard 让底部安全区留白收掉（键盘盖住了横条）。
   */
   return (
     <MobileDrawerProvider value={{ open: openDrawer }}>
-      <div className="fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row">
+      <div
+        data-testid="app-shell"
+        data-keyboard={keyboard ? "open" : undefined}
+        style={
+          keyboard ? { height: keyboard.height, top: keyboard.top } : undefined
+        }
+        className="group/shell fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row"
+      >
         {!isMobile && (
           <nav
             aria-label={t("common.appName")}
@@ -533,7 +546,7 @@ export default function AppShell({
                       // 那条横条下面。桌面 env() 为 0，md:py-6 照旧。
                       "overflow-y-auto px-4 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] md:px-8 md:py-6",
                   immersive &&
-                    "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]",
+                    "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] group-data-[keyboard=open]/shell:pb-0",
                 )}
               >
                 {children}

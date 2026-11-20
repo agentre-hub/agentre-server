@@ -513,8 +513,8 @@ export function DraftSession({
   const phoneHeader = (
     <div
       data-testid="draft-header"
-      // 与落地后的手机对话页头同高（52px）、同一枚 ‹（2026-11-20 第 14 项）：草稿换成真对话时页头不跳。
-      className="flex h-[52px] shrink-0 items-center gap-1 bg-sheet-header px-5"
+      // 与落地后的手机对话页头同高（52px）、同色（白底）、同一枚 ‹：草稿换成真对话时页头不跳。
+      className="flex h-[52px] shrink-0 items-center gap-1 bg-sheet px-5"
     >
       {onBack && (
         <button

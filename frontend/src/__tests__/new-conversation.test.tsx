@@ -3033,6 +3033,9 @@ describe("手机上的新对话", () => {
     const header = screen.getByTestId("draft-header");
     expect(header.className).toContain("h-[52px]");
     expect(header.className).not.toContain("h-14");
+    // 与落地后的手机对话页头同色：白底，不画分隔线。
+    expect(header.className).toMatch(/(^|\s)bg-sheet(\s|$)/);
+    expect(header.className).not.toMatch(/(^|\s)border-b(\s|$)/);
     const back = within(header).getByRole("button", { name: "Back" });
     expect(back.querySelector("svg")?.getAttribute("class")).toContain(
       "lucide-chevron-left",
