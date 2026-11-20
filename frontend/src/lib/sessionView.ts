@@ -167,7 +167,8 @@ export function deriveSessionViewStatus(
  * 按字符串匹配既脆又跟着对端语言变，所以正忙不在这里判——见 SessionDetailView
  * 的选路 + 一次回落。
  */
-export type SendFailureKind = "executionUnavailable" | "rejected" | "transport";
+export type SendFailureKind =
+  "executionUnavailable" | "notSent" | "rejected" | "transport";
 
 export interface SendFailure {
   kind: SendFailureKind;
@@ -180,6 +181,8 @@ export function classifySendFailure(err: unknown): SendFailure {
   if (err.code === ErrCodePeerExecutionUnavailable) {
     return { kind: "executionUnavailable" };
   }
+  // 同步就没发出去（一个字节都没离开）：重发是干净的，与「可能已送达」分开。
+  if (err.notSent) return { kind: "notSent" };
   if (err.code > MaxPeerErrorCode) return { kind: "transport" };
   const detail = err.message.trim();
   return detail ? { kind: "rejected", detail } : { kind: "rejected" };

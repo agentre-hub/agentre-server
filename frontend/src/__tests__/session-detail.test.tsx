@@ -3059,6 +3059,33 @@ describe("会话详情页:发送失败的三类诊断(缺口二)", () => {
     ).toBe(false);
   });
 
+  // Given 发送那一刻连接没就绪、send 同步抛出（RelayError 带 notSent，一个字节没出去）
+  // When  用户发消息
+  // Then  「还没发出去」气泡，说重发是干净的；不是「可能已送达」，也不自动重发。
+  it("Given 连接未就绪同步失败 When 发消息 Then notSent 气泡且不自动重发", async () => {
+    mount((m) => {
+      if (m === rpcMethods.runtimeRun) {
+        const err = new RelayError(-1, "relay: 连接未就绪");
+        err.notSent = true;
+        throw err;
+      }
+      throw new Error("unexpected: " + m);
+    });
+
+    await renderAndSend("继续");
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(bubble.textContent).toContain(
+      i18n.t("session.sendFailure.notSent.body"),
+    );
+    expect(bubble.textContent).not.toMatch(/may already have arrived/i);
+    const runs = fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeRun,
+    );
+    expect(runs.length).toBe(1);
+  });
+
   // Given 请求根本没走到 daemon（socket 刚断，RelayError code=-1）
   // When  用户发消息
   // Then  通用发送失败；不回落（可能已经送达，回落会重发），也不谎报 agentred 不可用。

@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyDurableFrames,
   RelayClient,
+  RelayError,
   RequestTimeoutMs,
   type RelayClientOptions,
 } from "@/lib/relayClient";
@@ -951,6 +952,44 @@ describe("RelayClient 通道级失败", () => {
     socket.receive(new Uint8Array(0));
 
     expect(client.state).toBe("disconnected");
+  });
+});
+
+describe("RelayClient 同步发不出去：打上「没发出去」的记号", () => {
+  // 没有通道时 request 同步失败，一个字节都没离开：必须与超时 / 断开（可能已送达）
+  // 区分开，发送失败气泡才能说「重发是干净的」。
+  it("通道已关闭时 request 以 notSent 拒绝", async () => {
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+    client.close();
+    const err = await client
+      .request(rpcMethods.sessionList, {})
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RelayError);
+    expect((err as RelayError).code).toBe(-1);
+    expect((err as RelayError).notSent).toBe(true);
+  });
+
+  it("通道 send 同步抛出（字节没出去）同样是 notSent", async () => {
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+    socket.send = () => {
+      throw new Error("InvalidStateError");
+    };
+    const err = await client
+      .request(rpcMethods.sessionList, {})
+      .catch((e: unknown) => e);
+    expect((err as RelayError).notSent).toBe(true);
+  });
+
+  it("发出之后连接断开不带记号：它可能已送达", async () => {
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+    const inflight = client.request(rpcMethods.sessionList, {});
+    socket.close();
+    const err = await inflight.catch((e: unknown) => e);
+    expect((err as RelayError).code).toBe(-1);
+    expect((err as RelayError).notSent).toBeFalsy();
   });
 });
 

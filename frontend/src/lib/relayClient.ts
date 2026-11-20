@@ -61,6 +61,19 @@ export class RelayError extends Error {
     super(message);
     this.name = "RelayError";
   }
+
+  /**
+   * 这条请求一个字节都没离开本机（没有通道、或 send 同步抛出）。码 -1 还被超时 /
+   * 断开 / 关闭共用，那几种**可能已送达**；只有带这个记号的才能对用户说「重发是干净的」。
+   */
+  notSent = false;
+}
+
+/** 造一个「没发出去」的 RelayError，记号与码在一处定下。 */
+function notSentError(raw: unknown): RelayError {
+  const err = new RelayError(-1, "relay: 连接未就绪", raw);
+  err.notSent = true;
+  return err;
 }
 
 /**
@@ -71,7 +84,7 @@ export type RelayCaller = { request: RelayClient["request"] };
 
 /** 没有 client 时如实给「连接未就绪」的一档，不抛一个说不清的 TypeError。 */
 export function disconnected(): RelayError {
-  return new RelayError(-1, "relay: 连接未就绪", null);
+  return notSentError(null);
 }
 
 /**
@@ -752,11 +765,11 @@ export class RelayClient {
   }
 
   private sendBytes(bytes: Uint8Array): void {
-    if (!this.channel) throw new RelayError(-1, "relay: 连接未就绪", null);
+    if (!this.channel) throw notSentError(null);
     try {
       this.channel.send(bytes);
     } catch (err) {
-      throw new RelayError(-1, "relay: 连接未就绪", err);
+      throw notSentError(err);
     }
   }
 
