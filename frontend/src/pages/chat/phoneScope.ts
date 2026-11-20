@@ -1,3 +1,5 @@
+import { UNASSIGNED_PROJECT_KEY } from "@agentre-hub/agentre-ui";
+
 import type { IndexAxis } from "@/lib/sessionAxes";
 
 /**
@@ -9,6 +11,8 @@ import type { IndexAxis } from "@/lib/sessionAxes";
  *
  *   - 全部：不收（取数走时间轴，平铺、能往下翻）；
  *   - 一个项目：`?axis=project&project=<同步标识>`；
+ *   - 随手对话（不属于任何项目的对话）：`?axis=project&project=<UNASSIGNED_PROJECT_KEY>`，
+ *     那个键就是共享包里项目轴兜底组的组键，撞不上真实的同步标识；
  *   - 一个 Agent：`?axis=agent&agent=<同步标识>`；
  *   - 机器：`?axis=machine`，`&machine=<设备标识>` 时只看那一台（不带就是每台在线
  *     机器，空态「按机器看设备上的对话」落在这一档）。
@@ -18,6 +22,7 @@ import type { IndexAxis } from "@/lib/sessionAxes";
 export type PhoneScope =
   | { kind: "all" }
   | { kind: "project"; projectSyncId: string }
+  | { kind: "unassigned" }
   | { kind: "agent"; agentSyncId: string }
   | { kind: "machine"; deviceId: number | null };
 
@@ -43,6 +48,9 @@ export function readPhoneScope(params: URLSearchParams): PhoneScope {
     };
   }
   const project = params.get("project")?.trim();
+  if (axis === "project" && project === UNASSIGNED_PROJECT_KEY) {
+    return { kind: "unassigned" };
+  }
   if (axis === "project" && project) {
     return { kind: "project", projectSyncId: project };
   }
@@ -64,6 +72,9 @@ export function withPhoneScope(
   if (scope.kind === "project") {
     next.set("axis", "project");
     next.set("project", scope.projectSyncId);
+  } else if (scope.kind === "unassigned") {
+    next.set("axis", "project");
+    next.set("project", UNASSIGNED_PROJECT_KEY);
   } else if (scope.kind === "agent") {
     next.set("axis", "agent");
     next.set("agent", scope.agentSyncId);
@@ -78,6 +89,7 @@ export function withPhoneScope(
 export function phoneDataAxis(scope: PhoneScope): IndexAxis {
   switch (scope.kind) {
     case "project":
+    case "unassigned":
       return "project";
     case "agent":
       return "agent";
@@ -91,6 +103,8 @@ export function phoneDataAxis(scope: PhoneScope): IndexAxis {
 /** 端点上的那一组（项目与 Agent 范围要收）。 */
 export function phoneServerScope(scope: PhoneScope): string | undefined {
   if (scope.kind === "project") return `project:${scope.projectSyncId}`;
+  // 端点上的词汇与组头「查看全部」同一个（lib/sessionScope 的 SCOPE_UNASSIGNED_PROJECT）。
+  if (scope.kind === "unassigned") return "unassigned-project";
   return scope.kind === "agent" ? `agent:${scope.agentSyncId}` : undefined;
 }
 
@@ -99,6 +113,8 @@ export function phoneScopeKey(scope: PhoneScope): string {
   switch (scope.kind) {
     case "project":
       return `project:${scope.projectSyncId}`;
+    case "unassigned":
+      return "unassigned";
     case "agent":
       return `agent:${scope.agentSyncId}`;
     case "machine":

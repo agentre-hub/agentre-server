@@ -1150,6 +1150,39 @@ describe("手机首页：范围弹层", () => {
     );
   });
 
+  // 随手对话（不属于任何项目的对话）排在项目档最后，与桌面左栏的项目轴一致。
+  // 此前手机上没有这一档，一条随手对话只能在「全部」里翻（2026-11-19 用户反馈）。
+  it("项目档末尾有「随手对话」，带数；选中换到它（地址、标题、端点 scope）", async () => {
+    stub();
+    const sheet = await open();
+
+    const rows = within(sheet).getAllByTestId(
+      /^scope-item-project-|^scope-unassigned-project$/,
+    );
+    const quick = rows[rows.length - 1];
+    expect(quick.dataset.testid).toBe("scope-unassigned-project");
+    expect(quick.textContent).toContain("1");
+
+    fireEvent.click(quick);
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=project&project=__unassigned_project__",
+      ),
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Switch scope, current: Quick chats",
+      }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        mockedApi.mock.calls.some(([path]) =>
+          String(path).includes("scope=unassigned-project"),
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("Agent 档：按部门分组，带所在机器与在线点；选中换到这个 Agent", async () => {
     stub();
     const sheet = await open();

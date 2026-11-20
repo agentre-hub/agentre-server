@@ -529,7 +529,9 @@ export default function AppShell({
                   "min-h-0 min-w-0 flex-1",
                   flush
                     ? "overflow-hidden"
-                    : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
+                    : // 底边至少让开 home indicator：手机普通页的最后一行原本压在
+                      // 那条横条下面。桌面 env() 为 0，md:py-6 照旧。
+                      "overflow-y-auto px-4 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] md:px-8 md:py-6",
                   immersive &&
                     "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]",
                 )}

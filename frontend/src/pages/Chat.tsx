@@ -23,6 +23,7 @@ import {
   ResizableSidebar,
   SessionLifecycle,
   SessionRowSkeleton,
+  useUiTranslation,
 } from "@agentre-hub/agentre-ui";
 import AppShell from "@/components/AppShell";
 import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
@@ -82,6 +83,7 @@ import {
   buildScopeAgentGroups,
   buildScopeMachines,
   buildScopeProjects,
+  buildScopeUnassigned,
   phoneScopeOf,
   scopeValueOf,
   tallyRows,
@@ -210,6 +212,8 @@ function FirstSaveDialog({
 
 export default function Chat() {
   const { t, i18n } = useTranslation();
+  // 「随手对话」这个名字归共享包（索引的组头、范围清单用的是同一句）。
+  const { t: uiT } = useUiTranslation();
   const nav = useNavigate();
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1187,7 +1191,11 @@ export default function Chat() {
     (tab?: ScopeTab) =>
       setScopeSheet({
         open: true,
-        tab: tab ?? (phoneScope.kind === "all" ? "project" : phoneScope.kind),
+        tab:
+          tab ??
+          (phoneScope.kind === "all" || phoneScope.kind === "unassigned"
+            ? "project"
+            : phoneScope.kind),
       }),
     [phoneScope.kind],
   );
@@ -1227,6 +1235,10 @@ export default function Chat() {
     () =>
       buildScopeAgentGroups(agents, scopeTally, t("chat.phone.noDepartment")),
     [agents, scopeTally, t],
+  );
+  const scopeUnassigned = useMemo(
+    () => buildScopeUnassigned(scopeTally),
+    [scopeTally],
   );
   const scopeMachines = useMemo(
     () => buildScopeMachines(devices, scopeTally),
@@ -1384,7 +1396,9 @@ export default function Chat() {
         : phoneScope.kind === "project"
           ? (projects.find((p) => p.syncId === phoneScope.projectSyncId)
               ?.name ?? t("chat.phone.scopeAll"))
-          : t("chat.phone.scopeAll");
+          : phoneScope.kind === "unassigned"
+            ? uiT("sessionIndex.free.name")
+            : t("chat.phone.scopeAll");
   const presence = (online: boolean): PhoneSubtitle => ({
     text: t(online ? "chat.phone.online" : "chat.phone.offline"),
     dot: online ? "running" : "idle",
@@ -1504,6 +1518,7 @@ export default function Chat() {
             allCount={sessionIndex.accountTotal ?? undefined}
             selected={scopeValueOf(phoneScope)}
             projects={scopeProjects}
+            unassignedProject={scopeUnassigned}
             agentGroups={scopeAgentGroups}
             machines={scopeMachines}
             onSelect={selectScope}

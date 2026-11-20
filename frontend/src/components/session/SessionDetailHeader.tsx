@@ -31,6 +31,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import AppShell from "@/components/AppShell";
+import { useMobileBack } from "@/components/console/MobileNav";
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
 import { stopReachable } from "@/components/session/useTurnStop";
 import { useIsMobile } from "@/components/use-is-mobile";
@@ -145,9 +146,23 @@ export function SessionBackLink({
 }) {
   const { t } = useTranslation();
   const Icon = phone ? ChevronLeft : ArrowLeft;
+  const isMobile = useIsMobile();
+  const back = useMobileBack();
+  const target = to ?? "/chat";
   return (
     <Link
-      to={to ?? "/chat"}
+      to={target}
+      // 手机上有本站历史就退一格（与系统侧滑返回同一条路），没有才换成列表。照旧
+      // 跳链接的话每点一次返回都压一格列表进历史，侧滑返回会把人带回刚离开的对话。
+      // 仍是一个 <a>：读屏与长按看到的还是「回到列表」。
+      onClick={
+        isMobile
+          ? (event) => {
+              event.preventDefault();
+              back(target);
+            }
+          : undefined
+      }
       aria-label={t("session.breadcrumb.back")}
       className={cn(
         "flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",

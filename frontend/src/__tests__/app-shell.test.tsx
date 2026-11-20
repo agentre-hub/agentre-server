@@ -691,6 +691,19 @@ describe("沉浸形态（immersive）", () => {
     expect(main.className).toContain("pb-[env(safe-area-inset-bottom,0px)]");
   });
 
+  // 总览 / 设备 / 设置这些普通页（非 flush）只有 py-5：最后一行压在 home indicator
+  // 那条横条下面（2026-11-19 手机形态排查）。底边留白至少让开安全区。
+  it("移动端普通页：主区底边至少让开 home indicator 那条安全区", () => {
+    mockMobileViewport();
+    renderShell(<AppShell>page content</AppShell>);
+
+    const main = screen.getByRole("main");
+    expect(main.className).toContain(
+      "pb-[max(1.25rem,env(safe-area-inset-bottom,0px))]",
+    );
+    expect(main.className).not.toMatch(/(^|\s)py-5(\s|$)/);
+  });
+
   it("移动端不传时顶栏与 ☰ 照旧在（返回列表后恢复）", () => {
     mockMobileViewport();
     renderShell(<AppShell flush>page content</AppShell>);

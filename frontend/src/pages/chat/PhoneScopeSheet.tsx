@@ -9,7 +9,12 @@ import { useTranslation } from "react-i18next";
 
 export interface PhoneScopeSheetProps extends Pick<
   ScopeListProps,
-  "allCount" | "selected" | "projects" | "agentGroups" | "machines"
+  | "allCount"
+  | "selected"
+  | "projects"
+  | "unassignedProject"
+  | "agentGroups"
+  | "machines"
 > {
   open: boolean;
   onOpenChange: (open: boolean) => void;

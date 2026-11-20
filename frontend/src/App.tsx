@@ -57,6 +57,7 @@ function HomeRedirect() {
 
 export default function App() {
   const { effectiveTheme } = useTheme();
+  const isMobile = useIsMobile();
 
   // 滚动条的另一半：base.css 把滑块颜色绑到 --sb-thumb 并默认透明，这里在滚动时
   // 改值、停手 900ms 后清掉。只 import 样式不调它，滚动条恒为透明（滚动仍可用）。
@@ -164,16 +165,16 @@ export default function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
       {/*
-        `mobileOffset`：sonner 在窄视口下把 bottom-* 拍成贴底全宽。手机上已经没有底栏
-        （导航进了左抽屉），这里只让开 16px 呼吸空间与底部安全区——主屏幕 App 里那条
-        横条不能压在 toast 上。
+        手机上 toast 落在顶部：贴底时它正好盖住输入框与发送 / 停止键，一挂 5–7 秒。
+        `mobileOffset` 让开状态栏那条安全区（sonner 在窄视口下把 top-* 拍成贴顶全宽）。
+        桌面照旧右下角。
       */}
       <Toaster
-        position="bottom-right"
+        position={isMobile ? "top-center" : "bottom-right"}
         richColors
         theme={effectiveTheme}
         mobileOffset={{
-          bottom: "calc(16px + env(safe-area-inset-bottom, 0px))",
+          top: "calc(8px + env(safe-area-inset-top, 0px))",
         }}
       />
     </BrowserRouter>

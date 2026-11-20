@@ -8469,6 +8469,23 @@ describe("会话详情：与桌面端对齐的外壳", () => {
   });
 
   /*
+    手机沉浸页的壳已经在主区底部让出了 home indicator 那条安全区（AppShell 的
+    immersive）。输入带再叠自己的 pb-3，输入框就浮在离底 46px 处，下面空出一条
+    （2026-11-19 用户截图）。有安全区时这 12px 并进安全区里，没有时照旧 12px。
+  */
+  it("Given 输入带落在已经让过底部安全区的壳里, When 渲染, Then 自己那份底部留白并进安全区，不再叠一份", async () => {
+    stubAligned();
+    renderAligned();
+
+    await screen.findByText("很长的一段转录");
+    const band = screen.getByTestId("session-composer-band");
+    expect(band.className).toContain(
+      "pb-[max(0px,calc(0.75rem_-_env(safe-area-inset-bottom,0px)))]",
+    );
+    expect(band.className).not.toMatch(/(^|\s)pb-3(\s|$)/);
+  });
+
+  /*
     无边框改版（规格 2026-10-15）：离开底部时「下面还有」只由那段渐隐说，不再加
     一条分隔线；渐隐从内容页的底色淡出，输入带落在同一张页上。
   */
