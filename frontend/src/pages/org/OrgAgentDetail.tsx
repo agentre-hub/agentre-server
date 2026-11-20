@@ -254,6 +254,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
       toolKeys={ORG_TOOL_KEYS}
       agentTools={tools}
       onToggleGrant={toggleTool}
+      touch={isMobile}
     />
   );
   const execSection = (
@@ -265,6 +266,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
       onRemove={props.onRemoveExecTarget}
       onChangeSkills={props.onChangeExecTargetSkills}
       onReordered={props.onReload}
+      touch={isMobile}
     />
   );
 

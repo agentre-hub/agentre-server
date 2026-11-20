@@ -332,9 +332,15 @@ export default function Org() {
     <AppShell
       title={t("org.pageTitle")}
       flush
-      // 手机上 Agent 详情自己就是页头「‹ · 名字 · ⋯」（规格 2026-11-05「Agent 与组织」）：
-      // 壳的「‹ · 组织」顶栏不再叠在它上面。
-      ownHeader={isMobile && Boolean(selectedAgent && selectedAgentModel)}
+      // 手机上 Agent / 部门详情自己就是页头「‹ · 名字 · •••」（规格 2026-11-05「Agent
+      // 与组织」；部门 2026-11-20 第 1 项）：壳的「‹ · 组织」顶栏不再叠在它上面。
+      ownHeader={
+        isMobile &&
+        Boolean(
+          (selectedAgent && selectedAgentModel) ||
+          (selectedDepartment && selectedDepartmentModel),
+        )
+      }
       right={
         isMobile && !selection ? (
           <OrgAddMenu

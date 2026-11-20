@@ -9,6 +9,7 @@ import {
   DialogTitle,
   cn,
 } from "@agentre-hub/agentre-ui";
+import { PHONE_HEADER_BUTTON_CLASS } from "@/components/PhonePageHeader";
 
 /**
  * 手机外壳的导航件（规格 2026-11-05 手机 PWA「外壳与导航」）：左抽屉取代底部 TabBar。
@@ -61,8 +62,8 @@ export function useMobileBack(): (fallback: To) => void {
   );
 }
 
-const BUTTON_CLASS =
-  "relative -ml-2 flex size-11 shrink-0 items-center justify-center rounded-md text-foreground outline-none hover:bg-rail-accent focus-visible:focus-outline";
+// 与手机页头其它图标键同一份（PhonePageHeader），贴左那一颗抵掉页头内边距的一半。
+const BUTTON_CLASS = cn(PHONE_HEADER_BUTTON_CLASS, "-ml-2");
 
 /** 页头左侧：顶层页 ☰（开抽屉），非顶层页返回。命中区 44px。 */
 export function MobileNavButton() {
@@ -90,7 +91,7 @@ export function MobileNavButton() {
       onClick={() => back(parentOf(pathname))}
       className={BUTTON_CLASS}
     >
-      <ChevronLeft className="size-6" aria-hidden="true" />
+      <ChevronLeft className="size-5" aria-hidden="true" />
     </button>
   );
 }

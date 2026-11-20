@@ -1481,10 +1481,20 @@ export default function Chat() {
             loadMoreFailed={sessionIndex.loadMoreFailed}
             onLoadMore={sessionIndex.loadMore}
             banners={
-              sessionIndex.loadError || sessionIndex.saveFailure ? (
-                <IndexBanners sessionIndex={sessionIndex} />
+              (sessionIndex.loadError && phoneRows.length > 0) ||
+              sessionIndex.saveFailure ? (
+                <IndexBanners
+                  sessionIndex={sessionIndex}
+                  showLoadError={phoneRows.length > 0}
+                />
               ) : undefined
             }
+            loadFailed={!!sessionIndex.loadError}
+            onRetry={() => {
+              // 与横幅上那颗同一个动作：清掉再重取，成功了错误态不会还挂着。
+              sessionIndex.setLoadError(null);
+              sessionIndex.refetch();
+            }}
           />
           <PhoneScopeSheet
             open={scopeSheet.open}

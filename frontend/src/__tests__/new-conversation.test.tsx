@@ -3028,6 +3028,17 @@ describe("手机上的新对话", () => {
     ).toEqual(["Back", "draft-recipient"]);
   });
 
+  it("手机草稿页头与落地后的对话页头同高（52px）、返回同一枚 ‹：草稿换成真对话时页头不跳", async () => {
+    await openPhoneDraft();
+    const header = screen.getByTestId("draft-header");
+    expect(header.className).toContain("h-[52px]");
+    expect(header.className).not.toContain("h-14");
+    const back = within(header).getByRole("button", { name: "Back" });
+    expect(back.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-chevron-left",
+    );
+  });
+
   it("手机「从项目里挑」页头只有返回与标题，不摆语言/主题按钮", async () => {
     const sheet = await openPhoneSheet();
     fireEvent.click(within(sheet).getByTestId("sheet-from-project"));

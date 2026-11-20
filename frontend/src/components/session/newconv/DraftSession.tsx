@@ -22,6 +22,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 import {
   ArrowLeft,
+  ChevronLeft,
   ChevronDown,
   FolderTree,
   Monitor,
@@ -448,7 +449,15 @@ export function DraftSession({
           data-testid="draft-header-status"
           className="inline-flex min-w-0 items-center gap-1.5"
         >
-          {chosen && <StatusDot status="idle" size="xs" />}
+          {/* 「在线」与首页副行同一枚绿点；字已经说了在线，点只是装饰，不另念状态名。 */}
+          {chosen && (
+            <StatusDot
+              status="running"
+              size="xs"
+              aria-hidden="true"
+              aria-label={undefined}
+            />
+          )}
           <span className="truncate">
             {chosen
               ? t("chat.draftOnline")
@@ -495,7 +504,7 @@ export function DraftSession({
   }
 
   /*
-    手机的收件人页头（规格「新对话」）：与对话页页头同一副形（56px、顶带底色、返回在左），
+    手机的收件人页头（规格「新对话」）：与对话页页头同一副形（52px、顶带底色、返回在左），
     中间是一颗按钮「头像 · 名字 ⌄ / 在线 · 新对话」，点开重新挑 Agent。
     共享包的 SessionHeaderBand 标题只收字符串、装不下可点的收件人，所以这一副手摆。
     重挑走已有的 `/chat?compose=1` 出口（Chat 按它直接进「选 Agent」弹层），不在这一层
@@ -504,7 +513,8 @@ export function DraftSession({
   const phoneHeader = (
     <div
       data-testid="draft-header"
-      className="flex h-14 shrink-0 items-center gap-1 bg-sheet-header px-5"
+      // 与落地后的手机对话页头同高（52px）、同一枚 ‹（2026-11-20 第 14 项）：草稿换成真对话时页头不跳。
+      className="flex h-[52px] shrink-0 items-center gap-1 bg-sheet-header px-5"
     >
       {onBack && (
         <button
@@ -513,7 +523,7 @@ export function DraftSession({
           className="-ml-2 flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
           onClick={onBack}
         >
-          <ArrowLeft aria-hidden="true" className="size-4" />
+          <ChevronLeft aria-hidden="true" className="size-5" />
         </button>
       )}
       <button
@@ -646,7 +656,13 @@ export function DraftSession({
               label={t("chat.draftFactTarget")}
               value={
                 <>
-                  <StatusDot status="idle" size="xs" />
+                  {/* 挑中的那台必然在线：绿点，与首页「在线」一致；机器名已在旁边。 */}
+                  <StatusDot
+                    status="running"
+                    size="xs"
+                    aria-hidden="true"
+                    aria-label={undefined}
+                  />
                   <span className="truncate">{chosen.device_name}</span>
                 </>
               }

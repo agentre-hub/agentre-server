@@ -11,7 +11,10 @@
     "machineAria": "Pick the machine to run on",
     "modelAria": "Pick the model",
     "pickerTitle": "Where it runs",
-    "followAgent": "Follow the agent's binding"
+    "followAgent": "Follow the agent's binding",
+    "machineField": "Machine",
+    "followShort": "Follow agent",
+    "modelFollow": "Model · Follow agent"
   },
   "loadFailedWhat": "The board didn't load"
 }

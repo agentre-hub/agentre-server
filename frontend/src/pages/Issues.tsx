@@ -46,6 +46,10 @@ import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
 import { FailureNotice, MobileNavButton } from "@/components/console";
+import {
+  PhoneHeaderButton,
+  PhonePageHeader,
+} from "@/components/PhonePageHeader";
 import { describeFailure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
@@ -230,12 +234,11 @@ export default function Issues() {
         {isMobile ? (
           /* 手机页头自己画（ownHeader）：☰ · 项目范围（标题）· ＋ 新建任务。 */
           <>
-            <header
-              data-testid="issues-mobile-header"
-              className="flex shrink-0 items-center gap-2 px-4 pt-[env(safe-area-inset-top,0px)]"
-            >
-              <MobileNavButton />
-              <div className="min-w-0 flex-1">
+            <PhonePageHeader
+              testId="issues-mobile-header"
+              leading={<MobileNavButton />}
+              titleAs="div"
+              title={
                 <ProjectScopePicker
                   sheet
                   scope={query.scope}
@@ -247,20 +250,19 @@ export default function Issues() {
                   }
                   className="max-w-full"
                 />
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-11 shrink-0"
-                aria-label={t("issues.actions.newTask")}
-                onClick={() =>
-                  setEditing(initialTaskFormValue({ scope: query.scope }))
-                }
-              >
-                <Plus aria-hidden="true" />
-              </Button>
-            </header>
+              }
+              trailing={
+                <PhoneHeaderButton
+                  edge="end"
+                  aria-label={t("issues.actions.newTask")}
+                  onClick={() =>
+                    setEditing(initialTaskFormValue({ scope: query.scope }))
+                  }
+                >
+                  <Plus className="size-5" aria-hidden="true" />
+                </PhoneHeaderButton>
+              }
+            />
             <div className="flex min-h-12 shrink-0 items-center gap-2 px-4 py-1">
               <BoardFilterBar
                 sheet

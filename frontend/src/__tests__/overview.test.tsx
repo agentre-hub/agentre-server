@@ -896,6 +896,15 @@ describe("overview: 移动端", () => {
       title.compareDocumentPosition(rangeGroup) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    // 统一的 52px 手机页头（2026-11-20 第 14 项）：范围分段放在页头右端而不是第二行，
+    // 页头钉在滚动区外。
+    expect(header.getAttribute("data-slot")).toBe("phone-page-header");
+    expect(header.closest('[data-slot="phone-page-body"]')).toBeNull();
+    expect(
+      screen
+        .getByTestId("heatmap-grid")
+        .closest('[data-slot="phone-page-body"]'),
+    ).not.toBeNull();
   });
 
   it("窄屏两格可点的摘要带「›」提示，另两格没有", async () => {

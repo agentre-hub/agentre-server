@@ -132,6 +132,11 @@ export interface OrgExecTargetSectionProps {
   onRemove: (syncId: string) => void;
   onChangeSkills: (syncId: string, skillsJson: string) => void;
   onReordered: () => void;
+  /**
+   * 手机触屏档：共享件的柄、✕、技能入口换成 ≥44px 的点按区，「添加执行目标」视觉
+   * 32px、点按区用透明 ::before 撑到 44px。桌面不传，保持原样。
+   */
+  touch?: boolean;
 }
 
 /** 一次移动的结果：要提交的排列，以及被挪的那一档落在第几位（从 0 起）。 */
@@ -280,6 +285,7 @@ export function OrgExecTargetSection(props: OrgExecTargetSectionProps) {
     onMoveDown: movableAt(index) ? () => void handleMove(index, 1) : undefined,
     onRemove: () => props.onRemove(target.sync_id),
     skillsSupported: supportsSkills(target.backend_type),
+    touch: props.touch,
     skillsBlock: (
       <SkillsEditor
         target={target}
@@ -308,7 +314,11 @@ export function OrgExecTargetSection(props: OrgExecTargetSectionProps) {
               type="button"
               variant="outline"
               size="sm"
-              className="h-7 px-2 text-2xs"
+              className={
+                props.touch
+                  ? "relative h-8 px-2.5 text-xs before:absolute before:-inset-y-1.5 before:inset-x-0"
+                  : "h-7 px-2 text-2xs"
+              }
               disabled={pickable.length === 0}
             >
               <Plus className="size-3" aria-hidden="true" />

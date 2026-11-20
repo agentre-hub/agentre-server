@@ -20,7 +20,7 @@ export function EmptyState({
   testId,
 }: {
   icon: LucideIcon;
-  tone?: "brand" | "warn";
+  tone?: "brand" | "warn" | "danger";
   title: string;
   body?: string;
   action?: ReactNode;
@@ -37,7 +37,9 @@ export function EmptyState({
           "flex size-[62px] shrink-0 items-center justify-center rounded-full",
           tone === "warn"
             ? "bg-status-waiting-bg text-status-waiting-text"
-            : "bg-primary-soft text-primary-text",
+            : tone === "danger"
+              ? "bg-destructive-soft text-destructive-text"
+              : "bg-primary-soft text-primary-text",
         )}
       >
         <Icon className="size-7" aria-hidden="true" />

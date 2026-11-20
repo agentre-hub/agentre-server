@@ -92,12 +92,22 @@ export function BoardExecTargetPill({
           className={className}
           aria-label={t("issues.exec.machineAria")}
         >
-          {selected ? <MachineIcon backend={selected} /> : null}
-          <span
-            className={cn("truncate", !selected && "text-muted-foreground")}
-          >
-            {selected ? backendName(selected) : t("issues.exec.followAgent")}
-          </span>
+          {selected ? (
+            <>
+              <MachineIcon backend={selected} />
+              <span className="truncate">{backendName(selected)}</span>
+            </>
+          ) : (
+            // 跟随态带字段名：同一排的模型 pill 也是「跟随 Agent」，只写这四个字
+            // 两颗就一模一样，只能靠 aria-label 区分。
+            <>
+              <Server className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="shrink-0 text-muted-foreground">
+                {t("issues.exec.machineField")}
+              </span>
+              <span className="truncate">{t("issues.exec.followShort")}</span>
+            </>
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-0">

@@ -130,8 +130,14 @@ export interface ChatIndexPanelProps {
  */
 export function IndexBanners({
   sessionIndex,
+  showLoadError = true,
 }: {
   sessionIndex: SessionIndexData;
+  /**
+   * 手机首页一条行都没有时，取数失败由列表自己整块说（错误态 + 满宽重试），横幅
+   * 不再叠一条；保存失败那条照常挂着——它说的是另一件事。
+   */
+  showLoadError?: boolean;
 }) {
   const { t } = useTranslation();
   /** 索引取数失败给用户看的那一句：经分类说原因，原文不上屏（规格 W5）。 */
@@ -146,28 +152,29 @@ export function IndexBanners({
    * 浏览器。可失败的只是「列哪些行」这一件事——轴选择器、筛选 chips、搜索框都还
    * 答得出各自的问题，没有理由陪葬。
    */
-  const indexError = sessionIndex.loadError ? (
-    <div
-      role="alert"
-      data-testid="index-load-error"
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
-    >
-      <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1">{indexErrorMessage}</span>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          // 清掉再重取：横幅留着的话，这一次成功了它也还挂在那儿。
-          sessionIndex.setLoadError(null);
-          sessionIndex.refetch();
-        }}
+  const indexError =
+    showLoadError && sessionIndex.loadError ? (
+      <div
+        role="alert"
+        data-testid="index-load-error"
+        className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
       >
-        <RotateCw aria-hidden="true" className="size-3.5" />
-        {t("sessionIndex.loadMore.retry")}
-      </Button>
-    </div>
-  ) : null;
+        <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">{indexErrorMessage}</span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            // 清掉再重取：横幅留着的话，这一次成功了它也还挂在那儿。
+            sessionIndex.setLoadError(null);
+            sessionIndex.refetch();
+          }}
+        >
+          <RotateCw aria-hidden="true" className="size-3.5" />
+          {t("sessionIndex.loadMore.retry")}
+        </Button>
+      </div>
+    ) : null;
 
   /**
    * 上一次保存没写成（规格 2026-08-18 决策 2 的收尾动作失败时）。

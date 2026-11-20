@@ -78,6 +78,10 @@
       "earlier": "更早"
     },
     "scopeSheetTitle": "范围",
-    "noDepartment": "未分部门"
+    "noDepartment": "未分部门",
+    "loadFailed": {
+      "title": "对话列表没能加载",
+      "body": "网络或服务暂时不可用，你的对话都还在。"
+    }
   }
 }

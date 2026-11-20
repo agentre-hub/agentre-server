@@ -14,6 +14,7 @@ import {
 import AppControls from "@/components/AppControls";
 import { ConnectionEscape } from "@/components/ConnectionStatus";
 import { ConsoleNavItem } from "@/components/console";
+import { PhonePageHeader } from "@/components/PhonePageHeader";
 import {
   DrawerAccount,
   DrawerSectionLabel,
@@ -457,7 +458,24 @@ export default function AppShell({
         )}
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {!ownHeader && !immersive && (
+          {!ownHeader && !immersive && isMobile && (
+            /* 手机顶栏就是统一手机页头的基准（PhonePageHeader）：自己画页头的页与它
+               同一份尺寸。断线的出路落在右端：窄屏上一样要有；账号、主题与语言都进了
+               抽屉，页头不再有。 */
+            <PhonePageHeader
+              testId="app-topbar"
+              leading={<MobileNavButton />}
+              title={title || null}
+              titleAs="span"
+              trailing={
+                <>
+                  {right}
+                  <ConnectionEscape variant="icon" />
+                </>
+              }
+            />
+          )}
+          {!ownHeader && !immersive && !isMobile && (
             <header
               data-testid="app-topbar"
               /* 高度按内容 52px 算，多出来的 env(safe-area-inset-top) 只是把整条往下
@@ -465,7 +483,6 @@ export default function AppShell({
                env() 为 0，这条与改动前逐像素相同。 */
               className="flex h-[calc(52px_+_env(safe-area-inset-top,0px))] shrink-0 items-center gap-3 bg-chrome px-4 pt-[env(safe-area-inset-top,0px)]"
             >
-              {isMobile && <MobileNavButton />}
               {title ? (
                 <span className="truncate text-prose font-bold text-foreground">
                   {title}
@@ -473,10 +490,7 @@ export default function AppShell({
               ) : null}
               <span className="flex-1" />
               {right}
-              {/* 移动端没有侧栏，这一枚就落在 TopBar 上：断线在窄屏上一样要有出路。
-                账号、主题与语言都进了抽屉，页头不再有。 */}
-              {isMobile && <ConnectionEscape variant="icon" />}
-              {!isMobile && <AppControls />}
+              <AppControls />
             </header>
           )}
           {/*

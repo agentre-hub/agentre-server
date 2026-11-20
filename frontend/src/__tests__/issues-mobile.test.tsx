@@ -141,6 +141,9 @@ describe("看板手机形态", () => {
     expect(
       within(header).getByRole("button", { name: "New task" }),
     ).toBeTruthy();
+    // 统一的手机页头（2026-11-20 第 14 项）：52px 外框色通栏，不是 44px 无底色。
+    expect(header.getAttribute("data-slot")).toBe("phone-page-header");
+    expect(header.className).toContain("bg-chrome");
   });
 
   it("筛选收进底部弹层，按钮写出会看到几条", async () => {

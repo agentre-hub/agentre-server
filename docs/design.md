@@ -545,6 +545,17 @@ row that holds the `index` column and the sheet then gets a `pt-2`: the sheet's 
 still clears the chrome, and because the index column moves down with it, Chat's 56px list
 head and 56px detail band stay on one horizontal line instead of sitting 8px apart.
 
+**Phone page headers are one component.** On mobile every `ownHeader` page — Board, Agent and
+department detail, Devices, Overview, Settings — draws its header with `PhonePageHeader`
+(`frontend/src/components/PhonePageHeader.tsx`), and the shell's own mobile TopBar is the same
+component, so all of them share the TopBar's geometry: 52px plus `env(safe-area-inset-top)`,
+full-bleed `bg-chrome`, 44×44 buttons with 20px icons, back is ‹ (`ChevronLeft`) and more is
+••• (`Ellipsis`). The subtitle slot collapses when it renders nothing (an idle save status), so
+the title stays vertically centred. Wrap the page in `PhonePage` under `AppShell flush ownHeader`
+so the header sits outside the scroll area instead of inside `main`'s padding, where it would
+render as an inset grey box that scrolls away. The conversation and draft bands are also 52px
+with ‹ but keep `bg-sheet-header`.
+
 **Page layout is declared to the shell.** A page is either a *whole sheet* (the default) or
 an *index column plus a sheet*. The second is declared with **`index`**, a `ReactNode`
 (`Chat` passes its session `ResizableSidebar`, `Org` its fixed index column). On desktop
@@ -558,7 +569,7 @@ detail. Pages therefore never paint their own root background.
 **Mobile session detail and draft: `immersive`** — when `immersive={true}` the shell hides
 the TopBar, and `main` handles safe-area insets at top and bottom.
 The conversation detail page (`/chat/:conversationId`) and new-conversation draft render this
-way on mobile, so a session occupies the full viewport with a single fixed 56px header band
+way on mobile, so a session occupies the full viewport with a single fixed 52px header band
 (see [The detail's three bands](#the-details-three-bands)). Desktop and embedded forms ignore
 `immersive`. Loading / not-found / error states keep the back link through the header band. A page rendered
 `immersive` must not add its own top inset as well — the new-conversation draft therefore

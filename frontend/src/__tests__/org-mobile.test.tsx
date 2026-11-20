@@ -454,6 +454,22 @@ describe("组织面手机形态：索引两行、摘要、chips", () => {
     expect(await screen.findByText("Alice")).toBeTruthy();
   });
 
+  // 第 11 项（2026-11-20 定稿 B）：搜索框与「筛选」手机上 36px，筛选的点按区由透明
+  // ::before 上下各撑 4px 到 44px；桌面仍是 32px 一排。
+  it("搜索框与「筛选」手机上 36px，筛选点按区撑到 44px", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+
+    const toolbar = screen.getByTestId("org-index-toolbar");
+    const search = toolbar.querySelector('[data-slot="search-input"]')!;
+    expect(search.className).toContain("h-9");
+    const entry = screen.getByTestId("org-filter-entry");
+    expect(entry.className).toContain("h-9");
+    expect(entry.className).not.toContain("h-8");
+    expect(entry.className).toContain("before:-inset-y-1");
+  });
+
   it("后端 chip 单选过滤", async () => {
     mockMobileViewport();
     renderOrgAt("/org");
@@ -471,7 +487,12 @@ describe("组织面手机形态：索引两行、摘要、chips", () => {
 
     expect(screen.queryAllByTestId(/^org-row-second-/)).toHaveLength(0);
     expect(screen.queryByTestId("org-index-filter-chips")).toBeNull();
-    expect(screen.getByTestId("org-filter-entry")).toBeTruthy();
+    expect(screen.getByTestId("org-filter-entry").className).toContain("h-8");
+    expect(
+      screen
+        .getByTestId("org-index-toolbar")
+        .querySelector('[data-slot="search-input"]')!.className,
+    ).toContain("h-8");
     expect(screen.getByTestId(/^org-group-add-agent-/)).toBeTruthy();
   });
 });
@@ -529,9 +550,65 @@ describe("Agent 详情手机页头与分区顺序", () => {
     }
   });
 
+  it("页头是统一的手机页头：‹ 与 •••、52px 外框色通栏；保存态 idle 时副行塌掉，标题居中", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org/agent/agent-alice");
+    const header = await screen.findByTestId("org-detail-header");
+    expect(header.getAttribute("data-slot")).toBe("phone-page-header");
+    expect(header.className).toContain("bg-chrome");
+    expect(
+      within(header)
+        .getByRole("button", { name: "Back" })
+        .querySelector("svg.lucide-chevron-left"),
+    ).not.toBeNull();
+    expect(
+      within(header)
+        .getByRole("button", { name: "More actions" })
+        .querySelector("svg.lucide-ellipsis"),
+    ).not.toBeNull();
+    const subtitle = within(header).getByTestId("org-detail-subtitle");
+    expect(subtitle.className).toContain("empty:hidden");
+    expect(subtitle.childNodes).toHaveLength(0);
+  });
+
   it("桌面详情头仍带 ✕", async () => {
     renderOrgAt("/org/agent/agent-alice");
     const header = await screen.findByTestId("org-detail-header");
     expect(within(header).getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+});
+
+/**
+ * 部门详情手机页头（2026-11-20 第 1 项）：与 Agent 详情同形——自带「‹ · 部门名 · •••」，
+ * 壳的「‹ · 组织」不再叠在上面；身份编辑挪进正文「身份」段，没有 ✕。
+ */
+describe("部门详情手机页头", () => {
+  it("只有一条页头：‹ · Engineering · •••，没有 ✕；身份在正文", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org/department/dept-eng");
+    const header = await screen.findByTestId("org-detail-header");
+
+    expect(screen.queryByTestId("app-topbar")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Back" })).toHaveLength(1);
+    expect(
+      within(header).getByRole("heading", { name: "Engineering" }),
+    ).toBeTruthy();
+    expect(
+      within(header).getByRole("button", { name: "More actions" }),
+    ).toBeTruthy();
+    expect(within(header).queryByRole("button", { name: "Close" })).toBeNull();
+    // 页头里没有可编辑的名字：编辑挪进正文「身份」段。
+    expect(within(header).queryByRole("textbox")).toBeNull();
+    const identity = screen.getByRole("region", { name: "Identity" });
+    expect(
+      within(identity).getByRole("textbox", { name: "Name" }),
+    ).toBeTruthy();
+  });
+
+  it("桌面部门详情头不变：仍带 ✕，名字在头部里编辑", async () => {
+    renderOrgAt("/org/department/dept-eng");
+    const header = await screen.findByTestId("org-detail-header");
+    expect(within(header).getByRole("button", { name: "Close" })).toBeTruthy();
+    expect(within(header).getByRole("textbox", { name: "Name" })).toBeTruthy();
   });
 });

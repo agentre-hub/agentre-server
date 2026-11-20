@@ -297,8 +297,16 @@ describe("移动端会话详情：一层头部", () => {
     });
     expect(title.className).toContain("line-clamp-1");
     const head = screen.getByTestId("session-detail-header");
-    expect(head.className).toMatch(/(^|\s)h-14(\s|$)/);
+    // 手机页头统一 52px（2026-11-20 第 14 项），对话页保留自己的 sheet-header 底色；
+    // 返回是 ‹ 不是 ←。
+    expect(head.className).toMatch(/(^|\s)h-\[52px\](\s|$)/);
     expect(head.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
+    expect(band.className).toMatch(/(^|\s)h-\[52px\](\s|$)/);
+    expect(
+      within(band)
+        .getByRole("link", { name: "Back" })
+        .querySelector("svg.lucide-chevron-left"),
+    ).not.toBeNull();
     expect(
       within(band).getByRole("button", { name: "More actions" }),
     ).toBeTruthy();
@@ -492,7 +500,7 @@ describe("移动端会话详情：一层头部", () => {
     // 返回那一格与落地后的头部同高同色：认出来之后换成真头部时它不跳。
     const row = screen.getByRole("link", { name: "Back" })
       .parentElement as HTMLElement;
-    expect(row.className).toMatch(/(^|\s)h-14(\s|$)/);
+    expect(row.className).toMatch(/(^|\s)h-\[52px\](\s|$)/);
     expect(row.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
   });
 });

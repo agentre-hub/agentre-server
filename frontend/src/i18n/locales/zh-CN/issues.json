@@ -11,7 +11,10 @@
     "machineAria": "选择执行的机器",
     "modelAria": "选择模型",
     "pickerTitle": "在哪台机器上跑",
-    "followAgent": "跟随 Agent 绑定"
+    "followAgent": "跟随 Agent 绑定",
+    "machineField": "机器",
+    "followShort": "跟随 Agent",
+    "modelFollow": "模型 · 跟随 Agent"
   },
   "loadFailedWhat": "看板没取回来"
 }

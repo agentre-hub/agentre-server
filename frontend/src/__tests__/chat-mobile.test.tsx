@@ -461,6 +461,35 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
     expect(empty.textContent).toContain("No matching sessions");
   });
+
+  // 取数失败时手上的空列表说明不了「没有对话」：此前红横幅下面紧跟着「还没有对话 ·
+  // 新对话」，看起来像数据没了。整块换成错误态，横幅不再叠一条，重试是满宽大按钮。
+  it("取数失败且一条都没有：不谎报「还没有对话」，整块换成可重试的错误态", async () => {
+    stubApi([waitingMirrored]);
+    const succeed = mockedApi.getMockImplementation()!;
+    let failing = true;
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      if (failing && path.startsWith("/v1/agent-sessions?"))
+        throw new Error("boom");
+      return succeed(path, ...rest);
+    });
+    renderChat();
+
+    const failed = await screen.findByTestId("chat-load-failed");
+    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
+    expect(screen.queryByTestId("index-load-error")).toBeNull();
+    expect(within(failed).getByTestId("empty-icon").className).toContain(
+      "bg-destructive-soft",
+    );
+    const retry = within(failed).getByRole("button", { name: "Retry" });
+    expect(retry.className).toContain("w-full");
+
+    failing = false;
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    expect(screen.queryByTestId("chat-load-failed")).toBeNull();
+  });
 });
 
 /**
@@ -767,6 +796,19 @@ describe("移动端新对话草稿：一层头部", () => {
     expect(within(band).getByTestId("draft-header-meta").textContent).toContain(
       "New chat",
     );
+  });
+
+  // 「在线」在别处都是绿点（首页副行的 presence()）；这里此前写死灰点，读屏还念「空闲」。
+  // 旁边的字已经说了「在线」，点只是装饰，不再另念一遍。
+  it("副行「在线」配绿点，点不另念一个状态名", async () => {
+    const band = await openMobileDraft();
+
+    const status = await within(band).findByTestId("draft-header-status");
+    await waitFor(() => expect(status.textContent).toContain("Online"));
+    const dot = status.querySelector(".rounded-full") as HTMLElement;
+    expect(dot.className).toContain("bg-status-running");
+    expect(dot.getAttribute("aria-hidden")).toBe("true");
+    expect(dot.getAttribute("aria-label")).toBeNull();
   });
 });
 

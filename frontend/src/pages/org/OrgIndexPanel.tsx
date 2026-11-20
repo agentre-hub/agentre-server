@@ -269,6 +269,8 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
         <div className="flex items-center gap-1.5">
           <SearchInput
             variant="muted"
+            // 手机上 36px（md 档）：32px 的框手指点不准；桌面保持与筛选、＋ 同排的 32px。
+            size={props.isMobile ? "md" : "sm"}
             value={search}
             onChange={setSearch}
             aria-label={t("org.index.searchAria")}
@@ -281,6 +283,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
             label={t("org.index.filters.entry")}
             ariaLabel={t("org.index.filters.entryAria")}
             sections={filterSections}
+            touch={props.isMobile}
           />
           {/* 手机上的 ＋ 在页头（OrgAddMenu，见 Org.tsx），工具条只留搜索与筛选。 */}
           {props.isMobile ? null : (
@@ -624,6 +627,8 @@ function FilterEntry(props: {
   ariaLabel: string;
   allLabel: string;
   sections: FilterSection[];
+  /** 手机：视觉 36px 与搜索框同高，透明 ::before 上下各撑 4px 到 44px 的点按区。 */
+  touch?: boolean;
 }) {
   const active = props.activeCount > 0;
   return (
@@ -636,13 +641,19 @@ function FilterEntry(props: {
           className={cn(
             // h-8 与搜索框、＋ 同高：三样现在同排（mockup 的 .field / .sq 也都是 30px），
             // 差一档就看得出来这一行没对齐。
-            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-2xs outline-none transition-colors focus-visible:focus-outline",
+            "inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md outline-none transition-colors focus-visible:focus-outline",
+            props.touch
+              ? "relative h-9 px-2.5 text-xs before:absolute before:-inset-x-[3px] before:-inset-y-1"
+              : "h-8 px-2 text-2xs",
             active
               ? "bg-primary-soft text-primary-text"
               : "bg-button-fill text-muted-foreground hover:bg-button-fill-hover",
           )}
         >
-          <SlidersHorizontal className="size-3.5" aria-hidden="true" />
+          <SlidersHorizontal
+            className={props.touch ? "size-4" : "size-3.5"}
+            aria-hidden="true"
+          />
           <span>{props.label}</span>
           {active ? (
             <span className="font-mono">{props.activeCount}</span>

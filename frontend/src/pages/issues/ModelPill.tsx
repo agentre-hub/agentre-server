@@ -14,6 +14,7 @@ import {
   type ModelTarget,
   type PickerProvider,
 } from "@agentre-hub/agentre-ui";
+import { Cpu } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 export interface BoardModelPillProps {
@@ -57,7 +58,14 @@ export function BoardModelPill({
       catalog={catalog}
       invalid={pillState.mode === "invalid"}
       disabled={disabled}
-      triggerLabel={<ProviderPillTrigger state={pillState} />}
+      triggerLabel={
+        // 同一排的机器 pill 也「跟随 Agent」：跟随态写明字段名并换掉人形图标，两颗才分得清。
+        <ProviderPillTrigger
+          state={pillState}
+          followLabel={t("issues.exec.modelFollow")}
+          followIcon={<Cpu className="size-3.5 shrink-0" aria-hidden="true" />}
+        />
+      }
       data-testid="board-model-pill"
       aria-label={t("issues.exec.modelAria")}
       className={className}

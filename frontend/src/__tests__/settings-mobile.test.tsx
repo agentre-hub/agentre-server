@@ -150,6 +150,20 @@ describe("Settings on a phone", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
   });
 
+  it("pins a full-bleed phone header outside the scrolling body", async () => {
+    renderSettings();
+    await screen.findByRole("link", { name: "Language" });
+    // 统一的手机页头（2026-11-20 第 5 / 14 项）：不落进主区内边距、不随正文滚走。
+    const header = screen.getByTestId("settings-header");
+    expect(header.getAttribute("data-slot")).toBe("phone-page-header");
+    expect(header.closest('[data-slot="phone-page-body"]')).toBeNull();
+    expect(
+      screen
+        .getByRole("link", { name: "Language" })
+        .closest('[data-slot="phone-page-body"]'),
+    ).not.toBeNull();
+  });
+
   it("drills into the provider list and its detail page, and back out", async () => {
     renderSettings();
     fireEvent.click(await screen.findByRole("link", { name: "LLM providers" }));
@@ -165,9 +179,22 @@ describe("Settings on a phone", () => {
       expect(screen.getByTestId("where").textContent).toContain("id="),
     );
     expect(await screen.findByText("claude-sonnet-4")).toBeTruthy();
+    // 详情层的页头标题是供应商名，不再挂「新增供应商」（2026-11-20 第 5 项）。
+    const detailHeader = screen.getByTestId("settings-header");
+    expect(
+      within(detailHeader).getByRole("heading", { name: "Anthropic" }),
+    ).toBeTruthy();
+    expect(
+      within(detailHeader).queryByRole("button", { name: /New Provider/ }),
+    ).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByTestId("where").textContent).toBe("?section=providers");
+    expect(
+      within(screen.getByTestId("settings-header")).getByRole("heading", {
+        name: "LLM providers",
+      }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByTestId("where").textContent).toBe("");
     expect(screen.getByRole("link", { name: "Language" })).toBeTruthy();

@@ -27,6 +27,7 @@ import {
   orgBackendTypeLabel,
 } from "@agentre-hub/agentre-ui";
 import AppShell from "@/components/AppShell";
+import { PhonePage, PhonePageHeader } from "@/components/PhonePageHeader";
 import {
   Heatmap,
   HeatmapLegend,
@@ -364,6 +365,365 @@ export default function Overview() {
   /** 一条历史都没有：连续活跃 / 活跃天此时给不出有意义的 0。 */
   const noHistory = summary !== undefined && summary.conversations_total === 0;
 
+  const content = (
+    <div className="mx-auto w-full max-w-[1200px] space-y-4">
+      {/* 范围收窄时页顶一条说明覆盖全页，不逐卡重复。 */}
+      {stats?.scope === "saved" ? (
+        <div
+          data-testid="stats-scope-notice"
+          className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-primary-soft px-3.5 py-2.5"
+        >
+          <BarChart3
+            aria-hidden="true"
+            className="size-[15px] shrink-0 text-primary-text"
+          />
+          <span className="min-w-0 text-xs text-primary-text">
+            {t("overview.stats.scopeNotice.text")}
+          </span>
+          <span className="flex-1" />
+          <Link
+            to={PRIVACY_SETTINGS_PATH}
+            className="text-xs font-medium text-primary-text hover:underline"
+          >
+            {t("overview.stats.scopeNotice.action")}
+          </Link>
+        </div>
+      ) : null}
+
+      {freshAccount ? (
+        <div
+          data-testid="stats-new-account"
+          className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-status-waiting-bg px-3.5 py-2.5"
+        >
+          <Monitor
+            aria-hidden="true"
+            className="size-[15px] shrink-0 text-status-waiting"
+          />
+          <span className="min-w-0 text-xs text-status-waiting-text">
+            {t("overview.stats.newAccount.text")}
+          </span>
+          <span className="flex-1" />
+          <Button asChild size="xs">
+            <Link to="/devices">{t("overview.stats.newAccount.action")}</Link>
+          </Button>
+        </div>
+      ) : null}
+
+      {statsError !== null ? (
+        <>
+          <CardLoadError
+            error={statsError}
+            what={t("overview.stats.error.loadFailedWhat")}
+            // 按下去要有反应：第二次也失败的话界面一个像素都不会变，
+            // 用户无从判断自己是不是点空了，只会连点。
+            retryDisabled={fetching}
+            retryLabel={t("overview.stats.error.retry")}
+            onRetry={() => setReloadKey((k) => k + 1)}
+          />
+          {/* 统计取不到就说取不到，绝不退回一张全是 0 的摘要——那是一句用户
+                无法证伪的假话。同时说清什么**不**受影响，并给一条走得通的路。 */}
+          <div className="rounded-lg bg-field-fill">
+            <EmptyState
+              testId="stats-error"
+              icon={BarChart3}
+              tone="warn"
+              title={t("overview.stats.error.title")}
+              body={t("overview.stats.error.body")}
+              action={
+                <Link
+                  to="/chat"
+                  className="text-xs font-medium text-primary-text hover:underline"
+                >
+                  {t("overview.stats.error.action")}
+                </Link>
+              }
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          {/* 摘要四格 */}
+          <div
+            data-testid="overview-tiles"
+            aria-busy={fetching || undefined}
+            className="grid grid-cols-2 gap-3 md:grid-cols-4"
+          >
+            {summary === undefined ? (
+              <TileSkeletons />
+            ) : (
+              <>
+                <TileLink to={isMobile ? "/chat" : null}>
+                  <Metric
+                    testId="tile-conversations"
+                    label={t("overview.stats.tiles.conversations")}
+                    value={String(summary.conversations)}
+                    unit={rangeLabel}
+                    sub={
+                      freshAccount
+                        ? t("overview.stats.tiles.conversationsNone")
+                        : t("overview.stats.tiles.conversationsTotal", {
+                            count: summary.conversations_total,
+                          })
+                    }
+                    icon={MessagesSquare}
+                  />
+                </TileLink>
+                <Metric
+                  testId="tile-streak"
+                  label={t("overview.stats.tiles.streak")}
+                  value={noHistory ? "—" : String(summary.streak_days)}
+                  unit={
+                    noHistory ? undefined : t("overview.stats.tiles.streakUnit")
+                  }
+                  sub={
+                    noHistory
+                      ? stats?.activity_stats_enabled
+                        ? null
+                        : t("overview.stats.tiles.enableToSee")
+                      : t("overview.stats.tiles.streakLongest", {
+                          count: summary.longest_streak_days,
+                        })
+                  }
+                  icon={Flame}
+                />
+                <Metric
+                  testId="tile-active-days"
+                  label={t("overview.stats.tiles.activeDays")}
+                  value={noHistory ? "—" : String(summary.active_days)}
+                  unit={
+                    noHistory || summary.window_days <= 0
+                      ? undefined
+                      : t("overview.stats.tiles.activeDaysUnit", {
+                          count: summary.window_days,
+                        })
+                  }
+                  sub={
+                    noHistory
+                      ? stats?.activity_stats_enabled
+                        ? null
+                        : t("overview.stats.tiles.enableToSee")
+                      : summary.window_days > 0
+                        ? t("overview.stats.tiles.activeDaysShare", {
+                            percent: Math.round(
+                              (summary.active_days / summary.window_days) * 100,
+                            ),
+                          })
+                        : null
+                  }
+                  icon={CalendarDays}
+                />
+                <TileLink to={isMobile ? "/devices" : null}>
+                  <Metric
+                    testId="tile-online"
+                    label={t("overview.stats.tiles.online")}
+                    value={String(summary.devices_online)}
+                    unit={`/ ${summary.devices_total}`}
+                    sub={
+                      firstOffline
+                        ? t("overview.stats.tiles.onlineOffline", {
+                            device: firstOffline.name,
+                          })
+                        : summary.devices_total === 0
+                          ? t("overview.stats.tiles.onlineNone")
+                          : null
+                    }
+                    icon={Monitor}
+                  />
+                </TileLink>
+              </>
+            )}
+          </div>
+
+          {/* 全宽活跃热力 */}
+          <StatsCard
+            testId="heatmap-card"
+            title={t("overview.stats.heatmap.title")}
+            action={
+              <span className="flex min-w-0 items-center gap-3">
+                {/* 放不下一整年时，标签必须说的是**画出来的**那一段：写一整年的
+                      月份区间而只画了 42 周，就是给一组数字贴了个错标签。 */}
+                <span className="text-xs text-muted-foreground">
+                  {heatmapWeeks >= HEATMAP_DESKTOP_WEEKS
+                    ? monthRange
+                    : t("overview.stats.heatmap.weeksShown", {
+                        weeks: heatmapWeeks,
+                      })}
+                </span>
+                {/* scope 为 saved 时不再给这条链接：页顶那条说明条上已经有一条
+                      「开启完整活跃统计 →」指向同一处，一屏两条同去处的链接只是
+                      让人多读一遍。 */}
+                {stats?.scope === "saved" ? null : (
+                  <Link
+                    to={PRIVACY_SETTINGS_PATH}
+                    className="text-xs font-medium text-primary-text hover:underline"
+                  >
+                    {t("overview.stats.heatmap.settings")}
+                  </Link>
+                )}
+              </span>
+            }
+          >
+            <div className="flex min-w-0 flex-col gap-4 lg:flex-row">
+              {/* `lg:flex-1` 是给测量用的：不占满剩下的宽，这一列会缩到内容宽，
+                    量出来的就不是「还能放多少」而是「已经放了多少」，列数会一路
+                    往下棘轮。列方向上不能用 flex-1（那管的是高度）。 */}
+              <div
+                ref={heatmapRef}
+                className="flex min-w-0 flex-col gap-2.5 lg:flex-1"
+              >
+                {/* 取数前后是同一张网格，只是没有颜色——845px 的网格不该在取到数
+                      那一刻凭空出现，把整页往下顶一大截。 */}
+                <Heatmap
+                  to={stats?.heatmap.to ?? todayUTC()}
+                  weeks={heatmapWeeks}
+                  days={stats?.heatmap.days}
+                />
+                <HeatmapLegend />
+                {isMobile ? (
+                  <p className="text-2xs text-muted-foreground">
+                    {t("overview.stats.heatmap.mobileHint")}
+                  </p>
+                ) : null}
+                {stats !== null && stats.heatmap.days.length === 0 ? (
+                  <p className="text-2xs text-muted-foreground">
+                    {t("overview.stats.heatmap.greyNote")}
+                  </p>
+                ) : null}
+                {/* 日界按服务端机器的时区切，不是按浏览器的。不写出来的话，一个在
+                      另一个时区的用户只会觉得自己的「今天」错了一格。 */}
+                {stats?.time_zone ? (
+                  <p
+                    data-testid="heatmap-timezone"
+                    className="text-2xs text-muted-foreground"
+                  >
+                    {t("overview.stats.heatmap.timeZone", {
+                      zone: stats.time_zone,
+                    })}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 flex-col gap-4 lg:w-[240px] lg:pl-5">
+                {stats?.heatmap.busiest_day &&
+                stats.heatmap.busiest_day.count > 0 ? (
+                  <Highlight
+                    testId="heat-highlight-busiest"
+                    label={t("overview.stats.heatmap.busiest")}
+                    value={t("overview.stats.unit.conversations", {
+                      count: stats.heatmap.busiest_day.count,
+                    })}
+                    sub={stats.heatmap.busiest_day.day}
+                  />
+                ) : null}
+                {stats?.heatmap.avg_per_active_day ? (
+                  <Highlight
+                    testId="heat-highlight-avg"
+                    label={t("overview.stats.heatmap.avg")}
+                    value={t("overview.stats.unit.conversations", {
+                      count: stats.heatmap.avg_per_active_day,
+                    })}
+                    sub={t("overview.stats.heatmap.avgSub")}
+                  />
+                ) : null}
+              </div>
+            </div>
+          </StatsCard>
+
+          {/* 底部：Agent 排行（左，占满）+ 右列 300 宽 */}
+          <div
+            data-testid="overview-cols"
+            className="flex flex-col gap-4 lg:flex-row"
+          >
+            <StatsCard
+              testId="card-agents"
+              busy={fetching}
+              className="min-w-0 flex-1"
+              title={t("overview.stats.agents.title")}
+              meta={rangeLabel}
+              action={
+                <Link
+                  to="/org"
+                  className="text-xs font-medium text-primary-text hover:underline"
+                >
+                  {t("overview.stats.agents.all")}
+                </Link>
+              }
+            >
+              {stats === null ? (
+                <CardSkeleton rows={5} />
+              ) : stats.agents.length === 0 ? (
+                <EmptyState
+                  testId="empty-agents"
+                  icon={Bot}
+                  title={t("overview.stats.agents.empty")}
+                />
+              ) : (
+                <ol className="flex flex-col gap-3">
+                  {stats.agents.map((row, index) => (
+                    <AgentRankRow
+                      key={row.sync_id || index}
+                      row={row}
+                      agent={agentsBySync.get(row.sync_id)}
+                      max={stats.agents[0]?.count ?? row.count}
+                    />
+                  ))}
+                </ol>
+              )}
+            </StatsCard>
+
+            <aside
+              data-testid="overview-aside"
+              className="flex w-full shrink-0 flex-col gap-4 lg:w-[300px]"
+            >
+              <StatsCard
+                testId="card-backends"
+                busy={fetching}
+                title={t("overview.stats.backends.title")}
+                meta={rangeLabel}
+              >
+                {stats === null ? (
+                  <CardSkeleton rows={4} />
+                ) : stats.backends.length === 0 && stats.models.length === 0 ? (
+                  <EmptyState
+                    testId="empty-backends"
+                    icon={BarChart3}
+                    title={t("overview.stats.backends.empty")}
+                  />
+                ) : (
+                  <BackendsBody
+                    backends={stats.backends}
+                    models={stats.models}
+                  />
+                )}
+              </StatsCard>
+
+              <StatsCard
+                testId="card-projects"
+                busy={fetching}
+                title={t("overview.stats.projects.title")}
+                meta={rangeLabel}
+              >
+                {stats === null ? (
+                  <CardSkeleton rows={4} />
+                ) : stats.projects.length === 0 ? (
+                  <EmptyState
+                    testId="empty-projects"
+                    icon={FolderTree}
+                    title={t("overview.stats.projects.empty")}
+                  />
+                ) : (
+                  <ProjectsBody
+                    rows={stats.projects}
+                    nameOf={(syncId) => projectsBySync.get(syncId)?.name}
+                  />
+                )}
+              </StatsCard>
+            </aside>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <AppShell
       ownHeader={isMobile}
@@ -377,382 +737,26 @@ export default function Overview() {
       right={
         isMobile ? undefined : <RangeSwitch value={range} onChange={setRange} />
       }
+      flush={isMobile}
     >
-      <div className="mx-auto w-full max-w-[1200px] space-y-4">
-        {isMobile ? (
-          /* 手机页头自己画（ownHeader）：☰ · 标题，范围分段是标题的副行。 */
-          <header
-            data-testid="overview-mobile-header"
-            className="-mt-1 flex min-w-0 items-center gap-2 pt-[env(safe-area-inset-top,0px)]"
-          >
-            <MobileNavButton />
-            <div className="flex min-w-0 flex-col gap-1.5 py-1">
-              <h1 className="truncate text-prose font-bold text-foreground">
-                {t("overview.stats.pageTitle")}
-              </h1>
-              <RangeSwitch value={range} onChange={setRange} />
-            </div>
-          </header>
-        ) : null}
-        {/* 范围收窄时页顶一条说明覆盖全页，不逐卡重复。 */}
-        {stats?.scope === "saved" ? (
-          <div
-            data-testid="stats-scope-notice"
-            className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-primary-soft px-3.5 py-2.5"
-          >
-            <BarChart3
-              aria-hidden="true"
-              className="size-[15px] shrink-0 text-primary-text"
+      {isMobile ? (
+        <PhonePage
+          header={
+            /* 手机页头自己画（ownHeader）：☰ · 标题 · 范围分段。范围放在页头右端，
+               页头因此与其它手机页同为 52px 一条（2026-11-20 第 14 项）。 */
+            <PhonePageHeader
+              testId="overview-mobile-header"
+              leading={<MobileNavButton />}
+              title={t("overview.stats.pageTitle")}
+              trailing={<RangeSwitch value={range} onChange={setRange} />}
             />
-            <span className="min-w-0 text-xs text-primary-text">
-              {t("overview.stats.scopeNotice.text")}
-            </span>
-            <span className="flex-1" />
-            <Link
-              to={PRIVACY_SETTINGS_PATH}
-              className="text-xs font-medium text-primary-text hover:underline"
-            >
-              {t("overview.stats.scopeNotice.action")}
-            </Link>
-          </div>
-        ) : null}
-
-        {freshAccount ? (
-          <div
-            data-testid="stats-new-account"
-            className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-status-waiting-bg px-3.5 py-2.5"
-          >
-            <Monitor
-              aria-hidden="true"
-              className="size-[15px] shrink-0 text-status-waiting"
-            />
-            <span className="min-w-0 text-xs text-status-waiting-text">
-              {t("overview.stats.newAccount.text")}
-            </span>
-            <span className="flex-1" />
-            <Button asChild size="xs">
-              <Link to="/devices">{t("overview.stats.newAccount.action")}</Link>
-            </Button>
-          </div>
-        ) : null}
-
-        {statsError !== null ? (
-          <>
-            <CardLoadError
-              error={statsError}
-              what={t("overview.stats.error.loadFailedWhat")}
-              // 按下去要有反应：第二次也失败的话界面一个像素都不会变，
-              // 用户无从判断自己是不是点空了，只会连点。
-              retryDisabled={fetching}
-              retryLabel={t("overview.stats.error.retry")}
-              onRetry={() => setReloadKey((k) => k + 1)}
-            />
-            {/* 统计取不到就说取不到，绝不退回一张全是 0 的摘要——那是一句用户
-                无法证伪的假话。同时说清什么**不**受影响，并给一条走得通的路。 */}
-            <div className="rounded-lg bg-field-fill">
-              <EmptyState
-                testId="stats-error"
-                icon={BarChart3}
-                tone="warn"
-                title={t("overview.stats.error.title")}
-                body={t("overview.stats.error.body")}
-                action={
-                  <Link
-                    to="/chat"
-                    className="text-xs font-medium text-primary-text hover:underline"
-                  >
-                    {t("overview.stats.error.action")}
-                  </Link>
-                }
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            {/* 摘要四格 */}
-            <div
-              data-testid="overview-tiles"
-              aria-busy={fetching || undefined}
-              className="grid grid-cols-2 gap-3 md:grid-cols-4"
-            >
-              {summary === undefined ? (
-                <TileSkeletons />
-              ) : (
-                <>
-                  <TileLink to={isMobile ? "/chat" : null}>
-                    <Metric
-                      testId="tile-conversations"
-                      label={t("overview.stats.tiles.conversations")}
-                      value={String(summary.conversations)}
-                      unit={rangeLabel}
-                      sub={
-                        freshAccount
-                          ? t("overview.stats.tiles.conversationsNone")
-                          : t("overview.stats.tiles.conversationsTotal", {
-                              count: summary.conversations_total,
-                            })
-                      }
-                      icon={MessagesSquare}
-                    />
-                  </TileLink>
-                  <Metric
-                    testId="tile-streak"
-                    label={t("overview.stats.tiles.streak")}
-                    value={noHistory ? "—" : String(summary.streak_days)}
-                    unit={
-                      noHistory
-                        ? undefined
-                        : t("overview.stats.tiles.streakUnit")
-                    }
-                    sub={
-                      noHistory
-                        ? stats?.activity_stats_enabled
-                          ? null
-                          : t("overview.stats.tiles.enableToSee")
-                        : t("overview.stats.tiles.streakLongest", {
-                            count: summary.longest_streak_days,
-                          })
-                    }
-                    icon={Flame}
-                  />
-                  <Metric
-                    testId="tile-active-days"
-                    label={t("overview.stats.tiles.activeDays")}
-                    value={noHistory ? "—" : String(summary.active_days)}
-                    unit={
-                      noHistory || summary.window_days <= 0
-                        ? undefined
-                        : t("overview.stats.tiles.activeDaysUnit", {
-                            count: summary.window_days,
-                          })
-                    }
-                    sub={
-                      noHistory
-                        ? stats?.activity_stats_enabled
-                          ? null
-                          : t("overview.stats.tiles.enableToSee")
-                        : summary.window_days > 0
-                          ? t("overview.stats.tiles.activeDaysShare", {
-                              percent: Math.round(
-                                (summary.active_days / summary.window_days) *
-                                  100,
-                              ),
-                            })
-                          : null
-                    }
-                    icon={CalendarDays}
-                  />
-                  <TileLink to={isMobile ? "/devices" : null}>
-                    <Metric
-                      testId="tile-online"
-                      label={t("overview.stats.tiles.online")}
-                      value={String(summary.devices_online)}
-                      unit={`/ ${summary.devices_total}`}
-                      sub={
-                        firstOffline
-                          ? t("overview.stats.tiles.onlineOffline", {
-                              device: firstOffline.name,
-                            })
-                          : summary.devices_total === 0
-                            ? t("overview.stats.tiles.onlineNone")
-                            : null
-                      }
-                      icon={Monitor}
-                    />
-                  </TileLink>
-                </>
-              )}
-            </div>
-
-            {/* 全宽活跃热力 */}
-            <StatsCard
-              testId="heatmap-card"
-              title={t("overview.stats.heatmap.title")}
-              action={
-                <span className="flex min-w-0 items-center gap-3">
-                  {/* 放不下一整年时，标签必须说的是**画出来的**那一段：写一整年的
-                      月份区间而只画了 42 周，就是给一组数字贴了个错标签。 */}
-                  <span className="text-xs text-muted-foreground">
-                    {heatmapWeeks >= HEATMAP_DESKTOP_WEEKS
-                      ? monthRange
-                      : t("overview.stats.heatmap.weeksShown", {
-                          weeks: heatmapWeeks,
-                        })}
-                  </span>
-                  {/* scope 为 saved 时不再给这条链接：页顶那条说明条上已经有一条
-                      「开启完整活跃统计 →」指向同一处，一屏两条同去处的链接只是
-                      让人多读一遍。 */}
-                  {stats?.scope === "saved" ? null : (
-                    <Link
-                      to={PRIVACY_SETTINGS_PATH}
-                      className="text-xs font-medium text-primary-text hover:underline"
-                    >
-                      {t("overview.stats.heatmap.settings")}
-                    </Link>
-                  )}
-                </span>
-              }
-            >
-              <div className="flex min-w-0 flex-col gap-4 lg:flex-row">
-                {/* `lg:flex-1` 是给测量用的：不占满剩下的宽，这一列会缩到内容宽，
-                    量出来的就不是「还能放多少」而是「已经放了多少」，列数会一路
-                    往下棘轮。列方向上不能用 flex-1（那管的是高度）。 */}
-                <div
-                  ref={heatmapRef}
-                  className="flex min-w-0 flex-col gap-2.5 lg:flex-1"
-                >
-                  {/* 取数前后是同一张网格，只是没有颜色——845px 的网格不该在取到数
-                      那一刻凭空出现，把整页往下顶一大截。 */}
-                  <Heatmap
-                    to={stats?.heatmap.to ?? todayUTC()}
-                    weeks={heatmapWeeks}
-                    days={stats?.heatmap.days}
-                  />
-                  <HeatmapLegend />
-                  {isMobile ? (
-                    <p className="text-2xs text-muted-foreground">
-                      {t("overview.stats.heatmap.mobileHint")}
-                    </p>
-                  ) : null}
-                  {stats !== null && stats.heatmap.days.length === 0 ? (
-                    <p className="text-2xs text-muted-foreground">
-                      {t("overview.stats.heatmap.greyNote")}
-                    </p>
-                  ) : null}
-                  {/* 日界按服务端机器的时区切，不是按浏览器的。不写出来的话，一个在
-                      另一个时区的用户只会觉得自己的「今天」错了一格。 */}
-                  {stats?.time_zone ? (
-                    <p
-                      data-testid="heatmap-timezone"
-                      className="text-2xs text-muted-foreground"
-                    >
-                      {t("overview.stats.heatmap.timeZone", {
-                        zone: stats.time_zone,
-                      })}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="flex shrink-0 flex-col gap-4 lg:w-[240px] lg:pl-5">
-                  {stats?.heatmap.busiest_day &&
-                  stats.heatmap.busiest_day.count > 0 ? (
-                    <Highlight
-                      testId="heat-highlight-busiest"
-                      label={t("overview.stats.heatmap.busiest")}
-                      value={t("overview.stats.unit.conversations", {
-                        count: stats.heatmap.busiest_day.count,
-                      })}
-                      sub={stats.heatmap.busiest_day.day}
-                    />
-                  ) : null}
-                  {stats?.heatmap.avg_per_active_day ? (
-                    <Highlight
-                      testId="heat-highlight-avg"
-                      label={t("overview.stats.heatmap.avg")}
-                      value={t("overview.stats.unit.conversations", {
-                        count: stats.heatmap.avg_per_active_day,
-                      })}
-                      sub={t("overview.stats.heatmap.avgSub")}
-                    />
-                  ) : null}
-                </div>
-              </div>
-            </StatsCard>
-
-            {/* 底部：Agent 排行（左，占满）+ 右列 300 宽 */}
-            <div
-              data-testid="overview-cols"
-              className="flex flex-col gap-4 lg:flex-row"
-            >
-              <StatsCard
-                testId="card-agents"
-                busy={fetching}
-                className="min-w-0 flex-1"
-                title={t("overview.stats.agents.title")}
-                meta={rangeLabel}
-                action={
-                  <Link
-                    to="/org"
-                    className="text-xs font-medium text-primary-text hover:underline"
-                  >
-                    {t("overview.stats.agents.all")}
-                  </Link>
-                }
-              >
-                {stats === null ? (
-                  <CardSkeleton rows={5} />
-                ) : stats.agents.length === 0 ? (
-                  <EmptyState
-                    testId="empty-agents"
-                    icon={Bot}
-                    title={t("overview.stats.agents.empty")}
-                  />
-                ) : (
-                  <ol className="flex flex-col gap-3">
-                    {stats.agents.map((row, index) => (
-                      <AgentRankRow
-                        key={row.sync_id || index}
-                        row={row}
-                        agent={agentsBySync.get(row.sync_id)}
-                        max={stats.agents[0]?.count ?? row.count}
-                      />
-                    ))}
-                  </ol>
-                )}
-              </StatsCard>
-
-              <aside
-                data-testid="overview-aside"
-                className="flex w-full shrink-0 flex-col gap-4 lg:w-[300px]"
-              >
-                <StatsCard
-                  testId="card-backends"
-                  busy={fetching}
-                  title={t("overview.stats.backends.title")}
-                  meta={rangeLabel}
-                >
-                  {stats === null ? (
-                    <CardSkeleton rows={4} />
-                  ) : stats.backends.length === 0 &&
-                    stats.models.length === 0 ? (
-                    <EmptyState
-                      testId="empty-backends"
-                      icon={BarChart3}
-                      title={t("overview.stats.backends.empty")}
-                    />
-                  ) : (
-                    <BackendsBody
-                      backends={stats.backends}
-                      models={stats.models}
-                    />
-                  )}
-                </StatsCard>
-
-                <StatsCard
-                  testId="card-projects"
-                  busy={fetching}
-                  title={t("overview.stats.projects.title")}
-                  meta={rangeLabel}
-                >
-                  {stats === null ? (
-                    <CardSkeleton rows={4} />
-                  ) : stats.projects.length === 0 ? (
-                    <EmptyState
-                      testId="empty-projects"
-                      icon={FolderTree}
-                      title={t("overview.stats.projects.empty")}
-                    />
-                  ) : (
-                    <ProjectsBody
-                      rows={stats.projects}
-                      nameOf={(syncId) => projectsBySync.get(syncId)?.name}
-                    />
-                  )}
-                </StatsCard>
-              </aside>
-            </div>
-          </>
-        )}
-      </div>
+          }
+        >
+          {content}
+        </PhonePage>
+      ) : (
+        content
+      )}
     </AppShell>
   );
 }

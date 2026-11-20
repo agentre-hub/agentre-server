@@ -26,6 +26,11 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import CodeInput from "@/components/CodeInput";
+import {
+  PhoneHeaderButton,
+  PhonePage,
+  PhonePageHeader,
+} from "@/components/PhonePageHeader";
 import { Card } from "@/components/ui/card";
 import { parseUserCode, toChars } from "@/lib/userCode";
 
@@ -343,25 +348,11 @@ export function AddDeviceGuide({
         </Button>
       );
 
-    return (
-      <div data-testid="add-device-guide" className="flex min-h-full flex-col">
-        {/* 有地方可回（列表里已经有设备）时才有 ✕；空态下三步就是这一页，页头归页面。 */}
-        {onClose && (
-          <header className="-mt-2 flex min-w-0 items-center gap-1 pb-2 pt-[env(safe-area-inset-top,0px)]">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="-ml-2 size-11"
-              aria-label={t("device.add.close")}
-              onClick={onClose}
-            >
-              <X className="size-5" aria-hidden="true" />
-            </Button>
-            <h1 className="truncate text-prose font-bold text-foreground">
-              {t("device.add.open")}
-            </h1>
-          </header>
-        )}
+    const content = (
+      <div
+        data-testid={onClose ? undefined : "add-device-guide"}
+        className="flex min-h-full flex-col"
+      >
         <div className="overflow-hidden rounded-lg">
           <GuideStepRail
             compact
@@ -475,11 +466,39 @@ export function AddDeviceGuide({
 
         <div
           data-testid="add-device-footer"
-          className="sticky bottom-0 -mx-4 bg-sheet px-4 pt-3 pb-[env(safe-area-inset-bottom,0px)]"
+          // 下沿至少 12px：Safari 标签页里底部安全区是 0，按钮会贴着屏幕底边。
+          className="sticky bottom-0 -mx-4 bg-sheet px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom,0px))]"
         >
           {footerAction}
         </div>
       </div>
+    );
+
+    // 空态下三步就是设备页正文，页头归页面；有地方可回（列表里已经有设备）时是盖住
+    // 列表的整屏，自己带「✕ · 添加设备」那条统一的手机页头，钉在滚动区外。
+    if (!onClose) return content;
+    return (
+      <PhonePage
+        testId="add-device-guide"
+        header={
+          <PhonePageHeader
+            testId="add-device-header"
+            leading={
+              <PhoneHeaderButton
+                edge="start"
+                aria-label={t("device.add.close")}
+                onClick={onClose}
+              >
+                <X className="size-5" aria-hidden="true" />
+              </PhoneHeaderButton>
+            }
+            title={t("device.add.open")}
+          />
+        }
+        bodyClassName="pb-0"
+      >
+        {content}
+      </PhonePage>
     );
   }
 

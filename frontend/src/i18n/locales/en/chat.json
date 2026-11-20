@@ -78,6 +78,10 @@
       "earlier": "Earlier"
     },
     "scopeSheetTitle": "Scope",
-    "noDepartment": "No department"
+    "noDepartment": "No department",
+    "loadFailed": {
+      "title": "Couldn't load your conversations",
+      "body": "The network or service is temporarily unavailable. Your conversations are still there."
+    }
   }
 }

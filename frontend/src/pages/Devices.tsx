@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ChevronUp,
   Cpu,
+  Ellipsis,
   MessageSquare,
   MoreVertical,
   Plus,
@@ -48,6 +49,11 @@ import {
   deviceVersionText,
 } from "@/components/devices/DeviceUpgrade";
 import AppShell from "@/components/AppShell";
+import {
+  PhoneHeaderButton,
+  PhonePage,
+  PhonePageHeader,
+} from "@/components/PhonePageHeader";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
@@ -197,24 +203,37 @@ function DeviceRowMenu({
   name,
   onRename,
   onRevoke,
+  touch = false,
 }: {
   id: number;
   name: string;
   onRename: () => void;
   onRevoke: () => void;
+  /** 手机详情页头：与其它手机页头同一枚 •••、44px 键。 */
+  touch?: boolean;
 }) {
   const { t } = useTranslation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t("console.aria.rowActionsNamed", { name })}
-          data-testid={`device-menu-${id}-trigger`}
-        >
-          <MoreVertical className="size-4" aria-hidden="true" />
-        </Button>
+        {touch ? (
+          <PhoneHeaderButton
+            edge="end"
+            aria-label={t("console.aria.rowActionsNamed", { name })}
+            data-testid={`device-menu-${id}-trigger`}
+          >
+            <Ellipsis className="size-5" aria-hidden="true" />
+          </PhoneHeaderButton>
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("console.aria.rowActionsNamed", { name })}
+            data-testid={`device-menu-${id}-trigger`}
+          >
+            <MoreVertical className="size-4" aria-hidden="true" />
+          </Button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[160px]">
         {/*
@@ -843,183 +862,187 @@ function MobileDeviceDetail({
   const detail = state.data;
 
   return (
-    <div data-testid="device-detail-mobile" className="flex flex-col gap-5">
-      <header
-        data-testid="device-detail-header"
-        className="-mt-1 flex min-w-0 items-center gap-2 pt-[env(safe-area-inset-top,0px)]"
-      >
-        <MobileNavButton />
-        <div className="flex min-w-0 flex-1 flex-col py-1">
-          <h1 className="truncate text-prose font-bold text-foreground">
-            {deviceDisplayName(d)}
-          </h1>
-          <span
-            title={d.online ? undefined : lastActiveTitle(d.last_seen_at)}
-            className="truncate text-xs text-muted-foreground"
-          >
-            {subtitle}
-          </span>
-        </div>
-        {isRevocable(d) && (
-          <DeviceRowMenu
-            id={d.id}
-            name={deviceDisplayName(d)}
-            onRename={onRename}
-            onRevoke={onRevoke}
+    <PhonePage
+      testId="device-detail-mobile"
+      header={
+        <PhonePageHeader
+          testId="device-detail-header"
+          leading={<MobileNavButton />}
+          title={deviceDisplayName(d)}
+          subtitle={
+            <span
+              title={d.online ? undefined : lastActiveTitle(d.last_seen_at)}
+              className="truncate"
+            >
+              {subtitle}
+            </span>
+          }
+          trailing={
+            isRevocable(d) ? (
+              <DeviceRowMenu
+                id={d.id}
+                name={deviceDisplayName(d)}
+                onRename={onRename}
+                onRevoke={onRevoke}
+                touch
+              />
+            ) : null
+          }
+        />
+      }
+    >
+      <div className="flex flex-col gap-5">
+        {/* 有没有这一行、留多久由面板自己定（它握着这次升级的进度）。 */}
+        {isAgentred && (
+          <DeviceUpgradePanel
+            device={d}
+            state={versionState}
+            onDevices={onDevices}
+            compact
           />
         )}
-      </header>
 
-      {/* 有没有这一行、留多久由面板自己定（它握着这次升级的进度）。 */}
-      {isAgentred && (
-        <DeviceUpgradePanel
-          device={d}
-          state={versionState}
-          onDevices={onDevices}
-          compact
-        />
-      )}
-
-      {runs && (
-        <MobileSection label={t("device.manage.sessions")}>
-          {d.online ? (
-            <Link
-              to={`/devices/${d.id}/sessions`}
-              data-testid={`device-sessions-link-${d.id}`}
-              className={cn(
-                DETAIL_ROW,
-                "outline-none focus-visible:focus-outline-inset",
-              )}
-            >
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-button-fill">
-                <MessageSquare
-                  aria-hidden="true"
-                  className="size-4 text-muted-foreground"
-                />
-              </span>
-              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2">
-                {counts ? (
-                  <>
-                    <span>
-                      {t("device.manage.sessionCount", {
-                        count: counts.total,
-                      })}
-                    </span>
-                    {counts.waiting > 0 && (
-                      <span className="text-status-waiting-text">
-                        {t("device.manage.sessionWaiting", {
-                          count: counts.waiting,
+        {runs && (
+          <MobileSection label={t("device.manage.sessions")}>
+            {d.online ? (
+              <Link
+                to={`/devices/${d.id}/sessions`}
+                data-testid={`device-sessions-link-${d.id}`}
+                className={cn(
+                  DETAIL_ROW,
+                  "outline-none focus-visible:focus-outline-inset",
+                )}
+              >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-button-fill">
+                  <MessageSquare
+                    aria-hidden="true"
+                    className="size-4 text-muted-foreground"
+                  />
+                </span>
+                <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2">
+                  {counts ? (
+                    <>
+                      <span>
+                        {t("device.manage.sessionCount", {
+                          count: counts.total,
                         })}
                       </span>
-                    )}
-                  </>
-                ) : (
-                  <span>
-                    {t(
-                      isDesktop
-                        ? "device.manage.viewDesktopSessions"
-                        : "device.manage.viewSessions",
-                    )}
-                  </span>
+                      {counts.waiting > 0 && (
+                        <span className="text-status-waiting-text">
+                          {t("device.manage.sessionWaiting", {
+                            count: counts.waiting,
+                          })}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span>
+                      {t(
+                        isDesktop
+                          ? "device.manage.viewDesktopSessions"
+                          : "device.manage.viewSessions",
+                      )}
+                    </span>
+                  )}
+                </span>
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-muted-foreground"
+                />
+              </Link>
+            ) : (
+              <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
+                {t(
+                  isDesktop
+                    ? "device.manage.desktopAppNotRunningDetail"
+                    : "device.manage.offlineNotEnterable",
                 )}
-              </span>
-              <ChevronRight
-                aria-hidden="true"
-                className="size-4 shrink-0 text-muted-foreground"
-              />
-            </Link>
-          ) : (
-            <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
-              {t(
-                isDesktop
-                  ? "device.manage.desktopAppNotRunningDetail"
-                  : "device.manage.offlineNotEnterable",
-              )}
-              {lastSeen ? ` ${lastSeen}` : ""}
-            </p>
-          )}
-        </MobileSection>
-      )}
+                {lastSeen ? ` ${lastSeen}` : ""}
+              </p>
+            )}
+          </MobileSection>
+        )}
 
-      {runs && state.loading && <DeviceDetailSkeleton />}
-      {runs && !state.loading && state.error !== null && (
-        <CardLoadError
-          error={state.error}
-          what={t("device.manage.detailLoadFailedWhat")}
-          onRetry={() => {
-            setState({ loading: true, error: null, data: null });
-            setRound((n) => n + 1);
-          }}
-        />
-      )}
-      {detail && isAgentred && (
-        <MobileSection label={t("device.manage.runnableAgents")}>
-          {(detail.runnable_agents ?? []).length === 0 ? (
-            <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
-              {t("device.manage.noRunnableAgents")}
-            </p>
-          ) : (
-            (detail.runnable_agents ?? []).map((a) => (
-              <div key={a.sync_id} className={DETAIL_ROW}>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="truncate text-foreground">{a.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {t("device.manage.rankLabel", { rank: a.rank })}
+        {runs && state.loading && <DeviceDetailSkeleton />}
+        {runs && !state.loading && state.error !== null && (
+          <CardLoadError
+            error={state.error}
+            what={t("device.manage.detailLoadFailedWhat")}
+            onRetry={() => {
+              setState({ loading: true, error: null, data: null });
+              setRound((n) => n + 1);
+            }}
+          />
+        )}
+        {detail && isAgentred && (
+          <MobileSection label={t("device.manage.runnableAgents")}>
+            {(detail.runnable_agents ?? []).length === 0 ? (
+              <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
+                {t("device.manage.noRunnableAgents")}
+              </p>
+            ) : (
+              (detail.runnable_agents ?? []).map((a) => (
+                <div key={a.sync_id} className={DETAIL_ROW}>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-foreground">{a.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {t("device.manage.rankLabel", { rank: a.rank })}
+                    </span>
                   </span>
-                </span>
-              </div>
-            ))
-          )}
-        </MobileSection>
-      )}
-      {detail && (
-        <MobileSection label={t("device.manage.projects")}>
-          {detail.projects.length === 0 ? (
-            <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
-              {t("device.manage.noProjectsReported")}
-            </p>
-          ) : (
-            detail.projects.map((p) => (
-              <div key={p.sync_id} className={DETAIL_ROW}>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span
-                    className={cn(
-                      "truncate",
-                      p.configured
-                        ? "text-foreground"
-                        : "text-muted-foreground",
-                    )}
-                  >
-                    {p.name}
+                </div>
+              ))
+            )}
+          </MobileSection>
+        )}
+        {detail && (
+          <MobileSection label={t("device.manage.projects")}>
+            {detail.projects.length === 0 ? (
+              <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
+                {t("device.manage.noProjectsReported")}
+              </p>
+            ) : (
+              detail.projects.map((p) => (
+                <div key={p.sync_id} className={DETAIL_ROW}>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span
+                      className={cn(
+                        "truncate",
+                        p.configured
+                          ? "text-foreground"
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      {p.name}
+                    </span>
+                    <span
+                      className={cn(
+                        "text-xs",
+                        p.configured
+                          ? "text-muted-foreground"
+                          : "text-status-waiting-text",
+                      )}
+                    >
+                      {p.configured
+                        ? t("device.manage.configured")
+                        : t("device.manage.notConfigured")}
+                    </span>
                   </span>
-                  <span
-                    className={cn(
-                      "text-xs",
-                      p.configured
-                        ? "text-muted-foreground"
-                        : "text-status-waiting-text",
-                    )}
-                  >
-                    {p.configured
-                      ? t("device.manage.configured")
-                      : t("device.manage.notConfigured")}
-                  </span>
-                </span>
-              </div>
-            ))
-          )}
-        </MobileSection>
-      )}
+                </div>
+              ))
+            )}
+          </MobileSection>
+        )}
 
-      {runs && (
-        <DevicePortForward
-          deviceId={d.id}
-          fingerprint={d.fingerprint}
-          offline={!d.online}
-          offlineDetail={lastSeen || undefined}
-        />
-      )}
-    </div>
+        {runs && (
+          <DevicePortForward
+            deviceId={d.id}
+            fingerprint={d.fingerprint}
+            offline={!d.online}
+            offlineDetail={lastSeen || undefined}
+          />
+        )}
+      </div>
+    </PhonePage>
   );
 }
 
@@ -1427,7 +1450,8 @@ export default function Devices() {
         return <Navigate to="/devices" replace />;
       }
       return (
-        <AppShell ownHeader title={t("nav.devices")}>
+        // flush：页头钉在滚动区外、正文自己滚（PhonePage），不落进主区的内边距里。
+        <AppShell ownHeader flush title={t("nav.devices")}>
           {selected ? (
             <MobileDeviceDetail
               key={selected.id}
@@ -1440,10 +1464,9 @@ export default function Devices() {
               locale={locale}
             />
           ) : (
-            <div className="flex flex-col gap-4">
-              <header className="-mt-1 flex items-center pt-[env(safe-area-inset-top,0px)]">
-                <MobileNavButton />
-              </header>
+            <PhonePage
+              header={<PhonePageHeader leading={<MobileNavButton />} />}
+            >
               {listErrorMessage !== null ? (
                 <Alert variant="destructive">
                   <AlertDescription>{listErrorMessage}</AlertDescription>
@@ -1451,7 +1474,7 @@ export default function Devices() {
               ) : (
                 <DeviceDetailSkeleton />
               )}
-            </div>
+            </PhonePage>
           )}
           {dialogs}
         </AppShell>
@@ -1461,7 +1484,9 @@ export default function Devices() {
     // 有设备时点 ＋ 打开的整屏三步：盖住列表，✕ 回来。
     if (guideOpen && !noDevices) {
       return (
-        <AppShell immersive title={t("device.add.open")}>
+        // 整屏：页头由指引自己画（✕ · 添加设备），钉在滚动区外；flush 让它不落进主区
+        // 内边距（此前 immersive 的上内边距是 0，页头的 -mt-2 把 ✕ 顶出了屏幕）。
+        <AppShell ownHeader flush title={t("device.add.open")}>
           <AddDeviceGuide compact onClose={() => setGuideRequested(false)} />
         </AppShell>
       );
@@ -1470,82 +1495,82 @@ export default function Devices() {
     const online = devices.filter(isOnline);
     const offline = devices.filter((d) => !isOnline(d));
     return (
-      <AppShell ownHeader title={t("nav.devices")}>
-        <div className="flex min-h-full flex-col gap-4">
-          <header
-            data-testid="devices-mobile-header"
-            className="-mt-1 flex min-w-0 items-center gap-2 pt-[env(safe-area-inset-top,0px)]"
-          >
-            <MobileNavButton />
-            <div className="flex min-w-0 flex-1 flex-col py-1">
-              <h1 className="truncate text-prose font-bold text-foreground">
-                {t("nav.devices")}
-              </h1>
-              {listKnown && devices.length > 0 && (
-                <span className="truncate text-xs text-muted-foreground">
-                  {t("device.manage.mobile.onlineSummary", {
-                    online: online.length,
-                    total: devices.length,
-                  })}
-                </span>
-              )}
-            </div>
-            {listKnown && !noDevices && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-11 text-primary-text"
-                data-testid="add-device-open"
-                aria-label={t("device.add.open")}
-                onClick={() => setGuideRequested(true)}
-              >
-                <Plus className="size-5" aria-hidden="true" />
-              </Button>
+      <AppShell ownHeader flush title={t("nav.devices")}>
+        <PhonePage
+          header={
+            <PhonePageHeader
+              testId="devices-mobile-header"
+              leading={<MobileNavButton />}
+              title={t("nav.devices")}
+              subtitle={
+                listKnown && devices.length > 0
+                  ? t("device.manage.mobile.onlineSummary", {
+                      online: online.length,
+                      total: devices.length,
+                    })
+                  : null
+              }
+              trailing={
+                listKnown && !noDevices ? (
+                  <PhoneHeaderButton
+                    edge="end"
+                    className="text-primary-text"
+                    data-testid="add-device-open"
+                    aria-label={t("device.add.open")}
+                    onClick={() => setGuideRequested(true)}
+                  >
+                    <Plus className="size-5" aria-hidden="true" />
+                  </PhoneHeaderButton>
+                ) : null
+              }
+            />
+          }
+          bodyClassName={noDevices ? "pb-0" : undefined}
+        >
+          <div className="flex min-h-full flex-col gap-4">
+            {listErrorMessage !== null && (
+              <Alert variant="destructive">
+                <AlertDescription>{listErrorMessage}</AlertDescription>
+              </Alert>
             )}
-          </header>
 
-          {listErrorMessage !== null && (
-            <Alert variant="destructive">
-              <AlertDescription>{listErrorMessage}</AlertDescription>
-            </Alert>
-          )}
-
-          {/* 一台都没有：三步就是这一页，不给 ✕（没有别处可回）。 */}
-          {noDevices ? (
-            <AddDeviceGuide compact />
-          ) : loading ? (
-            <DeviceListSkeleton />
-          ) : (
-            <>
-              {online.length > 0 && (
-                <MobileSection label={t("device.manage.statusOnline")}>
-                  {online.map((d) => (
-                    <MobileDeviceRow
-                      key={d.id}
-                      d={d}
-                      latest={latest}
-                      t={t}
-                      locale={locale}
-                    />
-                  ))}
-                </MobileSection>
-              )}
-              {offline.length > 0 && (
-                <MobileSection label={t("device.manage.statusOffline")}>
-                  {offline.map((d) => (
-                    <MobileDeviceRow
-                      key={d.id}
-                      d={d}
-                      latest={latest}
-                      t={t}
-                      locale={locale}
-                    />
-                  ))}
-                </MobileSection>
-              )}
-            </>
-          )}
-        </div>
+            {/* 一台都没有：三步就是这一页，不给 ✕（没有别处可回）。 */}
+            {noDevices ? (
+              <AddDeviceGuide compact />
+            ) : loading ? (
+              <DeviceListSkeleton />
+            ) : (
+              <>
+                {online.length > 0 && (
+                  <MobileSection label={t("device.manage.statusOnline")}>
+                    {online.map((d) => (
+                      <MobileDeviceRow
+                        key={d.id}
+                        d={d}
+                        latest={latest}
+                        t={t}
+                        locale={locale}
+                      />
+                    ))}
+                  </MobileSection>
+                )}
+                {offline.length > 0 && (
+                  <MobileSection label={t("device.manage.statusOffline")}>
+                    {offline.map((d) => (
+                      <MobileDeviceRow
+                        key={d.id}
+                        d={d}
+                        latest={latest}
+                        t={t}
+                        locale={locale}
+                      />
+                    ))}
+                  </MobileSection>
+                )}
+              </>
+            )}
+          </div>
+        </PhonePage>
         {dialogs}
       </AppShell>
     );

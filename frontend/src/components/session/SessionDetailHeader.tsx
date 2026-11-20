@@ -2,7 +2,13 @@ import type { SessionSummary } from "@agentre-hub/agentre-wire";
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Monitor, MoreHorizontal, Square } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronLeft,
+  Monitor,
+  MoreHorizontal,
+  Square,
+} from "lucide-react";
 import {
   copyTextWithToast,
   DropdownMenu,
@@ -130,11 +136,15 @@ export interface SessionHeaderAgent {
 export function SessionBackLink({
   to,
   className,
+  phone = false,
 }: {
   to?: string;
   className?: string;
+  /** 手机页头：与其它手机页同一枚 ‹（2026-11-20 第 14 项）；桌面整屏形态仍是 ←。 */
+  phone?: boolean;
 }) {
   const { t } = useTranslation();
+  const Icon = phone ? ChevronLeft : ArrowLeft;
   return (
     <Link
       to={to ?? "/chat"}
@@ -144,7 +154,7 @@ export function SessionBackLink({
         className,
       )}
     >
-      <ArrowLeft className="size-5" aria-hidden="true" />
+      <Icon className="size-5" aria-hidden="true" />
     </Link>
   );
 }
@@ -209,8 +219,9 @@ export function SessionPageStateShell({
   return (
     <AppShell flush immersive>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-14 shrink-0 items-center bg-sheet-header px-5">
-          <SessionBackLink to={backTo} className="-ml-2" />
+        {/* 与落地后的手机页头同高（52px）同色：认出来之后换成真头部时它不跳。 */}
+        <div className="flex h-[52px] shrink-0 items-center bg-sheet-header px-5">
+          <SessionBackLink to={backTo} className="-ml-2 size-11" phone />
         </div>
         {/* 与非 flush 壳的主区同一副内边距与滚动：这几态原本就排在那里面。 */}
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5">
@@ -388,12 +399,16 @@ function PhoneSessionHeader({
     <div
       data-testid="session-detail-header"
       // relative：连接指示器的进度条按头部定位，铺满它的底边。
-      className="relative flex h-14 shrink-0 flex-col bg-sheet-header px-5"
+      // 手机页头统一 52px（2026-11-20 第 14 项）；底色保留对话页自己的 sheet-header。
+      className="relative flex h-[52px] shrink-0 flex-col bg-sheet-header px-5"
     >
       <SessionHeaderBand
         testId="session-detail-identity"
         metaTestId="session-detail-meta"
-        leading={<SessionBackLink to={backTo} className="-ml-2 size-11" />}
+        className="h-[52px]"
+        leading={
+          <SessionBackLink to={backTo} className="-ml-2 size-11" phone />
+        }
         title={displayTitle}
         meta={metaParts}
         actions={

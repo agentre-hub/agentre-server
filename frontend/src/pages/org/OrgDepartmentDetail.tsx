@@ -8,6 +8,8 @@ import * as React from "react";
 
 import { useTranslation } from "react-i18next";
 
+import { useIsMobile } from "@/components/use-is-mobile";
+
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
 import { useOrgIdentityText } from "./useOrgIdentityText";
 import type { RowMenuItem } from "./OrgDetailHeader";
@@ -49,6 +51,7 @@ export interface OrgDepartmentDetailProps {
 
 export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const { department, departmentModel } = props;
 
   const [deleteOpen, setDeleteOpen] = React.useState(false);
@@ -98,35 +101,40 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
     (a) => props.maps.agentSyncOf(a.id) === department.lead_agent_sync_id,
   )?.name;
 
+  const renderIdentity = (saveStatus: React.ReactNode) => (
+    <IdentityFields
+      kind="department"
+      testIdPrefix="org-department-identity"
+      {...identityText}
+      mark={{
+        iconKey: department.icon ?? "",
+        color: department.accent_color ?? "",
+        onPickIcon: (key) => save({ icon: key }),
+        onPickColor: (color) => save({ accent_color: color }),
+      }}
+      meta={
+        <div className="flex flex-wrap items-center gap-1.5">
+          <OrgDetailChip>
+            {t("org.detail.header.memberCount", {
+              n: departmentModel.memberCount ?? 0,
+            })}
+          </OrgDetailChip>
+          {saveStatus}
+        </div>
+      }
+    />
+  );
+
   return (
     <div
       data-slot="org-detail-department"
       className="flex h-full min-w-0 flex-col"
     >
       <OrgDetailHeader
-        identity={(saveStatus) => (
-          <IdentityFields
-            kind="department"
-            testIdPrefix="org-department-identity"
-            {...identityText}
-            mark={{
-              iconKey: department.icon ?? "",
-              color: department.accent_color ?? "",
-              onPickIcon: (key) => save({ icon: key }),
-              onPickColor: (color) => save({ accent_color: color }),
-            }}
-            meta={
-              <div className="flex flex-wrap items-center gap-1.5">
-                <OrgDetailChip>
-                  {t("org.detail.header.memberCount", {
-                    n: departmentModel.memberCount ?? 0,
-                  })}
-                </OrgDetailChip>
-                {saveStatus}
-              </div>
-            }
-          />
-        )}
+        identity={renderIdentity}
+        // 手机上与 Agent 详情同形（2026-11-20 第 1 项）：页头「‹ · 部门名 · •••」，
+        // 身份编辑挪进正文「身份」段；桌面不传，形态不变。
+        compactTitle={isMobile ? identityText.name : undefined}
         save={saveState}
         menuItems={menuItems}
         onBack={props.onBack}
@@ -137,6 +145,18 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div className="flex max-w-md min-w-0 flex-col gap-4">
+          {isMobile && (
+            <section
+              aria-label={t("org.detail.columns.identity")}
+              data-slot="org-detail-col-identity"
+              className="flex min-w-0 flex-col gap-4"
+            >
+              <h3 className="font-mono text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {t("org.detail.columns.identity")}
+              </h3>
+              {renderIdentity(null)}
+            </section>
+          )}
           <div className="space-y-1.5">
             {/* 字段名不用 <label htmlFor>：Radix 的触发器是一颗 <button>，
                 点在字段名上会转发一次点击，弹层开了又立刻关。 */}

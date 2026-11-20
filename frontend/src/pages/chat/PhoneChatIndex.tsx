@@ -15,8 +15,10 @@ import {
 import {
   ChevronDown,
   MessageCirclePlus,
+  RotateCw,
   Search,
   SquarePen,
+  TriangleAlert,
 } from "lucide-react";
 import {
   useCallback,
@@ -114,6 +116,12 @@ export interface PhoneChatIndexProps {
   onLoadMore: () => void;
   /** 列表之上的横幅（取数失败、保存失败）。 */
   banners?: ReactNode;
+  /**
+   * 这一次取数失败了。手上一条行都没有时，空列表说明不了「没有对话」，整块换成
+   * 错误态（宿主那时也不该再递取数失败的横幅）；已有行时由横幅说。
+   */
+  loadFailed?: boolean;
+  onRetry?: () => void;
 }
 
 /** 分段的标题（字面 key：未用 key 守卫按字面认读者）。 */
@@ -184,6 +192,8 @@ export function PhoneChatIndex({
   loadMoreFailed,
   onLoadMore,
   banners,
+  loadFailed = false,
+  onRetry,
 }: PhoneChatIndexProps) {
   const { t, i18n } = useTranslation();
   const { t: uiT } = useUiTranslation();
@@ -302,8 +312,28 @@ export function PhoneChatIndex({
   let body: ReactNode;
   if (!settled) {
     body = (
-      <div className="px-4 py-3">
-        <SessionRowSkeleton />
+      // phone 骨架与真实手机行同一副几何（64px 行、44px 圆角头像）；骨架行自带
+      // px-2，外面再补 px-2，左缘与真实行（li 的 px-4）对齐，落地时列表不跳。
+      <div className="px-2">
+        <SessionRowSkeleton variant="phone" />
+      </div>
+    );
+  } else if (rows.length === 0 && loadFailed) {
+    body = (
+      <div className="px-6 py-8">
+        <EmptyState
+          icon={TriangleAlert}
+          tone="danger"
+          title={t("chat.phone.loadFailed.title")}
+          body={t("chat.phone.loadFailed.body")}
+          testId="chat-load-failed"
+          action={
+            <Button size="lg" className="w-full" onClick={onRetry}>
+              <RotateCw aria-hidden="true" />
+              {t("sessionIndex.loadMore.retry")}
+            </Button>
+          }
+        />
       </div>
     );
   } else if (rows.length === 0 && (filter !== "all" || searching)) {

@@ -267,6 +267,12 @@ describe("移动端左抽屉导航", () => {
     renderShell("/org/agent/abc", "Agent");
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
     expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+    // 与其它手机页头同一枚 ‹：20px 图标、44px 键（2026-11-20 第 14 项）。
+    const back = screen.getByRole("button", { name: "Back" });
+    expect(back.className).toContain("size-11");
+    expect(back.querySelector("svg")!.getAttribute("class")).toContain(
+      "size-5",
+    );
   });
 
   it("手机：顶层页页头显示标题", () => {
@@ -275,6 +281,10 @@ describe("移动端左抽屉导航", () => {
     expect(
       within(screen.getByTestId("app-topbar")).getByText("Devices"),
     ).toBeTruthy();
+    // 外壳顶栏就是统一手机页头的基准，两处同一份实现。
+    expect(screen.getByTestId("app-topbar").getAttribute("data-slot")).toBe(
+      "phone-page-header",
+    );
   });
 });
 

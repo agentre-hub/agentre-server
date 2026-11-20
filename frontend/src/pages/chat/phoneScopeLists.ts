@@ -194,6 +194,9 @@ export function phoneScopeOf(value: ScopeValue): PhoneScope {
       return { kind: "agent", agentSyncId: value.id };
     case "machine":
       return { kind: "machine", deviceId: Number(value.id) };
+    // 共享包的「随手对话」行只在宿主给 unassignedProject 时才摆；本站手机清单不给，
+    // 页面范围也没有这一档。真被选到（包改了默认）就落回「全部」，不编一个范围。
+    case "unassignedProject":
     case "all":
       return { kind: "all" };
   }

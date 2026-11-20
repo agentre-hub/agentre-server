@@ -17,6 +17,11 @@ import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
 import AppShell from "@/components/AppShell";
+import {
+  PhoneHeaderButton,
+  PhonePage,
+  PhonePageHeader,
+} from "@/components/PhonePageHeader";
 import { ActivityStatsPanel } from "@/components/settings/ActivityStatsPanel";
 import { SessionCleanupPanel } from "@/components/settings/SessionCleanupPanel";
 import PageTitle from "@/components/PageTitle";
@@ -73,9 +78,6 @@ const THEME_CHOICES: readonly AppThemePreference[] = [
   "light",
   "dark",
 ];
-
-const PHONE_HEADER_CLASS =
-  "flex h-[calc(52px_+_env(safe-area-inset-top,0px))] shrink-0 items-center gap-1 bg-chrome px-4 pt-[env(safe-area-inset-top,0px)]";
 
 function ChoiceRow({
   label,
@@ -151,6 +153,11 @@ function LanguagePage() {
   );
 }
 
+/** 供应商面板经 renderHeader 交给页头的那份上下文（包没有单独导出这个型）。 */
+type ProvidersHeaderContext = Parameters<
+  NonNullable<React.ComponentProps<typeof LlmProvidersPanel>["renderHeader"]>
+>[1];
+
 export default function Settings() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -160,6 +167,12 @@ export default function Settings() {
    */
   const [phoneActionSlot, setPhoneActionSlot] =
     React.useState<HTMLDivElement | null>(null);
+  /**
+   * 供应商详情层的页头标题格：面板经 renderHeader 的 context 交出选中供应商的名字，
+   * 与页面动作同一条路传送进来（名字只在面板手里，渲染期不能回写宿主状态）。
+   */
+  const [phoneTitleSlot, setPhoneTitleSlot] =
+    React.useState<HTMLSpanElement | null>(null);
 
   // 总览的「统计设置 →」与「开启完整活跃统计 →」都指到 ?tab=privacy —— 一条深链
   // 落到默认页签上，等于把用户扔在离目标两步远的地方，而他刚刚已经点过一次了。
@@ -274,17 +287,36 @@ export default function Settings() {
       const search = new URLSearchParams(parent).toString();
       back({ search: search ? `?${search}` : "" });
     };
-    const sectionTitle = phoneSection
-      ? t(`settings.sections.${phoneSection}`)
-      : t("settings.title");
+    // 供应商详情层：页头标题是供应商名（2026-11-20 第 5 项），由面板传送进标题格。
+    const providerDetail =
+      phoneSection === "providers" &&
+      rawId !== null &&
+      rawId !== "" &&
+      Number.isFinite(Number(rawId));
+    const sectionTitle = providerDetail ? (
+      <span ref={setPhoneTitleSlot} />
+    ) : phoneSection ? (
+      t(`settings.sections.${phoneSection}`)
+    ) : (
+      t("settings.title")
+    );
     // 后端编辑页自带 ✕ / 标题 / 保存的页头，外壳这里不再叠一条。
     const editorOwnsHeader = phoneSection === "backends" && rawId !== null;
     const showOfflineNotice =
       syncedDevices === 0 && phoneSection === "providers";
-    const phoneActions = (actions: React.ReactNode) =>
-      actions && phoneActionSlot
-        ? createPortal(actions, phoneActionSlot)
-        : null;
+    const phoneActions = (
+      actions: React.ReactNode,
+      context?: ProvidersHeaderContext,
+    ) => (
+      <>
+        {actions && phoneActionSlot
+          ? createPortal(actions, phoneActionSlot)
+          : null}
+        {context?.providerName && phoneTitleSlot
+          ? createPortal(context.providerName, phoneTitleSlot)
+          : null}
+      </>
+    );
 
     let body: React.ReactNode;
     if (phoneSection === null) {
@@ -386,41 +418,46 @@ export default function Settings() {
     }
 
     return (
-      <AppShell ownHeader title={t("nav.settings")}>
-        <div className="flex min-h-0 w-full flex-1 flex-col">
-          {editorOwnsHeader ? null : (
-            <header
-              data-testid="settings-header"
-              className={PHONE_HEADER_CLASS}
-            >
-              {phoneSection === null ? (
-                <MobileNavButton />
-              ) : (
-                <button
-                  type="button"
-                  aria-label={t("appShell.drawer.back")}
-                  onClick={() =>
-                    up(
-                      rawId !== null && phoneSection !== null
-                        ? { section: phoneSection }
-                        : {},
-                    )
-                  }
-                  className="relative -ml-2 flex size-11 shrink-0 items-center justify-center rounded-md text-foreground outline-none hover:bg-rail-accent focus-visible:focus-outline"
-                >
-                  <ChevronLeft className="size-5" aria-hidden="true" />
-                </button>
-              )}
-              <h1 className="min-w-0 flex-1 truncate text-prose font-bold text-foreground">
-                {sectionTitle}
-              </h1>
-              <div
-                ref={setPhoneActionSlot}
-                className="flex shrink-0 items-center gap-2"
+      // flush：页头钉在滚动区外、通栏（与账号、对话一致），正文自己滚——此前页头落进
+      // 主区的 px-4 py-5 里，缩成一块灰框并跟着正文滚走（2026-11-20 第 5 项）。
+      <AppShell ownHeader flush title={t("nav.settings")}>
+        <PhonePage
+          header={
+            editorOwnsHeader ? null : (
+              <PhonePageHeader
+                testId="settings-header"
+                leading={
+                  phoneSection === null ? (
+                    <MobileNavButton />
+                  ) : (
+                    <PhoneHeaderButton
+                      edge="start"
+                      aria-label={t("appShell.drawer.back")}
+                      onClick={() =>
+                        up(
+                          rawId !== null && phoneSection !== null
+                            ? { section: phoneSection }
+                            : {},
+                        )
+                      }
+                    >
+                      <ChevronLeft className="size-5" aria-hidden="true" />
+                    </PhoneHeaderButton>
+                  )
+                }
+                title={sectionTitle}
+                trailing={
+                  <div
+                    ref={setPhoneActionSlot}
+                    className="flex shrink-0 items-center gap-2 empty:hidden"
+                  />
+                }
               />
-            </header>
-          )}
-          <div className="flex min-w-0 flex-col gap-3 px-4 pb-4 pt-2">
+            )
+          }
+          bodyClassName="pb-4"
+        >
+          <div className="flex min-w-0 flex-col gap-3">
             {showOfflineNotice ? (
               <Alert>
                 <Cloud aria-hidden="true" />
@@ -431,7 +468,7 @@ export default function Settings() {
             ) : null}
             {body}
           </div>
-        </div>
+        </PhonePage>
       </AppShell>
     );
   }

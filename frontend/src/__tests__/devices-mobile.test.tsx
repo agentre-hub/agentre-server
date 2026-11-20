@@ -217,6 +217,20 @@ describe("手机设备列表", () => {
     expect(screen.getByTestId("add-device-guide")).toBeTruthy();
   });
 
+  it("页头是统一的手机页头，钉在滚动区外（2026-11-20 第 14 项）", async () => {
+    mockConsole();
+    renderAt("/devices");
+    await screen.findByText("Workstation");
+    const header = screen.getByTestId("devices-mobile-header");
+    expect(header.getAttribute("data-slot")).toBe("phone-page-header");
+    expect(header.closest('[data-slot="phone-page-body"]')).toBeNull();
+    expect(
+      screen
+        .getByTestId("device-row-1")
+        .closest('[data-slot="phone-page-body"]'),
+    ).not.toBeNull();
+  });
+
   it("点一行进入 /devices/:id", async () => {
     mockConsole();
     renderAt("/devices");
@@ -236,8 +250,12 @@ describe("手机设备详情页", () => {
     expect(within(header).getByRole("button", { name: "Back" })).toBeTruthy();
     expect(within(header).getByText("Workstation")).toBeTruthy();
     expect(within(header).getByText(/Online · 0\.5\.2 · linux/)).toBeTruthy();
-    // 行菜单（改名 / 解除授权）在页头。
-    expect(within(header).getByTestId("device-menu-1-trigger")).toBeTruthy();
+    // 行菜单（改名 / 解除授权）在页头：统一的 •••、44px 键（2026-11-20 第 14 项）。
+    const menu = within(header).getByTestId("device-menu-1-trigger");
+    expect(menu.className).toContain("size-11");
+    expect(menu.querySelector("svg.lucide-ellipsis")).not.toBeNull();
+    expect(header.getAttribute("data-slot")).toBe("phone-page-header");
+    expect(header.closest('[data-slot="phone-page-body"]')).toBeNull();
 
     // 「可以升级时顶部一行动作」：一行（标题 + 动作），不是展开区那张带说明与命令卡的面板。
     const upgrade = await within(page).findByTestId("device-upgrade-1");
@@ -423,6 +441,18 @@ describe("手机添加设备：整屏三步", () => {
 
     const footer = within(guide).getByTestId("add-device-footer");
     expect(footer.className).toMatch(/(^|\s)sticky(\s|$)/);
+    // 底栏下沿至少留 12px：Safari 里底部安全区为 0 时「已拿到设备码」不贴屏幕底边。
+    expect(footer.className).toContain(
+      "pb-[max(12px,env(safe-area-inset-bottom,0px))]",
+    );
+    // 页头是统一的 52px 手机页头，在滚动区外；不再用 -mt-2 往上顶（✕ 曾被顶出屏幕）。
+    const guideHeader = within(guide).getByTestId("add-device-header");
+    expect(guideHeader.getAttribute("data-slot")).toBe("phone-page-header");
+    expect(guideHeader.className).not.toContain("-mt-2");
+    expect(guideHeader.closest('[data-slot="phone-page-body"]')).toBeNull();
+    expect(
+      within(guideHeader).getByRole("button", { name: "Close" }).className,
+    ).toContain("size-11");
     fireEvent.click(
       within(footer).getByRole("button", { name: /I have the device code/ }),
     );

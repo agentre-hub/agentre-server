@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   Check,
   ChevronLeft,
+  Ellipsis,
   Loader2,
   MoreVertical,
   X,
@@ -30,6 +31,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@agentre-hub/agentre-ui";
+import {
+  PhoneHeaderButton,
+  PhonePageHeader,
+} from "@/components/PhonePageHeader";
 import { formatRelativeTime } from "@/lib/sessionView";
 
 /**
@@ -244,15 +249,24 @@ function OverflowMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={touch ? "size-11" : undefined}
-          aria-label={t("org.detail.header.more")}
-          data-testid="org-detail-menu-trigger"
-        >
-          <MoreVertical className="size-4" aria-hidden="true" />
-        </Button>
+        {touch ? (
+          <PhoneHeaderButton
+            edge="end"
+            aria-label={t("org.detail.header.more")}
+            data-testid="org-detail-menu-trigger"
+          >
+            <Ellipsis className="size-5" aria-hidden="true" />
+          </PhoneHeaderButton>
+        ) : (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("org.detail.header.more")}
+            data-testid="org-detail-menu-trigger"
+          >
+            <MoreVertical className="size-4" aria-hidden="true" />
+          </Button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[160px]">
         {items.map((item) => (
@@ -272,33 +286,29 @@ function OverflowMenu({
 export function OrgDetailHeader(props: OrgDetailHeaderProps) {
   const { t } = useTranslation();
   if (props.compactTitle !== undefined) {
+    // 这一页的页头由它自己担（壳走 ownHeader）：统一的手机页头，保存态进副行，
+    // idle 时副行是空的、整格塌掉，名字落在页头垂直正中。
     return (
-      <header
-        data-testid="org-detail-header"
-        // 这一页的页头由它自己担（壳走 ownHeader），顶部安全区也由它让。
-        className="flex min-h-14 shrink-0 items-center gap-1 px-2 py-1.5 pt-[calc(0.375rem_+_env(safe-area-inset-top,0px))]"
-      >
-        {props.onBack && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 shrink-0"
-            aria-label={t("org.detail.actions.back")}
-            onClick={props.onBack}
-          >
-            <ChevronLeft className="size-5" aria-hidden="true" />
-          </Button>
-        )}
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold">
-            {props.compactTitle}
-          </h2>
-          <div data-testid="org-detail-subtitle" className="min-h-4">
-            <SaveStatus state={props.save.state} onRetry={props.save.retry} />
-          </div>
-        </div>
-        <OverflowMenu items={props.menuItems} touch />
-      </header>
+      <PhonePageHeader
+        testId="org-detail-header"
+        leading={
+          props.onBack ? (
+            <PhoneHeaderButton
+              edge="start"
+              aria-label={t("org.detail.actions.back")}
+              onClick={props.onBack}
+            >
+              <ChevronLeft className="size-5" aria-hidden="true" />
+            </PhoneHeaderButton>
+          ) : null
+        }
+        title={props.compactTitle}
+        subtitle={
+          <SaveStatus state={props.save.state} onRetry={props.save.retry} />
+        }
+        subtitleTestId="org-detail-subtitle"
+        trailing={<OverflowMenu items={props.menuItems} touch />}
+      />
     );
   }
   return (
