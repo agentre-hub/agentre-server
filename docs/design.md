@@ -133,7 +133,8 @@ What stays legitimate, because the lines carry meaning: the focus ring
 radio or switch (`border-control-border`), a status colour bar (`border-l-2
 border-l-status-running`), a drag-and-drop target (`border-dashed border-ring`) and the
 "sending…" message that has left the browser but whose echo has not arrived yet
-(`PendingSendBubble state="sending"`: `border-dashed border-muted-foreground/40`) — none
+(`PendingSendBubble state="sending"`: `border-dashed border-muted-foreground/40`), which
+the queued message shares on a phone (on desktop the queued one keeps its filled block) — none
 of these is a divider colour, so the rules do not see them. A genuine keeper the class
 table cannot recognise gets `// eslint-disable-next-line no-restricted-syntax -- <reason>`
 on the line; the reason is mandatory. Tests and `eslint-rules/` are exempt, as for the other

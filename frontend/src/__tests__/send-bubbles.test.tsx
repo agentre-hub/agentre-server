@@ -204,6 +204,38 @@ describe("发送中那一条：与真用户消息同列，虚线边 + 小字", (
     expect(within(queued).getByTestId("send-pending-cancel")).toBeTruthy();
   });
 
+  /*
+    规格「排队态外观」：三种「还不是正式消息」的态在手机上与真用户消息同一列，
+    「区别只在虚线边与小字」—— 排队那条也是虚线边，不再是一块灰底。桌面不在这一条
+    里（硬约束：桌面上看得见的只改两处），排队那条照旧是灰底那一块。
+  */
+  it("Given 手机那一档对齐, When 渲染排队那条, Then 与发送中同一种记号：非分隔线色的虚线边、没有灰底", () => {
+    render(<PendingSendBubble align="end" text="b" onCancel={() => {}} />);
+
+    const queued = screen.getByTestId("send-pending");
+    const classes = [
+      queued,
+      ...Array.from(queued.querySelectorAll("*")),
+    ].flatMap((el) => Array.from(el.classList));
+    expect(classes).toContain("border-dashed");
+    expect(classes).not.toContain("bg-field-fill");
+    expect(classes.some((c) => /^border-(?:.+-)?border(?:\/|$)/.test(c))).toBe(
+      false,
+    );
+  });
+
+  it("Given 不给对齐（桌面）, When 渲染排队那条, Then 照旧是灰底那一块、不描虚线", () => {
+    render(<PendingSendBubble text="b" onCancel={() => {}} />);
+
+    const queued = screen.getByTestId("send-pending");
+    const classes = [
+      queued,
+      ...Array.from(queued.querySelectorAll("*")),
+    ].flatMap((el) => Array.from(el.classList));
+    expect(classes).toContain("bg-field-fill");
+    expect(classes).not.toContain("border-dashed");
+  });
+
   it("Given 不给对齐（桌面）, When 渲染, Then 跟真用户消息一样在起始侧", () => {
     render(<PendingSendBubble state="sending" text="a" onCancel={() => {}} />);
     expect(

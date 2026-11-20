@@ -23,7 +23,8 @@ import SendAttachments from "@/components/session/SendAttachments";
  * 右对齐气泡（`max-w-[84%] self-end`），而它就站在转录流里紧挨着真消息 —— 于是
  * 「我刚敲进去的那句」与「已经发出去的那句」在同一列里长得不是一个东西。
  *
- * 只有**外壳**换了。「这条还没发出去」靠那行小字说，不靠位置说。
+ * 只有**外壳**换了。「这条还没发出去」靠那行小字说，不靠位置说；手机上再加一道
+ * 虚线边（见下面的包裹层）。
  *
  * 两档（弱网规格 2026-11-20 决策 12 / 13）：
  *   - `queued` —— 排着队等连接 / 等清单，旁边有「撤销」。
@@ -107,9 +108,17 @@ export default function PendingSendBubble({
         </Button>
       }
     >
-      {/* 一块填充 + 时钟与那行标题：一眼看得出「还没出去」，但只占正文这一列。
-          不再描虚线边（规格 2026-10-15「无边框改版」）。 */}
-      <div className="rounded-lg bg-field-fill px-3 py-2">
+      {/* 手机上（尾侧对齐）三种「还不是正式消息」的态与真用户消息同一形态，区别只在
+          虚线边与小字（弱网规格 2026-11-20「排队态外观」），与发送中那一档同一种
+          虚线、同一个非分隔线色。桌面照旧一块填充 + 时钟与那行标题（规格 2026-10-15
+          「无边框改版」；弱网规格的硬约束：桌面上看得见的只改两处，这条不在其中）。 */}
+      <div
+        className={
+          align === "end"
+            ? "rounded-lg border border-dashed border-muted-foreground/40 px-3 py-2"
+            : "rounded-lg bg-field-fill px-3 py-2"
+        }
+      >
         <p className="mb-1 flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
           <Clock3 aria-hidden="true" className="size-3 shrink-0" />
           {t("session.sendPending.title")}
