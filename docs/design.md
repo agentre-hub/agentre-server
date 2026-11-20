@@ -554,7 +554,12 @@ full-bleed `bg-chrome`, 44×44 buttons with 20px icons, back is ‹ (`ChevronLef
 the title stays vertically centred. Wrap the page in `PhonePage` under `AppShell flush ownHeader`
 so the header sits outside the scroll area instead of inside `main`'s padding, where it would
 render as an inset grey box that scrolls away. The conversation and draft bands are also 52px
-with ‹ but keep `bg-sheet-header`.
+with ‹ but paint `bg-sheet`, the transcript's own white: an installed iOS app draws its
+`default` status bar pure white, so a `bg-sheet-header` band between that bar and the white
+transcript read as a broken grey strip (2026-11-20). There is still no divider — text that
+scrolls up under the band is faded out by the scroll area's `transcript-fade-top`. Their meta
+line is `status · agent` only; the machine name lives in the ••• info sheet, because the three
+parts shrink in proportion to their width and a long host name left the status as "空..".
 
 **Page layout is declared to the shell.** A page is either a *whole sheet* (the default) or
 an *index column plus a sheet*. The second is declared with **`index`**, a `ReactNode`
@@ -1126,6 +1131,20 @@ The style is fixed at install time: existing installs keep the blur until they a
 and re-added. This was confirmed on an iPhone with side-by-side installed variants;
 neither half alone (`default` with an ordinary header, or `black-translucent` with a
 fixed header) removed the blur.
+
+**The shell follows the visual viewport while the iOS keyboard is up.** iOS does not shrink
+the layout viewport for the soft keyboard (`interactive-widget=resizes-content` in
+`index.html` is honoured by Android Chrome only); it slides the visual viewport up instead,
+which carried the whole fixed `h-dvh` root — header included — off the top of the screen and
+left the bottom safe-area gap between the composer and the keyboard. `useKeyboardViewport`
+(`src/components/use-keyboard-viewport.ts`) reports the visual viewport's height and
+`offsetTop` whenever it is at least 120px shorter than the layout viewport at scale 1 (pinch
+zoom is not a keyboard), and `AppShell` then sets the root's inline `height`/`top` to that
+area and marks it `data-keyboard="open"`. The root stays `fixed inset-x-0`, so the top-edge
+check above still holds. Bottom insets that only exist to clear the home indicator drop out
+under `group-data-[keyboard=open]/shell:` (the immersive `main`, the composer band). jsdom
+can only pin this with a fake `visualViewport`; confirm a change here by focusing the composer
+in an installed app on an iPhone.
 
 iOS install behaviour — the "Add to Home Screen" surface and the safe-area treatment on a
 notched device — still needs a real device. No jsdom test can stand in for it: there is

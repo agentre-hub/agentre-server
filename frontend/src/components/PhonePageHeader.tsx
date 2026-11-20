@@ -62,7 +62,7 @@ export function PhonePageHeader({
   subtitle?: ReactNode;
   subtitleTestId?: string;
   trailing?: ReactNode;
-  /** 对话页保留它自己的 sheet-header 底色这类个别差异。 */
+  /** 个别页面需要叠加的类名。 */
   className?: string;
 }) {
   const Title = titleAs;

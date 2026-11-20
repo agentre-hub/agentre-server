@@ -285,7 +285,7 @@ describe("移动端会话详情：一层头部", () => {
     expect(screen.queryByRole("navigation", { name: "Back" })).toBeNull();
   });
 
-  it("一行里：返回 · 标题（一行）· ⋯；副标题「● 状态 · Agent · 机器」", async () => {
+  it("一行里：返回 · 标题（一行）· ⋯；副标题「● 状态 · Agent」，机器名在 ••• 里", async () => {
     mockMobileViewport();
     stubWithIdentity();
     renderPage();
@@ -297,11 +297,20 @@ describe("移动端会话详情：一层头部", () => {
     });
     expect(title.className).toContain("line-clamp-1");
     const head = screen.getByTestId("session-detail-header");
-    // 手机页头统一 52px（2026-11-20 第 14 项），对话页保留自己的 sheet-header 底色；
-    // 返回是 ‹ 不是 ←。
+    // 手机页头统一 52px（2026-11-20 第 14 项）；返回是 ‹ 不是 ←。
+    // 底色与 iOS 主屏幕 App 的白状态栏、转录区同一个白（--sheet）：灰的 sheet-header
+    // 夹在白状态栏与白转录之间是一条断开的色带。不画分隔线（无边框规则），正文滚到
+    // 页头底下时由滚动带上沿的渐隐淡掉。
     expect(head.className).toMatch(/(^|\s)h-\[52px\](\s|$)/);
-    expect(head.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
+    expect(head.className).toMatch(/(^|\s)bg-sheet(\s|$)/);
+    expect(head.className).not.toMatch(/(^|\s)border-b(\s|$)/);
+    expect(screen.getByTestId("session-detail-scroll").className).toContain(
+      "transcript-fade-top",
+    );
+    expect(head.className).not.toMatch(/bg-sheet-header/);
     expect(band.className).toMatch(/(^|\s)h-\[52px\](\s|$)/);
+    expect(band.className).toMatch(/(^|\s)bg-sheet(\s|$)/);
+    expect(band.className).not.toMatch(/bg-sheet-header/);
     expect(
       within(band)
         .getByRole("link", { name: "Back" })
@@ -316,11 +325,7 @@ describe("移动端会话详情：一层头部", () => {
       [...meta.querySelectorAll("[data-testid^='session-detail-meta-']")].map(
         (el) => el.getAttribute("data-testid"),
       ),
-    ).toEqual([
-      "session-detail-meta-status",
-      "session-detail-meta-agent",
-      "session-detail-meta-machine",
-    ]);
+    ).toEqual(["session-detail-meta-status", "session-detail-meta-agent"]);
     expect(
       within(meta).getByTestId("session-detail-meta-status").textContent,
     ).toContain("Idle");
@@ -328,13 +333,15 @@ describe("移动端会话详情：一层头部", () => {
       (await within(meta).findByTestId("session-detail-meta-agent"))
         .textContent,
     ).toContain("后端 Agent");
-    expect(
-      within(meta).getByTestId("session-detail-meta-machine").textContent,
-    ).toContain("书房小主机");
-    // 窄屏截断而不收起：三段都留在 DOM 里、读屏读得到。
+    // 窄屏截断而不收起：两段都留在 DOM 里、读屏读得到。
     for (const part of meta.querySelectorAll("[data-part]")) {
       expect(part.className).not.toMatch(/hidden/);
     }
+    // 机器名不进副行：三段按比例一起收缩时最长的机器名留得最多，状态与 Agent 名
+    // 反被截成「空..」「Claude ...」。机器名在 ••• 的信息面板里。
+    expect(meta.textContent).not.toContain("书房小主机");
+    fireEvent.click(within(band).getByRole("button", { name: "More actions" }));
+    expect(await screen.findByText("书房小主机")).toBeTruthy();
   });
 
   it("页头不放停止：这一轮在跑也没有；状态字写「Running」", async () => {
@@ -501,7 +508,7 @@ describe("移动端会话详情：一层头部", () => {
     const row = screen.getByRole("link", { name: "Back" })
       .parentElement as HTMLElement;
     expect(row.className).toMatch(/(^|\s)h-\[52px\](\s|$)/);
-    expect(row.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
+    expect(row.className).toMatch(/(^|\s)bg-sheet(\s|$)/);
   });
 });
 

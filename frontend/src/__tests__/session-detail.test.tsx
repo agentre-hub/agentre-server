@@ -8483,6 +8483,8 @@ describe("会话详情：与桌面端对齐的外壳", () => {
       "pb-[max(0px,calc(0.75rem_-_env(safe-area-inset-bottom,0px)))]",
     );
     expect(band.className).not.toMatch(/(^|\s)pb-3(\s|$)/);
+    // 键盘弹着时壳收掉了底部安全区（AppShell 的 data-keyboard），输入框回到离键盘 12px。
+    expect(band.className).toContain("group-data-[keyboard=open]/shell:pb-3");
   });
 
   /*
