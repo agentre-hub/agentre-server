@@ -257,6 +257,8 @@ export function ChatIndexPanel({
         // 「已知的可见变化」3：移动端行尾保留本地化的状态文字徽标。
         rowStatusLabel={rowStatusLabel}
         narrowed={view.narrowed}
+        // 换范围在途：旧行留着变淡，筛选条下出进度条（弱网规格 2026-11-20 决策 5）。
+        refreshing={sessionIndex.refreshing}
         filter={filter}
         onFilterChange={onFilterChange}
         unreadCount={sessionIndex.unreadTotal}

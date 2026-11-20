@@ -1062,6 +1062,89 @@ describe("手机首页：对话列表", () => {
     ).toBe("true");
     await waitFor(() => expect(restored.scrollTop).toBe(120));
   });
+
+  /** 把「未读」那一档的列表请求扣在手里，由用例决定它何时回来、成功还是失败。 */
+  function holdUnreadPage(outcome: "release" | "fail") {
+    stubApi(all);
+    const base = mockedApi.getMockImplementation()!;
+    let release: () => void = () => {
+      throw new Error("未读那一档还没请求过");
+    };
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      const params = new URLSearchParams(path.split("?")[1] ?? "");
+      if (
+        path.startsWith("/v1/agent-sessions?") &&
+        params.get("filter") === "unread" &&
+        params.get("per_group") !== "1"
+      ) {
+        if (outcome === "fail") throw new Error("boom");
+        const answer = await base(path, ...rest);
+        return new Promise((resolve) => {
+          release = () => resolve(answer);
+        });
+      }
+      return base(path, ...rest);
+    });
+    return { release: () => release() };
+  }
+
+  /** 弱网规格 2026-11-20 决策 5：换筛选时旧行留着变淡，不回到骨架。 */
+  it("换筛选：旧行留着变淡、仍可点开，列表 aria-busy、筛选条下有进度条，新数据到了整体替换", async () => {
+    const held = holdUnreadPage("release");
+    renderChat();
+    await screen.findByText("老对话");
+    expect(screen.queryByTestId("index-refresh-bar")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("filter-chip-unread"));
+
+    const list = screen.getByTestId("chat-phone-list");
+    await waitFor(() => expect(list.getAttribute("aria-busy")).toBe("true"));
+    expect(within(list).getByText("老对话")).toBeTruthy();
+    expect(list.querySelector('[data-slot="session-row-skeleton"]')).toBeNull();
+    expect(screen.getByTestId("chat-phone-rows").className).toContain(
+      "opacity-55",
+    );
+    expect(
+      within(screen.getByTestId("chat-mobile-header")).getByTestId(
+        "index-refresh-bar",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(list)
+        .getByRole("link", { name: /老对话/ })
+        .getAttribute("href"),
+    ).toBeTruthy();
+
+    await act(async () => held.release());
+
+    await waitFor(() => expect(screen.queryByText("老对话")).toBeNull());
+    expect(screen.getByText("读一下迁移")).toBeTruthy();
+    expect(list.getAttribute("aria-busy")).toBeNull();
+    expect(screen.getByTestId("chat-phone-rows").className).not.toContain(
+      "opacity-55",
+    );
+    expect(screen.queryByTestId("index-refresh-bar")).toBeNull();
+  });
+
+  /** 决策 7：新范围取失败时旧行不清空，恢复正常显示，上面挂既有的失败横幅与重试。 */
+  it("换筛选失败：旧行留着、不再变淡，上面是失败横幅与重试，不是整块错误态", async () => {
+    holdUnreadPage("fail");
+    renderChat();
+    await screen.findByText("老对话");
+
+    fireEvent.click(screen.getByTestId("filter-chip-unread"));
+
+    const banner = await screen.findByTestId("index-load-error");
+    expect(within(banner).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByText("老对话")).toBeTruthy();
+    expect(screen.queryByTestId("chat-load-failed")).toBeNull();
+    const list = screen.getByTestId("chat-phone-list");
+    expect(list.getAttribute("aria-busy")).toBeNull();
+    expect(screen.getByTestId("chat-phone-rows").className).not.toContain(
+      "opacity-55",
+    );
+    expect(screen.queryByTestId("index-refresh-bar")).toBeNull();
+  });
 });
 
 /**

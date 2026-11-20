@@ -1393,6 +1393,23 @@ replaces.
 channel's `sync_version` signals refresh the org chart in place; only the first load
 paints the skeleton.
 
+**Nor does a change of range: the old rows stay, dimmed, until the new ones replace
+them.** The Chat session list (desktop index column and phone home, both through
+`useSessionIndex`) treats a change of scope, filter or search as a range change. While the
+new range is in flight (`refreshing`), the previous rows stay in place at `opacity-55` and
+stay clickable, the list carries `aria-busy`, and a thin indeterminate bar
+(`IndexRefreshBar`, sharing the `session-connect` keyframe in `globals.css` and going still
+under `motion-reduce`) sits under the filter row. It is positioned absolutely, so it does
+not push the list. The answer replaces the rows in one swap. A range already seen on this
+page is shown from an in-memory cache straight away, without the dim, while it re-fetches
+in the background (the cache lives for the page's lifetime and is never written to
+storage). If the new range fails, the old rows return to full opacity under the existing
+load-failure banner and its retry; only a list with nothing in hand falls back to the
+error empty state. The skeleton is left for the first load, or for a range change with no
+rows in hand. A refresh signal never aborts an in-flight round. It is queued as a single
+follow-up fetch for when that round lands. The by-machine axis is the exception: its rows
+come from the machines' own snapshots and keep their per-machine skeleton.
+
 **Nor does its label move before its numbers do.** `Overview` keeps the range that the
 figures on screen actually came from (`loadedRange`, settled with the response) and labels
 them with that, not with the range the user just clicked. Flipping the label first leaves a

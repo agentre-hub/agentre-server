@@ -1080,13 +1080,14 @@ export default function Chat() {
     ) : null;
 
   // 只有索引及项目、Agent、设备名单都完成后，分组结果才可靠。
+  //
+  // 换范围在途不再回到骨架（弱网规格 2026-11-20 决策 5）：手上的旧行留着变淡，
+  // 由索引自己画（sessionIndex.refreshing）。骨架只留给手上什么都没有的时候——第一次
+  // 加载，或者上一范围本来就一行都没有（那时摆旧的空态会把「还在取」说成「没有」）。
+  const listSettled =
+    indexSettled(sessionIndex) && projectsSettled && agentsSettled;
   const settled =
-    indexSettled(sessionIndex) &&
-    (axis === "machine" ||
-      !sessionIndex.rangePending ||
-      !!sessionIndex.loadError) &&
-    projectsSettled &&
-    agentsSettled;
+    listSettled && !(sessionIndex.refreshing && view.rows.length === 0);
 
   /*
     手机首页（规格 2026-11-05「首页（对话列表）」）：不按轴分组，按 需要你 / 进行中 /
@@ -1108,7 +1109,8 @@ export default function Chat() {
   );
   // 机器那一档：范围刚换、或在线机器还没交出清单时，空列表说明不了「没有对话」。
   const phoneSettled =
-    settled &&
+    listSettled &&
+    !(sessionIndex.refreshing && phoneRows.length === 0) &&
     !(
       axis === "machine" &&
       phoneBaseRows.length === 0 &&
@@ -1132,7 +1134,9 @@ export default function Chat() {
     counts: PhoneCounts;
   } | null>(null);
   const held = heldCounts?.key === countsKey ? heldCounts.counts : null;
-  const statusCountsLive = phoneSettled && dataFilter !== "unread";
+  // 变淡的旧行是上一范围的，不拿它们数这一范围的数。
+  const phoneFresh = phoneSettled && !sessionIndex.refreshing;
+  const statusCountsLive = phoneFresh && dataFilter !== "unread";
   const phoneCounts: PhoneCounts = {
     attention: statusCountsLive
       ? localCounts.attention
@@ -1141,7 +1145,7 @@ export default function Chat() {
     unread:
       axis !== "machine"
         ? sessionIndex.unreadTotal
-        : phoneSettled && dataFilter === "all"
+        : phoneFresh && dataFilter === "all"
           ? localCounts.unread
           : (held?.unread ?? 0),
   };
@@ -1236,7 +1240,7 @@ export default function Chat() {
     phoneScope.kind === "all" &&
     dataFilter === "all" &&
     sessionIndex.debouncedSearch === "" &&
-    phoneSettled;
+    phoneFresh;
   const [heldTally, setHeldTally] = useState<typeof liveTally | null>(null);
   if (isMobile && tallyFresh && heldTally !== liveTally) {
     setHeldTally(liveTally);
@@ -1489,6 +1493,7 @@ export default function Chat() {
             onSearchChange={sessionIndex.setSearchQuery}
             searchCount={phoneSearchCount}
             settled={phoneSettled}
+            refreshing={sessionIndex.refreshing}
             rows={phoneRows}
             filter={filter}
             onFilterChange={setFilter}
