@@ -529,21 +529,26 @@ export function useSessionIndex({
         })
         .catch((e: unknown) => {
           if (!alive()) return;
-          // 新范围没取回来时**不清**手上的行（决策 7）：清掉之后用户既看不到旧的也
-          // 看不到新的。旧行恢复正常显示（refreshing 随错误落下），由失败横幅说；
-          // 旧游标不会被拿去翻新范围——范围没落地时 hasMore 恒假。
+          // 新范围没取回来时**不清**服务端给过的旧行（决策 7）：清掉之后用户既看不到
+          // 旧的也看不到新的。旧行恢复正常显示（refreshing 随错误落下），由失败横幅说。
           //
-          // 机器轴照旧清掉：那一档不摆旧行（行来自机器快照），上一范围的镜像组只会
-          // 被拿去配这一档的组计数。
-          if (axis === "machine" && appliedRangeRef.current !== rangeKey) {
-            setIndexGroups([]);
-            setAppended([]);
+          // 但上一范围的翻页那一套不跟过来：游标与「下一页失败」的重试指的都是旧
+          // 范围，挂在新控件下就是一颗翻错范围（或根本没有游标）的死重试。还没被
+          // 服务端吸收的乐观保存行同理——它是「上一范围多出这一条」，不是旧行。
+          //
+          // 机器轴照旧整份清掉：那一档不摆旧行（行来自机器快照），上一范围的镜像组
+          // 只会被拿去配这一档的组计数。
+          if (appliedRangeRef.current !== rangeKey) {
             setNextCursor(null);
             setLoadMoreFailed(false);
             pagedRef.current = false;
             setOptimisticSaved([]);
-            setOptimisticRemoved([]);
-            setOptimisticRead(new Map());
+            if (axis === "machine") {
+              setIndexGroups([]);
+              setAppended([]);
+              setOptimisticRemoved([]);
+              setOptimisticRead(new Map());
+            }
           }
           setLoadErrorRangeKey(rangeKey);
           setLoadError(e);
