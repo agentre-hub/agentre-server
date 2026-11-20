@@ -77,6 +77,7 @@ export default function Transcript({
   backendType,
   dockDecisions = false,
   getScrollElement,
+  sendingRow,
 }: {
   messages: TranscriptMessage[];
   sessionId: number;
@@ -180,6 +181,15 @@ export default function Transcript({
    */
   dockDecisions?: boolean;
   getScrollElement?: () => HTMLElement | null;
+  /**
+   * 自己刚发出去、回声还没到的那一条（弱网规格 2026-11-20 决策 12）。
+   *
+   * 它是 `messages` 里的一条普通用户消息，所以行模型、三点的宿主判据与虚拟器的
+   * 测量都照旧 —— 三点因此挂在它**之后**，回声一到正式那条落在同一格。只有画法
+   * 归宿主：那一格的首行换成 `node`（发送中的气泡自己带着字与图），同一条消息的
+   * 其余行不再画，免得同一句话出两遍。不传 = 一切照旧。
+   */
+  sendingRow?: { messageId: number; node: React.ReactNode };
 }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -485,42 +495,48 @@ export default function Transcript({
                         }
                   }
                 >
-                  <TranscriptRowView
-                    row={row}
-                    // 只有 live 消息的**末行**承载还在长的尾巴;其余行一律收敛到
-                    // 稳定空值,让 TranscriptRowView 的 memo 浅比较恒命中。
-                    liveTail={liveTailOf(liveByMessageId, row)}
-                    liveBlocks={undefined}
-                    // 与 liveTurn 同一个判据：只有正在跑的那条消息的**末行**承载
-                    // 它，其余行收敛到稳定空值让 memo 浅比较恒命中。
-                    liveRetry={
-                      row.isLastOfMessage && row.messageId === liveMessageId
-                        ? liveRetry
-                        : null
-                    }
-                    // 同上：只有正在跑的那条消息的**末行**画 meta，其余行收敛到
-                    // 稳定空值。
-                    liveTurn={
-                      row.isLastOfMessage && row.messageId === liveMessageId
-                        ? liveTurn
-                        : null
-                    }
-                    // 「这一轮此刻在不在跑」如实交给包（共享包 0db63218 起的入参）。
-                    // 包原本从 `liveBlocks !== undefined || liveTail 非空` 反推运行态,
-                    // 那说的是「宿主有没有喂还没落库的内容」—— 桌面端恰好恒真,本站
-                    // 没有这条分界（liveBlocks 恒 undefined）、活动块当末行时正文又
-                    // 不在流,两个条件同时为假,于是活动块在这一端永远不自动展开。
-                    // 这一格给的是**轮次级**事实,「是不是这一轮的末行」仍归行模型。
-                    turnRunning={row.messageId === liveMessageId}
-                    showIndicator={
-                      row.isLastOfMessage &&
-                      streaming &&
-                      row.messageId === lastAssistantId
-                    }
-                    compacting={false}
-                    reconnecting={reconnecting}
-                    fallbackModel={fallbackModel}
-                  />
+                  {sendingRow && row.messageId === sendingRow.messageId ? (
+                    row.isFirstOfMessage ? (
+                      sendingRow.node
+                    ) : null
+                  ) : (
+                    <TranscriptRowView
+                      row={row}
+                      // 只有 live 消息的**末行**承载还在长的尾巴;其余行一律收敛到
+                      // 稳定空值,让 TranscriptRowView 的 memo 浅比较恒命中。
+                      liveTail={liveTailOf(liveByMessageId, row)}
+                      liveBlocks={undefined}
+                      // 与 liveTurn 同一个判据：只有正在跑的那条消息的**末行**承载
+                      // 它，其余行收敛到稳定空值让 memo 浅比较恒命中。
+                      liveRetry={
+                        row.isLastOfMessage && row.messageId === liveMessageId
+                          ? liveRetry
+                          : null
+                      }
+                      // 同上：只有正在跑的那条消息的**末行**画 meta，其余行收敛到
+                      // 稳定空值。
+                      liveTurn={
+                        row.isLastOfMessage && row.messageId === liveMessageId
+                          ? liveTurn
+                          : null
+                      }
+                      // 「这一轮此刻在不在跑」如实交给包（共享包 0db63218 起的入参）。
+                      // 包原本从 `liveBlocks !== undefined || liveTail 非空` 反推运行态,
+                      // 那说的是「宿主有没有喂还没落库的内容」—— 桌面端恰好恒真,本站
+                      // 没有这条分界（liveBlocks 恒 undefined）、活动块当末行时正文又
+                      // 不在流,两个条件同时为假,于是活动块在这一端永远不自动展开。
+                      // 这一格给的是**轮次级**事实,「是不是这一轮的末行」仍归行模型。
+                      turnRunning={row.messageId === liveMessageId}
+                      showIndicator={
+                        row.isLastOfMessage &&
+                        streaming &&
+                        row.messageId === lastAssistantId
+                      }
+                      compacting={false}
+                      reconnecting={reconnecting}
+                      fallbackModel={fallbackModel}
+                    />
+                  )}
                 </div>
               );
             })}

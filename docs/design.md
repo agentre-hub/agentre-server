@@ -131,7 +131,9 @@ shipped by the shared package):
 What stays legitimate, because the lines carry meaning: the focus ring
 (`focus-visible:focus-outline`, `focus-outline-inset`), the unchecked edge of a checkbox,
 radio or switch (`border-control-border`), a status colour bar (`border-l-2
-border-l-status-running`) and a drag-and-drop target (`border-dashed border-ring`) — none
+border-l-status-running`), a drag-and-drop target (`border-dashed border-ring`) and the
+"sending…" message that has left the browser but whose echo has not arrived yet
+(`PendingSendBubble state="sending"`: `border-dashed border-muted-foreground/40`) — none
 of these is a divider colour, so the rules do not see them. A genuine keeper the class
 table cannot recognise gets `// eslint-disable-next-line no-restricted-syntax -- <reason>`
 on the line; the reason is mandatory. Tests and `eslint-rules/` are exempt, as for the other
@@ -827,6 +829,13 @@ bottom 888).
   `location.state`. The back button and system `popstate` both close only the layer and keep
   the conversation tabs; closing the last tab pops that entry. A stale marker with no tabs
   counts as closed. Desktop keeps the 420px right column and adds no history entries.
+  A message you just sent is in the transcript at once, before `runtime.run` answers: its
+  row is drawn by `PendingSendBubble state="sending"` (through `Transcript`'s
+  `sendingRow`), the typing dots follow it and the header turns Running. The machine's
+  `user_message` echo takes the same row, so the message keeps its place and is never shown twice; a
+  failed send turns it into the failure bubble and withdraws the dots and Running. That
+  bubble and the queued one use the real user message's alignment: the end side on a
+  phone, the start side on desktop.
 - **Composer** (`SessionComposerBand`, `shrink-0 px-5 pt-2 pb-3`) — no top border and no
   background of its own: it shares the sheet with the transcript, and a short fade from
   `sheet` above it says "there is more below" when the transcript is not scrolled to the
@@ -1453,7 +1462,8 @@ as a look-alike display element taken out of the focus order.
 accessible name must not change with the sidebar's width.
 
 **Announce by urgency.** In-place, non-urgent state uses `role="status"`
-(`PendingSendBubble`, `DecisionPanel`, the composer's model and effort controls, and
+(`PendingSendBubble` in both states, so a screen reader reads "Sending…" or "Will send
+once connected" with the message, `DecisionPanel`, the composer's model and effort controls, and
 `SessionConnectionIndicator`, which adds `aria-live="polite"`). A failure uses
 `role="alert"` (`SendFailureBubble`, `DraftSession`, `Issues`, `Org`, `ChatIndexPanel`).
 When the change has no visible text of its own, add an `sr-only` announcer, as

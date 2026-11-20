@@ -195,6 +195,23 @@ export interface SessionSendParams {
    * 那一行说的也是同一件事——这一轮刚由这个浏览器开起来。
    */
   onOwnTurnStarted?: () => void;
+  /**
+   * 这一屏转录此刻画到的最大 seq。「发送中」那一条记下按发送那一刻的值，回声认的是
+   * 它之后才到的那一帧 `user_message`（见 `SendingMessage.afterSeq`）。只在发送那一
+   * 刻读。缺省 0。
+   */
+  transcriptSeq?: () => number;
+}
+
+/**
+ * 自己刚发出去、回声还没到的那一条（弱网规格 2026-11-20 决策 12）。
+ *
+ * 它不进 `events`，理由与失败气泡同一条：那一份是对端说过的话。详情视图把它接在
+ * 投影出来的转录末尾，三点挂在它之后；回声一到就让位给正式那条。
+ */
+export interface SendingMessage extends ChatComposerSubmit {
+  /** 发送那一刻转录画到的 seq。seq 比它大的 `user_message` 帧才是这一条的回声。 */
+  afterSeq: number;
 }
 
 /** 详情视图从这一族拿到的东西。 */
@@ -203,6 +220,8 @@ export interface SessionSend {
   sending: boolean;
   /** 排着队等连接的那一条（决策 6）。 */
   pendingSend: ChatComposerSubmit | null;
+  /** 已经发出去、回声还没到的那一条（弱网决策 12）。 */
+  sendingMessage: SendingMessage | null;
   /** 用户自己撤掉排着的那一条。 */
   cancelPendingSend: () => void;
   /** 没发出去的那些消息（决策 7）。 */
@@ -256,6 +275,7 @@ export function useSessionSend({
   setPinnedAgentredUnavailable,
   steerQueue,
   onOwnTurnStarted,
+  transcriptSeq = () => 0,
 }: SessionSendParams): SessionSend {
   const { turnActiveRef, markTurnActive, setPendingAssistant } = turn;
   const [sending, setSending] = useState(false);
@@ -276,12 +296,26 @@ export function useSessionSend({
   const [pendingSend, setPendingSend] = useState<ChatComposerSubmit | null>(
     null,
   );
+  /**
+   * 发出即见的那一条（弱网决策 12）。只在开新一轮的那条路上挂：插话那条由
+   * steerQueue 的 chip 当场承载，再挂一份就是同一句话出两遍。
+   *
+   * 发送成功后**不**清：回声常常晚于 run 的应答，先清掉的话这句话会在两者之间的
+   * 缝里消失一下。何时让位由详情视图按回声判（见那里的 `sendingShown`）。
+   */
+  const [sendingMessage, setSendingMessage] = useState<SendingMessage | null>(
+    null,
+  );
 
   const targetChanged = useTargetChanged(did, sid, originProp);
   if (targetChanged) {
     // 失败气泡属于**那一条**会话：换一条不该还挂着上一条没发出去的字。
     setFailedSends([]);
     setPendingSend(null);
+    setSendingMessage(null);
+    // 发出即见那一下是这里点亮的「在跑」（见 sendRouted）：它属于上一条会话，这里
+    // 自己收回，不指望调用方恰好也重置了轮次状态。reset 只动这一屏的两格，渲染期可调。
+    turn.reset();
     // 上一条那次发送还在飞，而它的结果从此不再写这里的任何状态（见下面的守卫）
     // ——包括 finally 里那次 setSending(false)。不在这里放下，新会话的输入框会
     // 顶着一个永远转不完的发送键。
@@ -410,11 +444,30 @@ export function useSessionSend({
         onOwnTurnStarted?.();
       }
     };
+    /*
+      发出即见（弱网决策 12）：开新一轮的这条路上，不等 run 应答就把这条摆出来、
+      点亮三点与头部的 Running。弱网下这一两秒里用户此前看不到任何东西，分不清
+      发没发出去。
+
+      在**选路之后**才点亮：`running` 已经按此刻的 ref 读过了，这里改它不影响这一次
+      的路由。失败时（被拒 / 没发出去 / 断开）一并撤回 —— 撤回的就是这里点亮的那
+      一份，此前它是灭的（`running` 为假才走到这一支）。
+     */
+    if (!running) {
+      setSendingMessage({ ...message, afterSeq: transcriptSeq() });
+      markTurnActive(true);
+      setPendingAssistant(true);
+    }
     try {
       await (running ? steerTurn(c, body) : startTurn(c, message));
       noteStarted(!running);
       return;
     } catch (err) {
+      if (!running && stillHere()) {
+        setSendingMessage(null);
+        markTurnActive(false);
+        setPendingAssistant(false);
+      }
       // 只有对端真的收到并拒绝了，才值得换一条路重试。请求没走到对端（传输失败）
       // 时不回落：它可能已经送达，重发会多出一条消息。
       if (classifySendFailure(err).kind !== "rejected") throw err;
@@ -675,6 +728,7 @@ export function useSessionSend({
   return {
     sending,
     pendingSend,
+    sendingMessage,
     cancelPendingSend,
     failedSends,
     sendMessage,

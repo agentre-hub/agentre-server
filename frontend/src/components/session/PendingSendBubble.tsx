@@ -23,22 +23,65 @@ import SendAttachments from "@/components/session/SendAttachments";
  * 右对齐气泡（`max-w-[84%] self-end`），而它就站在转录流里紧挨着真消息 —— 于是
  * 「我刚敲进去的那句」与「已经发出去的那句」在同一列里长得不是一个东西。
  *
- * 只有**外壳**换了。「这条还没发出去」靠虚线边与那行小字说，不靠位置说。
+ * 只有**外壳**换了。「这条还没发出去」靠那行小字说，不靠位置说。
+ *
+ * 两档（弱网规格 2026-11-20 决策 12 / 13）：
+ *   - `queued` —— 排着队等连接 / 等清单，旁边有「撤销」。
+ *   - `sending` —— 已经发出去、回声还没到。它站在转录**里面**（见 Transcript 的
+ *     `sendingRow`），三点挂在它之后；回声一到正式那条落在同一格。没有「撤销」：
+ *     请求已经离手了。靠虚线边与「发送中…」说「还在路上」。
+ *
+ * 对齐由宿主给（`align`），与真用户消息同一个判据：手机上真消息排在尾侧，这两条
+ * 跟着；桌面不传，与真消息一样在起始侧。
  */
 export default function PendingSendBubble({
   text,
   images,
   onCancel,
+  state = "queued",
+  align,
 }: {
   text: string;
   /** 排着的这条带着的图。不摆的话它在屏幕上看着是一条纯文本消息。 */
   images?: readonly ChatImageAttachment[];
-  onCancel: () => void;
+  /** 撤掉排着的那一条。`sending` 那一档不用它（已经离手，撤不回来）。 */
+  onCancel?: () => void;
+  state?: "queued" | "sending";
+  /** 与真用户消息同一个对齐（手机 `end`）。不传 = 起始侧。 */
+  align?: "start" | "end";
 }) {
   const { t } = useTranslation();
+  if (state === "sending") {
+    return (
+      <ChatMessage
+        variant="user"
+        author=""
+        avatar={null}
+        time=""
+        align={align}
+        // 读屏读得到「发送中…」与那段字（无障碍那一条）。
+        role="status"
+        data-testid="send-sending"
+      >
+        {/* 虚线边：说「还在路上」。颜色取 muted-foreground —— 分隔线色一族
+            （border-border）是结构线，lint 拦它，也不是这里要说的意思。 */}
+        <div className="rounded-lg border border-dashed border-muted-foreground/40 px-3 py-2">
+          <p className="mb-1 text-2xs font-medium text-muted-foreground">
+            {t("session.sendPending.sending")}
+          </p>
+          <SendAttachments images={images} />
+          {/* 用户自己写的那段字。动态内容，不进 t(...)。 */}
+          <p className="whitespace-pre-wrap break-words text-foreground">
+            {text}
+          </p>
+        </div>
+      </ChatMessage>
+    );
+  }
   return (
     <ChatMessage
       variant="user"
+      align={align}
       // author / avatar 在 user 档上不被使用（包自己画中性的「我」），但类型上是
       // 必填。传空串而不是编一个名字：这一行本来就没有「谁说的」这个问题。
       author=""

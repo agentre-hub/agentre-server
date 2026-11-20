@@ -153,3 +153,61 @@ describe("排队与失败那两条：外壳与真用户消息同源", () => {
     expect(succeeded).not.toHaveBeenCalled();
   });
 });
+
+/*
+  弱网规格 2026-11-20 决策 12 / 13：「还不是正式消息」的那一条与真用户消息同一形态
+  —— 同一个消息外壳、同一列对齐，区别只在边与小字。发送中那一档靠虚线边说「还在
+  路上」；虚线不能用分隔线色（docs/design.md「Structural lines」）。
+*/
+describe("发送中那一条：与真用户消息同列，虚线边 + 小字", () => {
+  it("Given 发送中, When 渲染, Then 读屏读得到「发送中」、没有撤销、边是非分隔线色的虚线", () => {
+    render(
+      <PendingSendBubble state="sending" text="deploy" onCancel={() => {}} />,
+    );
+
+    const row = screen.getByTestId("send-sending");
+    expect(row.getAttribute("role")).toBe("status");
+    expect(row.textContent).toContain("Sending…");
+    expect(within(row).getByText("deploy")).toBeTruthy();
+    expect(meAvatarIn(row)).toBeTruthy();
+    // 已经发出去了，没有「撤销」可言。
+    expect(within(row).queryByTestId("send-pending-cancel")).toBeNull();
+    const classes = [row, ...Array.from(row.querySelectorAll("*"))].flatMap(
+      (el) => Array.from(el.classList),
+    );
+    expect(classes).toContain("border-dashed");
+    // 分隔线色一族（border-border / border-*-border）不许出现。
+    expect(classes.some((c) => /^border-(?:.+-)?border(?:\/|$)/.test(c))).toBe(
+      false,
+    );
+  });
+
+  it("Given 手机那一档对齐, When 渲染发送中与排队那两条, Then 都排在尾侧，排队那条仍可撤销", () => {
+    render(
+      <>
+        <PendingSendBubble
+          state="sending"
+          align="end"
+          text="a"
+          onCancel={() => {}}
+        />
+        <PendingSendBubble align="end" text="b" onCancel={() => {}} />
+      </>,
+    );
+
+    expect(screen.getByTestId("send-sending").getAttribute("data-align")).toBe(
+      "end",
+    );
+    const queued = screen.getByTestId("send-pending");
+    expect(queued.getAttribute("data-align")).toBe("end");
+    expect(queued.textContent).toContain("Will send once connected");
+    expect(within(queued).getByTestId("send-pending-cancel")).toBeTruthy();
+  });
+
+  it("Given 不给对齐（桌面）, When 渲染, Then 跟真用户消息一样在起始侧", () => {
+    render(<PendingSendBubble state="sending" text="a" onCancel={() => {}} />);
+    expect(
+      screen.getByTestId("send-sending").getAttribute("data-align"),
+    ).toBeNull();
+  });
+});

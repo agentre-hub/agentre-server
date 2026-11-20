@@ -1,5 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
+  EventImage,
   EventSteerConsumed,
   EventUserMessage,
   sessionListFromProtobuf,
@@ -1682,7 +1683,62 @@ export default function SessionDetailView({
     steerQueue,
     // 自己开的这一轮，起点就是此刻 —— 那条 meta 的耗时从这里开始走。
     onOwnTurnStarted: () => liveTurn.beginTurn(Date.now()),
+    // 「发送中」那一条的回声判据从这一刻的 seq 算起。只在发送那一刻读（提交后快照）。
+    transcriptSeq: () => {
+      let shown = 0;
+      for (const f of eventsRef.current) {
+        if (f.seq !== undefined && f.seq > shown) shown = f.seq;
+      }
+      return shown;
+    },
   });
+
+  /**
+   * 「发送中」那一条此刻还该不该摆（弱网决策 12）。
+   *
+   * 让位的判据是**回声**：发送那一刻之后到的一帧 `user_message`（持久与预览两路都
+   * 认，见 `framesForProjection`）—— 它就是这一条的正式版本，再摆一次就是同一句话
+   * 说两遍。只贴图不打字的那一条没有 `user_message`，回声是它的附件帧（共享包
+   * frames.ts 的 openUserMessage），一并认。预览帧不带 seq，它们本来就只活在这一轮
+   * 里，按「之后到的」算。
+   *
+   * 另一个出口是这一轮已经不在跑、请求也不在飞：回声没来而这一轮已经结束（或被
+   * 撤回），继续说「发送中」就是在替远端撒谎。
+   */
+  const sendingShown = useMemo(() => {
+    const pending = send.sendingMessage;
+    if (!pending || !(send.sending || running)) return false;
+    return !framesForProjection.some((f) => {
+      const kind = (f.event as { kind?: string } | undefined)?.kind;
+      return (
+        (kind === EventUserMessage || kind === EventImage) &&
+        (f.seq === undefined || f.seq > pending.afterSeq)
+      );
+    });
+  }, [send.sendingMessage, send.sending, running, framesForProjection]);
+  /**
+   * 交给转录那一份：投影出来的 + 「发送中」那一条接在末尾。
+   *
+   * 编号取末尾的下一个：投影器给消息的编号就是它在转录里的次序，回声落地后正式那
+   * 条拿到的正是这一个 —— 行 key 不变，虚拟器的测量接得上，位置不跳。
+   */
+  const transcriptMessages = useMemo(() => {
+    const pending = send.sendingMessage;
+    if (!pending || !sendingShown) return messages;
+    const nextId = messages.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+    return [
+      ...messages,
+      {
+        ...pendingUserMessage(
+          pending.text,
+          TranscriptSessionId,
+          pending.images,
+        ),
+        id: nextId,
+        seq: messages.at(-1)?.seq ?? 0,
+      },
+    ];
+  }, [messages, send.sendingMessage, sendingShown]);
 
   /*
     轮末插话的去向。它要 `send.sendMessage`，所以只能排在这里（发送那一族之后）；
@@ -2130,7 +2186,10 @@ export default function SessionDetailView({
       handedOver={handedOverText}
       ready={ready}
       catchUpFailed={catchUpFailed}
-      messages={messages}
+      messages={transcriptMessages}
+      sendingMessageId={
+        sendingShown ? transcriptMessages.at(-1)?.id : undefined
+      }
       localFingerprint={relayTicket?.peerFingerprint}
       agentName={agent?.name}
       agentAvatar={rowAvatar}

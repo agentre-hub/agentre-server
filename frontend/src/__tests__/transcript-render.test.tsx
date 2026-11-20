@@ -627,3 +627,61 @@ describe("Transcript 的重试提示", () => {
     expect(retryCard()).toBeNull();
   });
 });
+
+/*
+  弱网规格 2026-11-20 决策 12：自己刚发出去、回声还没到的那一条站在转录**里面**，
+  三点挂在它之后 —— 回声一到，正式那条落在同一格上，不换位置、不出两条。宿主把
+  那一格画成什么由它自己给（发送中的虚线气泡），行模型与测量照旧归这里。
+*/
+describe("Transcript 的发送中那一格", () => {
+  it("给定 sendingRow 指着末条用户消息，当渲染，则那一格画宿主给的节点，三点排在它之后", () => {
+    const messages = reduceFrames(
+      [
+        f({ kind: "user_message", text: "上一句" }),
+        f({ kind: "text_delta", text: "上一轮说完了" }),
+        f({ kind: "done" }),
+        f({ kind: "user_message", text: "刚发的" }),
+      ],
+      1,
+    );
+    const last = messages.at(-1)!;
+
+    render(
+      <Transcript
+        messages={messages}
+        sessionId={1}
+        streaming
+        pendingAssistant
+        sendingRow={{
+          messageId: last.id,
+          node: <div data-testid="sending-node">发送中的那一条</div>,
+        }}
+      />,
+    );
+
+    const node = screen.getByTestId("sending-node");
+    // 包那一行不再画：同一句话不出两遍。
+    expect(screen.queryByText("刚发的")).toBeNull();
+    // 其余消息照旧。
+    expect(screen.getByText("上一轮说完了")).toBeTruthy();
+    // 节点在测量外层里（虚拟器靠它认行）。
+    expect(node.closest("[data-row-pad]")).toBeTruthy();
+    const typing = screen.getByRole("status", { name: "Generating" });
+    expect(
+      node.compareDocumentPosition(typing) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("给定没有 sendingRow，当渲染，则末条用户消息照常由包画", () => {
+    render(
+      <Transcript
+        messages={reduceFrames(
+          [f({ kind: "user_message", text: "刚发的" })],
+          1,
+        )}
+        sessionId={1}
+      />,
+    );
+    expect(screen.getByText("刚发的")).toBeTruthy();
+  });
+});

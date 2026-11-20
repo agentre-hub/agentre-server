@@ -881,7 +881,7 @@ describe("会话详情页", () => {
     });
   });
 
-  it("发送在途：提交键转成 spinner，输入框不再整块禁用", async () => {
+  it("发送在途：那句话以「发送中」立刻出现，输入框不再整块禁用", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
       throw new Error("unexpected: " + path);
@@ -899,10 +899,12 @@ describe("会话详情页", () => {
     await screen.findByText(/重构登录页/);
     await sendInComposer("把按钮改成蓝色");
 
-    // 这段窗口里用户那句话在转录里还不存在（要等 daemon 的 user_message 回声过一个
-    // 往返），三点也要等 runtime.run 应答才点亮。此前 sending 被折进 disabled：
-    // 输入框被清空并整块禁用，屏幕上一个字都没有他刚说的话。
-    await waitFor(() => expect(screen.getByLabelText("Sending…")).toBeTruthy());
+    // 这段窗口里 daemon 的 user_message 回声还没回来。此前 sending 被折进 disabled：
+    // 输入框被清空并整块禁用，屏幕上一个字都没有他刚说的话。现在（弱网决策 12）
+    // 那句话立刻以「发送中」站在转录里，这一轮也立刻算在跑 —— 提交位让给「停止」，
+    // 与真在跑时一样；输入框照旧不整块禁用。
+    const bubble = await screen.findByTestId("send-sending");
+    expect(within(bubble).getByText("把按钮改成蓝色")).toBeTruthy();
     expect(composerDisabled()).toBe(false);
   });
 
@@ -10206,5 +10208,219 @@ describe("会话详情：清单与转录并行（弱网决策 10 / 11）", () =>
     expect(bubble.textContent).toContain("这条对话不在机器上");
     expect(screen.queryByTestId("send-pending")).toBeNull();
     expect(runCalls().length).toBe(0);
+  });
+});
+
+/*
+  弱网规格 2026-11-20 决策 12「发出即见」：按下发送，这条立刻以「发送中」站在转录
+  末尾，三点挂在它之后、头部翻成 Running —— 不等 runtime.run 应答，也不等回声。
+  回声一到它就是正式那条：同一格、只有一条。run 被拒时它变成「拒绝」失败气泡，
+  三点与 Running 一起撤回；一个字节都没发出去时同样撤回，归「还没发出去」。
+*/
+describe("会话详情：发出即见（弱网决策 12）", () => {
+  function deferred<T = unknown>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function wire(onSend: (method: unknown) => unknown) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return onSend(method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮说完了" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done" },
+        seq: 2,
+      });
+    });
+  }
+
+  const typing = () => screen.queryByRole("status", { name: "Generating" });
+  const statusText = () =>
+    screen.getByTestId("session-detail-status").textContent;
+
+  async function openAndSend(text: string) {
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+    await sendInComposer(text);
+  }
+
+  it("Given 空闲会话 When 发送而 run 还没应答 Then 这条以「发送中」站在转录末尾，三点在它之后，头部已是 Running", async () => {
+    const run = deferred();
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return run.promise;
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+
+    const bubble = await screen.findByTestId("send-sending");
+    expect(bubble.getAttribute("role")).toBe("status");
+    expect(bubble.textContent).toContain("Sending…");
+    expect(within(bubble).getByText("再改一处")).toBeTruthy();
+    // 在转录里面，不是挂在转录下面的另一块。
+    expect(
+      bubble.closest('[data-testid="session-detail-transcript"]'),
+    ).toBeTruthy();
+    // 桌面上真用户消息在起始侧，它跟着。
+    expect(bubble.getAttribute("data-align")).toBeNull();
+    const dots = typing();
+    expect(dots).toBeTruthy();
+    expect(
+      bubble.compareDocumentPosition(dots!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(statusText()).toContain("Running");
+
+    await act(async () => run.resolve({}));
+  });
+
+  it("Given 发送中 When 回声到达 Then 换成正式那条：同一格、只有一条，三点还在", async () => {
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+
+    const bubble = await screen.findByTestId("send-sending");
+    const slot = bubble
+      .closest("[data-message-id]")
+      ?.getAttribute("data-message-id");
+    expect(slot).toBeTruthy();
+    // run 已经应答过了：回声还没到，这一条仍在「发送中」，不先消失。
+    await waitFor(() => expect(statusText()).toContain("Running"));
+    expect(screen.getByTestId("send-sending")).toBeTruthy();
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "user_message",
+          text: "再改一处",
+          sourceDevice: "fp-web",
+        },
+        seq: 3,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-sending")).toBeNull(),
+    );
+    const shown = screen.getAllByText("再改一处");
+    expect(shown).toHaveLength(1);
+    expect(
+      shown[0].closest("[data-message-id]")?.getAttribute("data-message-id"),
+    ).toBe(slot);
+    expect(typing()).toBeTruthy();
+  });
+
+  // 只贴图不打字的那一条没有 `user_message` 帧：回声就是那一帧附件（共享包
+  // frames.ts 的 openUserMessage）。只认 user_message 的话正式那条落地了、这条还挂着。
+  it("Given 只贴了图 When 回声（附件帧）到达 Then 也让位，不出两条", async () => {
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    });
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+    await awaitComposer();
+    fireEvent.change(
+      screen.getByLabelText("Add image", { selector: "input" }),
+      {
+        target: {
+          files: [
+            new File([new Uint8Array([1, 2, 3])], "shot.png", {
+              type: "image/png",
+            }),
+          ],
+        },
+      },
+    );
+    await screen.findByAltText("shot.png");
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+    await screen.findByTestId("send-sending");
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "image",
+          mediaType: "image/png",
+          source: { inline: "AQID" },
+        },
+        seq: 3,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-sending")).toBeNull(),
+    );
+    expect(
+      screen
+        .getAllByRole("img")
+        .filter(
+          (el) => el.getAttribute("src") === "data:image/png;base64,AQID",
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("Given 发送中 When run 被拒（回落的 steer 也被拒）Then 变成「拒绝」失败气泡，三点与 Running 撤回", async () => {
+    const run = deferred();
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) return run.promise;
+      if (m === rpcMethods.runtimeSteer)
+        throw new RelayError(-32603, "该后端不支持插话", {
+          code: -32603,
+          message: "该后端不支持插话",
+        });
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+    await screen.findByTestId("send-sending");
+    expect(typing()).toBeTruthy();
+
+    await act(async () => run.reject(busyError()));
+
+    const failure = await screen.findByTestId("send-failure");
+    expect(failure.getAttribute("data-failure-kind")).toBe("rejected");
+    expect(within(failure).getByText("再改一处")).toBeTruthy();
+    expect(screen.queryByTestId("send-sending")).toBeNull();
+    await waitFor(() => expect(typing()).toBeNull());
+    expect(statusText()).toContain("Idle");
+  });
+
+  it("Given 一个字节都没发出去 When 发送 Then 「还没发出去」气泡，三点与 Running 撤回", async () => {
+    wire((m) => {
+      if (m === rpcMethods.runtimeRun) {
+        const err = new RelayError(-1, "relay: 连接未就绪", null);
+        err.notSent = true;
+        throw err;
+      }
+      throw new Error("unexpected: " + m);
+    });
+    await openAndSend("再改一处");
+
+    const failure = await screen.findByTestId("send-failure");
+    expect(failure.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(screen.queryByTestId("send-sending")).toBeNull();
+    await waitFor(() => expect(typing()).toBeNull());
+    expect(statusText()).toContain("Idle");
   });
 });

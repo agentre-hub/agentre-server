@@ -1563,3 +1563,59 @@ describe("移动端会话里的文件预览：整屏一层", () => {
     expect(marked()).toBe(false);
   });
 });
+
+/*
+  弱网规格 2026-11-20 决策 13：手机上真用户消息排在右侧（#38），「发送中」与「排队」
+  那两条跟它同一列 —— 区别只在边与小字，不在位置。
+*/
+describe("移动端会话详情：还不是正式消息的那两条与真消息同列", () => {
+  function stubSend(onRun: () => unknown) {
+    stubApi();
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return onRun();
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  function editorEl(): HTMLElement & {
+    editor?: { commands: { setContent: (h: string) => void } };
+  } {
+    return screen
+      .getByTestId("session-composer-band")
+      .querySelector(".ProseMirror") as never;
+  }
+
+  async function send(text: string) {
+    await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
+    act(() => editorEl().editor?.commands.setContent(`<p>${text}</p>`));
+    fireEvent.click(await screen.findByTestId("session-detail-send"));
+  }
+
+  it("发送中那一条：右对齐，在转录里", async () => {
+    mockMobileViewport();
+    stubSend(() => new Promise(() => {}));
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先看看日志");
+
+    const bubble = await screen.findByTestId("send-sending");
+    expect(bubble.getAttribute("data-align")).toBe("end");
+    expect(
+      bubble.closest('[data-testid="session-detail-transcript"]'),
+    ).toBeTruthy();
+  });
+
+  it("重连期间排着的那一条：右对齐，「撤销」还在", async () => {
+    mockMobileViewport();
+    stubSend(() => ({}));
+    renderPage({ relayState: "reconnecting" });
+    await send("连上再发");
+
+    const queued = await screen.findByTestId("send-pending");
+    expect(queued.getAttribute("data-align")).toBe("end");
+    expect(within(queued).getByTestId("send-pending-cancel")).toBeTruthy();
+  });
+});
