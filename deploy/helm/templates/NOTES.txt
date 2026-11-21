@@ -1,8 +1,8 @@
 agentre-server 已部署为 release {{ .Release.Name }}（namespace {{ .Release.Namespace }}）。
 
-{{- if .Values.ingress.enabled }}
+{{- if .Values.httpRoute.enabled }}
 
-  http{{ if .Values.ingress.tlsSecretName }}s{{ end }}://{{ .Values.ingress.host }}
+  https://{{ .Values.httpRoute.host }}
 {{- end }}
 
 配置来自 etcd：{{ .Values.etcdConfig.prefix }}/{{ .Values.appConfig.env }}/agentre-server/

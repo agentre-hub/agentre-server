@@ -47,29 +47,26 @@ service:
 # 与 etcd 里 http.address 的端口保持一致
 containerPort: 8443
 
-ingress:
+# Gateway API 路由：挂到 gateway 命名空间的 Gateway public（由 codfrm/k3s-deployment 的 gateway/ 管理）
+# 证书在网关上按 SNI 选（gateway 命名空间的 agentrehub-com-tls / fw-agentrehub-com-tls），chart 不再引用证书。
+# HSTS（max-age=31536000; includeSubDomains）由网关全局下发，端口转发子域加固依赖它。
+# 超时：网关 entryPoint 不限读超时、空闲 600s，覆盖原来 nginx 的 3600s 读写超时。
+httpRoute:
   enabled: true
-  className: k3s-main-nginx
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: 10m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-  # 标量不是列表：--set 打到列表下标会替换整个元素，把 secretName 冲成空
+  gateway:
+    name: public
+    namespace: gateway
+  # 同时挂 http 和 https：Cloudflare Flexible 用 HTTP 回源 80，
+  # 直接访问 http 的请求由网关按 X-Forwarded-Proto 统一 301 到 https
+  sectionNames:
+    - http
+    - https
+  # 标量不是列表：--set 打到列表下标会替换整个元素
   host: app.agentrehub.com
-  # 置空则不生成 TLS 块
-  tlsSecretName: agentrehub-com-tls
-  # HSTS 由本 chart 显式下发（configuration-snippet 的 more_set_headers 会替换控制器
-  # 默认的那一条，不会出现两条）。includeSubDomains 是端口转发子域加固的一环：同站
-  # 子域一律只走 https。置空则不下发、退回控制器自己的缺省。依赖控制器开着
-  # allow-snippet-annotations。
-  hsts: "max-age=31536000; includeSubDomains"
-  # 端口转发子域（spec 2026-09-21-port-forward-subdomain 决策 4）：通配 host 与它
-  # 自己的 TLS secret（通配证书走 DNS-01 签，通配 DNS 也要先配好——都是部署前提）。
+  # 端口转发子域（spec 2026-09-21-port-forward-subdomain 决策 4）：通配 host（通配证书和通配 DNS 是部署前提）。
   # 与 etcd 里的 server.port_forward.base_domain 成对：host 是 "*." + base_domain。
-  # 置空则不挂转发域。例：forwardHost: "*.fw.agentrehub.com"，
-  # forwardTlsSecretName: fw-agentrehub-com-tls
+  # 置空则不挂转发域。例：forwardHost: "*.fw.agentrehub.com"
   forwardHost: ""
-  forwardTlsSecretName: ""
 
 resources:
   limits:

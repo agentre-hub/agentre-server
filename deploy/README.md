@@ -66,7 +66,7 @@ helm upgrade --install agentre-server ./deploy/helm \
 
 Chart 只部署 server。除 ConfigMap 中的 etcd 引导信息外，其余配置必须预先写入 `/config/<env>/agentre-server/`；缺键不会回退默认值。用 `helm status`、`kubectl get pods` 和 `/v1/healthz` 验证。模板见 [`helm/values.yaml`](helm/values.yaml)。
 
-Ingress 默认下发 HSTS `max-age=31536000; includeSubDomains`（`ingress.hsts`，经 `configuration-snippet` 的 `more_set_headers`，需要控制器开着 `allow-snippet-annotations`；置空则退回控制器自己的缺省）。端口转发子域要挂在同一个 Ingress 上：`--set-string ingress.forwardHost='*.fw.agentrehub.com' --set-string ingress.forwardTlsSecretName=<通配证书 secret>`，并在 etcd 里配 `server.port_forward.base_domain`（与 host 去掉 `*.` 一致）；两者都不配则不提供转发。通配证书（DNS-01）与通配 DNS 是部署前提，不由 chart 创建。dev 上的转发域是 `*.fw.agentre.docker.local`，由 docker.local 上的 AdGuard 解析，同样要在 etcd 的 dev 配置里写 `base_domain`。
+路由用 Gateway API HTTPRoute（`templates/httproute.yaml`），挂到集群入口 Gateway `gateway/public`（Traefik，由 codfrm/k3s-deployment 的 `gateway/` 管理）。证书按 SNI 在网关上选，chart 不再引用证书 secret；HSTS `max-age=31536000; includeSubDomains` 由网关全局下发。端口转发子域挂在同一条路由上：`--set-string httpRoute.forwardHost='*.fw.agentrehub.com'`，并在 etcd 里配 `server.port_forward.base_domain`（与 host 去掉 `*.` 一致）；两者都不配则不提供转发。通配证书（DNS-01，放在 gateway 命名空间并加进 Gateway 的 certificateRefs）与通配 DNS 是部署前提，不由 chart 创建。dev 上的转发域是 `*.fw.agentre.docker.local`，由 docker.local 上的 AdGuard 解析，同样要在 etcd 的 dev 配置里写 `base_domain`。
 
 ## 镜像与流水线
 
