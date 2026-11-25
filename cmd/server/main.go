@@ -99,6 +99,12 @@ func main() {
 
 	err = cago.New(ctx, cfg).
 		Registry(component.Core()).
+		// protorpc 的日志来源必须紧跟 Core 交出:Core 装好 cago logger,而之后的
+		// 组件(RegisterDefaults 建的端口转发池与镜像连接)才会创建 protorpc 连接。
+		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
+			bootstrap.InstallProtorpcLogger()
+			return nil
+		})).
 		// trace 必须尽早注册：其余组件和 mux 中间件都会先判断 trace.Default()
 		// 是否存在再决定要不要接链路。放在 Core 之后、业务组件之前。
 		//
