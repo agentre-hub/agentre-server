@@ -1095,6 +1095,18 @@ under the mobile project, that is the assertion that catches a card sitting edge
 or a flex row that refuses to shrink. A desktop-only pass tells you nothing about mobile,
 and a jsdom unit test tells you nothing at all here: it computes no layout.
 
+### Touch tier and toasts on the phone
+
+`App` wraps the whole console in the package's `TouchProvider touch={isMobile}` (the same
+≤767px query that picks the phone shell), so the touch tier is on for the phone form and
+absent at desktop width. It turns on 44px / 15px menu rows, the pressed (darker) state on
+`Button` and focus returning to the trigger when a dialog closes. The long-press menu on a
+phone session row is the package's `ContextMenuContent`: its rows follow the tier, and it
+is meant to sit under the pressed row, right-aligned, with the row fully visible (the
+`anchorRef` input, which the package's `SessionRow` must pass for this to happen). Copy
+toasts no longer pick their own position; the host's `Toaster` does: `top-center` on the
+phone (a bottom toast would cover the composer for 5–7 seconds), `bottom-right` on desktop.
+
 ### PWA and the offline shell
 
 The console is installable. The whole surface is:

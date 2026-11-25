@@ -20,6 +20,7 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { SessionRow, TouchProvider } from "@agentre-hub/agentre-ui";
 import { OrgDetailHeader } from "@/pages/org/OrgDetailHeader";
 // 副作用 import：头部要 t() 才画得出触发按钮的可访问名，实例由这个模块建。
 import "@/i18n";
@@ -106,5 +107,42 @@ describe("行级菜单用共享包那一份", () => {
         screen.getByTestId("org-detail-menu-trigger"),
       ),
     );
+  });
+});
+
+/**
+ * 手机会话行的长按菜单（规格 I1）：控制台在手机形态套 TouchProvider，菜单行因此是
+ * 44px / 15px。jsdom 不算布局，量不了像素，这里钉的是包为触屏档写的那组类。
+ */
+describe("手机会话行的长按菜单", () => {
+  function openRowMenu(touch: boolean) {
+    render(
+      <TouchProvider touch={touch}>
+        <SessionRow
+          variant="phone"
+          sessionId="s1"
+          status="idle"
+          title="一条对话"
+          agent={{ name: "Claude" }}
+          onDeleteSession={vi.fn()}
+        />
+      </TouchProvider>,
+    );
+    fireEvent.contextMenu(screen.getByText("一条对话"));
+    return screen.getAllByRole("menuitem");
+  }
+
+  it("触屏档：菜单行 min-h-11、15px 字", () => {
+    const items = openRowMenu(true);
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.className).toContain("min-h-11");
+      expect(item.className).toContain("text-prose");
+    }
+  });
+
+  it("非触屏档：菜单行保持桌面尺寸", () => {
+    const items = openRowMenu(false);
+    for (const item of items) expect(item.className).not.toContain("min-h-11");
   });
 });

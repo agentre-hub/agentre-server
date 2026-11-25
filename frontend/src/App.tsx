@@ -1,4 +1,8 @@
-import { useAutoHideScrollbars, useTheme } from "@agentre-hub/agentre-ui";
+import {
+  TouchProvider,
+  useAutoHideScrollbars,
+  useTheme,
+} from "@agentre-hub/agentre-ui";
 import { useEffect } from "react";
 import {
   BrowserRouter,
@@ -68,115 +72,119 @@ export default function App() {
   useEffect(() => warmPages([ChatPage]), []);
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<HomeRedirect />} />
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/device"
-          element={
-            <RequireAuth>
-              <Device />
-            </RequireAuth>
-          }
-        />
-        <Route
-          // 设备号是**可选段**（与 /org 同一条做法）：手机上点一行逐层进入独立详情页
-          // （规格 2026-11-05 决策 15），列表与详情是同一个 Devices 实例，返回列表时
-          // 不重拉、不闪 loading。桌面宽度仍是原地展开，带设备号的地址回落到列表。
-          path="/devices/:deviceId?"
-          element={
-            <RequireAuth>
-              <Devices />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/devices/:deviceId/sessions"
-          element={
-            <RequireAuth>
-              <DeviceSessionsRedirect />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/overview"
-          element={
-            <RequireAuth>
-              <Overview />
-            </RequireAuth>
-          }
-        />
-        <Route
-          // 会话只经这一个地址寻址（规格 2026-09-17-chat-session-url）：可选的
-          // 会话号决定右栏（移动端是整屏）开着哪一条，同一个 Chat 实例接着用。
-          path="/chat/:conversationId?"
-          element={
-            <RequireAuth>
-              <ChatPage />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/issues"
-          element={
-            <RequireAuth>
-              <Issues />
-            </RequireAuth>
-          }
-        />
-        <Route
-          // 选中哪一行写在地址里：移动端下钻靠它让手机的返回键有用，深链接也因此
-          // 白拿（与会话地址 /chat/:conversationId 同一条做法）。
-          // 两段是**可选段**而不是另开一条 Route —— 分成两条的话，在「没选中」与
-          // 「选中了」之间导航会换掉 element，整个页面卸载重挂：useOrgData 重拉一遍，
-          // 并且闪一下 loading。一条路由则只是 params 变了。
-          path="/org/:kind?/:syncId?"
-          element={
-            <RequireAuth>
-              <Org />
-            </RequireAuth>
-          }
-        />
-        {/* /account 只从左下角用户菜单进（规格「用户菜单与 /account」）：受
+    // 触屏档（菜单行 44px、按钮按下加深、对话框关闭回焦点）只在手机形态打开，
+    // 桌面宽度保持包的默认形态。
+    <TouchProvider touch={isMobile}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<HomeRedirect />} />
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/device"
+            element={
+              <RequireAuth>
+                <Device />
+              </RequireAuth>
+            }
+          />
+          <Route
+            // 设备号是**可选段**（与 /org 同一条做法）：手机上点一行逐层进入独立详情页
+            // （规格 2026-11-05 决策 15），列表与详情是同一个 Devices 实例，返回列表时
+            // 不重拉、不闪 loading。桌面宽度仍是原地展开，带设备号的地址回落到列表。
+            path="/devices/:deviceId?"
+            element={
+              <RequireAuth>
+                <Devices />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/devices/:deviceId/sessions"
+            element={
+              <RequireAuth>
+                <DeviceSessionsRedirect />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/overview"
+            element={
+              <RequireAuth>
+                <Overview />
+              </RequireAuth>
+            }
+          />
+          <Route
+            // 会话只经这一个地址寻址（规格 2026-09-17-chat-session-url）：可选的
+            // 会话号决定右栏（移动端是整屏）开着哪一条，同一个 Chat 实例接着用。
+            path="/chat/:conversationId?"
+            element={
+              <RequireAuth>
+                <ChatPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/issues"
+            element={
+              <RequireAuth>
+                <Issues />
+              </RequireAuth>
+            }
+          />
+          <Route
+            // 选中哪一行写在地址里：移动端下钻靠它让手机的返回键有用，深链接也因此
+            // 白拿（与会话地址 /chat/:conversationId 同一条做法）。
+            // 两段是**可选段**而不是另开一条 Route —— 分成两条的话，在「没选中」与
+            // 「选中了」之间导航会换掉 element，整个页面卸载重挂：useOrgData 重拉一遍，
+            // 并且闪一下 loading。一条路由则只是 params 变了。
+            path="/org/:kind?/:syncId?"
+            element={
+              <RequireAuth>
+                <Org />
+              </RequireAuth>
+            }
+          />
+          {/* /account 只从左下角用户菜单进（规格「用户菜单与 /account」）：受
             RequireAuth 保护，但刻意不进 AppShell 的四项主导航。 */}
-        <Route
-          path="/account"
-          element={
-            <RequireAuth>
-              <Account />
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/settings"
-          element={
-            <RequireAuth>
-              <Settings />
-            </RequireAuth>
-          }
-        />
-        <Route path="/device/success" element={<DeviceSuccess />} />
-        <Route path="/device/denied" element={<DeviceDenied />} />
-        <Route path="/device/expired" element={<DeviceExpired />} />
-        <Route path="/terms" element={<ComingSoon page="terms" />} />
-        <Route path="/privacy" element={<ComingSoon page="privacy" />} />
-        <Route path="/status" element={<ComingSoon page="status" />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-      {/*
+          <Route
+            path="/account"
+            element={
+              <RequireAuth>
+                <Account />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <RequireAuth>
+                <Settings />
+              </RequireAuth>
+            }
+          />
+          <Route path="/device/success" element={<DeviceSuccess />} />
+          <Route path="/device/denied" element={<DeviceDenied />} />
+          <Route path="/device/expired" element={<DeviceExpired />} />
+          <Route path="/terms" element={<ComingSoon page="terms" />} />
+          <Route path="/privacy" element={<ComingSoon page="privacy" />} />
+          <Route path="/status" element={<ComingSoon page="status" />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+        {/*
         手机上 toast 落在顶部：贴底时它正好盖住输入框与发送 / 停止键，一挂 5–7 秒。
         `mobileOffset` 让开状态栏那条安全区（sonner 在窄视口下把 top-* 拍成贴顶全宽）。
         桌面照旧右下角。
       */}
-      <Toaster
-        position={isMobile ? "top-center" : "bottom-right"}
-        richColors
-        theme={effectiveTheme}
-        mobileOffset={{
-          top: "calc(8px + env(safe-area-inset-top, 0px))",
-        }}
-      />
-    </BrowserRouter>
+        <Toaster
+          position={isMobile ? "top-center" : "bottom-right"}
+          richColors
+          theme={effectiveTheme}
+          mobileOffset={{
+            top: "calc(8px + env(safe-area-inset-top, 0px))",
+          }}
+        />
+      </BrowserRouter>
+    </TouchProvider>
   );
 }
