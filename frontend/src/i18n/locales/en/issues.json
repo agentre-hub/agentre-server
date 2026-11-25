@@ -23,5 +23,7 @@
     "body": "Your edits to this task haven't been saved.",
     "keep": "Keep editing",
     "discard": "Discard"
-  }
+  },
+  "labelTimeoutUnchecked": "The network timed out. It may already have been created. Refresh the board to check.",
+  "labelTimeoutNotFound": "The network timed out and the label wasn't found. You can submit it again."
 }

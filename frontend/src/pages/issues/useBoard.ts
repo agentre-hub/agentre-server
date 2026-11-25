@@ -18,6 +18,8 @@ import type {
 } from "@agentre-hub/agentre-ui";
 
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import i18n from "@/i18n";
+import { ApiTimeoutError } from "@/lib/api";
 import {
   findSubmittedIssue,
   isFiltering,
@@ -266,9 +268,48 @@ export function useBoard(
   const mutateLabel = React.useCallback(
     async (mutation: LabelMutation) => {
       switch (mutation.kind) {
-        case "create":
-          await createIssueLabel({ name: mutation.name, tone: mutation.tone });
+        case "create": {
+          // 提交前的基线取内存里这份名单（不另发读，POST 不等任何东西）；板子还没读回来
+          // 时没有基线，超时后不敢认。
+          const knownBefore =
+            loadedKey === null
+              ? null
+              : new Set((response.labels ?? []).map((l) => l.sync_id));
+          try {
+            await createIssueLabel({
+              name: mutation.name,
+              tone: mutation.tone,
+            });
+          } catch (err) {
+            if (!(err instanceof ApiTimeoutError)) throw err;
+            // 超时：请求可能已经写进去了。重读全量名单（不带板子当前的筛选）认「新的 +
+            // 同名」，认出就当作建成，认不出才让用户再提交。文案不露英文原文。
+            let all: IssueBoardResponse | null;
+            try {
+              all = await fetchBoard("");
+            } catch (cause) {
+              throw new Error(i18n.t("issues.labelTimeoutUnchecked"), {
+                cause,
+              });
+            }
+            if (knownBefore === null) {
+              throw new Error(i18n.t("issues.labelTimeoutUnchecked"), {
+                cause: err,
+              });
+            }
+            const found = (all?.labels ?? []).some(
+              (l) =>
+                !knownBefore.has(l.sync_id) &&
+                l.name.trim() === mutation.name.trim(),
+            );
+            if (!found) {
+              throw new Error(i18n.t("issues.labelTimeoutNotFound"), {
+                cause: err,
+              });
+            }
+          }
           break;
+        }
         case "update":
           await updateIssueLabel(ids.syncIdOf(mutation.id), {
             name: mutation.name,
@@ -281,7 +322,7 @@ export function useBoard(
       }
       await reload();
     },
-    [ids, reload],
+    [ids, reload, loadedKey, response.labels],
   );
 
   return {
