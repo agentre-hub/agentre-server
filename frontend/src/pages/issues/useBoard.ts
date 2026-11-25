@@ -19,6 +19,7 @@ import type {
 
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import {
+  findSubmittedIssue,
   isFiltering,
   matchedTotal,
   projectCountOf,
@@ -39,6 +40,7 @@ import {
   updateIssue,
   updateIssueLabel,
   type IssueBoardResponse,
+  type IssueFields,
 } from "@/lib/issues";
 
 const EMPTY_RESPONSE: IssueBoardResponse = {
@@ -72,6 +74,11 @@ export interface UseBoardResult {
   /** 落库走 lib/issues 的 moveIssue：wire 那层是 issue,这一层对外一律 task。 */
   moveTask: (id: number, stage: BoardStage, afterId: number) => Promise<void>;
   saveTask: (value: TaskFormValue) => Promise<void>;
+  /**
+   * 新建超时之后：重读看板，认出上一次提交的那条（规则见 `findSubmittedIssue`）。
+   * 认出返回它摊回表单的值，认不出返回 `null`；重读本身失败则抛出，由调用方说出口。
+   */
+  findSubmitted: () => Promise<TaskFormValue | null>;
   deleteTask: (id: number) => Promise<void>;
   mutateLabel: (mutation: LabelMutation) => Promise<void>;
 }
@@ -99,6 +106,12 @@ export function useBoard(
   // 要在 effect 里同步拍下去的 state：查询变了而结果还没换，就是在途。
   const [loadedKey, setLoadedKey] = React.useState<string | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  // 板上已有的任务标识，随每次成功的读更新；新建提交时抓一份当「提交前」的基线。
+  const knownIdsRef = React.useRef<ReadonlySet<string>>(new Set());
+  const lastCreateRef = React.useRef<{
+    fields: IssueFields;
+    knownBefore: ReadonlySet<string>;
+  } | null>(null);
 
   /**
    * 真正打那一条读端点。写状态一律落在 promise 回调里（与 `useOrgData` 同一种形状）
@@ -110,16 +123,24 @@ export function useBoard(
     const key = JSON.stringify(queryRef.current);
     return fetchBoard(toBoardQueryString(queryRef.current, Date.now(), ids))
       .then((board) => {
-        if (request !== requestRef.current) return;
-        setResponse(board ?? EMPTY_RESPONSE);
-        setError(null);
-        setLoadedKey(key);
+        // 迟到的结果不写状态，但取回来的数据本身是真的，交给调用方用。
+        if (request === requestRef.current) {
+          setResponse(board ?? EMPTY_RESPONSE);
+          setError(null);
+          setLoadedKey(key);
+          knownIdsRef.current = new Set(
+            (board?.issues ?? []).map((row) => row.sync_id),
+          );
+        }
+        return { board: board ?? EMPTY_RESPONSE, cause: null };
       })
       .catch((cause: unknown) => {
-        if (request !== requestRef.current) return;
-        setError({ cause });
-        // 失败也要放行那枚转圈，否则它会一直转到下一次输入为止。
-        setLoadedKey(key);
+        if (request === requestRef.current) {
+          setError({ cause });
+          // 失败也要放行那枚转圈，否则它会一直转到下一次输入为止。
+          setLoadedKey(key);
+        }
+        return { board: null, cause };
       });
   }, [ids]);
 
@@ -190,12 +211,31 @@ export function useBoard(
       if (value.id) {
         await updateIssue(ids.syncIdOf(value.id), fields);
       } else {
+        lastCreateRef.current = { fields, knownBefore: knownIdsRef.current };
         await createIssue(fields);
       }
       await reload();
     },
     [ids, reload],
   );
+
+  const findSubmitted = React.useCallback(async () => {
+    const last = lastCreateRef.current;
+    setRefreshing(true);
+    try {
+      const { board, cause } = await runFetch();
+      if (!board) throw cause;
+      if (!last) return null;
+      const found = findSubmittedIssue(
+        board.issues ?? [],
+        last.fields,
+        last.knownBefore,
+      );
+      return found ? toTaskFormValue(found, ids) : null;
+    } finally {
+      setRefreshing(false);
+    }
+  }, [ids, runFetch]);
 
   const deleteTask = React.useCallback(
     async (id: number) => {
@@ -242,6 +282,7 @@ export function useBoard(
     retry: () => void reload(),
     moveTask,
     saveTask,
+    findSubmitted,
     deleteTask,
     mutateLabel,
   };

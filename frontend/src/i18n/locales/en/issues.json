@@ -1,5 +1,6 @@
 {
   "title": "Board",
+  "searchPlaceholder": "Search tasks…",
   "labelsTitle": "Labels",
   "summary": {
     "counts": "{{total}} tasks · {{doing}} in progress"

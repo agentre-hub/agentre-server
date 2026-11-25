@@ -14,6 +14,7 @@
 import * as React from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import {
   BoardFilterBar,
@@ -221,6 +222,20 @@ export default function Issues() {
     [board],
   );
 
+  // 新建超时后的「刷新看看」：认出刚提交的那条就换成编辑它；刷新失败说一声。
+  const refreshCreated = React.useCallback(async () => {
+    try {
+      const found = await board.findSubmitted();
+      if (found) setEditing(found);
+      return found !== null;
+    } catch (cause) {
+      toast.error(
+        describeFailure(cause, { t, what: t("issues.loadFailedWhat") }).message,
+      );
+      return false;
+    }
+  }, [board, t]);
+
   const columns = board.viewModel.columns;
   const totalTasks = STAGES.reduce(
     (sum, stage) => sum + (columns[stage]?.total ?? 0),
@@ -280,6 +295,7 @@ export default function Issues() {
                 projects={scopeProjects}
                 matchedCount={board.matchedCount}
                 searching={board.searching}
+                searchPlaceholder={t("issues.searchPlaceholder")}
                 ports={{ onQueryChange: setQuery }}
                 onManageLabels={() => setLabelsOpen(true)}
                 className="min-w-0 flex-1"
@@ -330,6 +346,7 @@ export default function Issues() {
                   board.viewModel.filtering ? board.matchedCount : undefined
                 }
                 searching={board.searching}
+                searchPlaceholder={t("issues.searchPlaceholder")}
                 ports={{ onQueryChange: setQuery }}
                 onManageLabels={() => setLabelsOpen(true)}
                 className="min-w-0 flex-1"
@@ -353,6 +370,8 @@ export default function Issues() {
         {board.error && totalTasks === 0 ? null : (
           <IssueBoard
             viewModel={board.viewModel}
+            // `#N` 是本页的临时代号、不是稳定编号，控制台不显示（桌面端保留真 id）。
+            hideCardNumber
             drag={isMobile ? undefined : bindings}
             layout={isMobile ? "stage" : "columns"}
             ports={{
@@ -377,6 +396,7 @@ export default function Issues() {
           catalog={catalog}
           ids={ids}
           page={isMobile}
+          onRefreshCreated={refreshCreated}
           onClose={() => setEditing(null)}
           onSave={async (next) => {
             await board.saveTask(next);

@@ -1,5 +1,6 @@
 {
   "title": "看板",
+  "searchPlaceholder": "搜索任务…",
   "labelsTitle": "标签",
   "summary": {
     "counts": "共 {{total}} 条 · 进行中 {{doing}}"

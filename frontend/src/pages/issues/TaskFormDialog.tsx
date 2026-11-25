@@ -59,6 +59,12 @@ export interface TaskFormDialogProps {
   onClose: () => void;
   onSave: (value: TaskFormValue) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
+  /**
+   * 新建超时后的「刷新看看」：宿主重读看板，认出刚提交的那条就直接打开它并返回 `true`；
+   * 认不出返回 `false`（表单留着、可再提交）；刷新失败由宿主自己说出口并返回 `false`。
+   * 只对新建生效——编辑超时不走这条，保持共享壳的原样。
+   */
+  onRefreshCreated?: () => Promise<boolean>;
 }
 
 /**
@@ -154,6 +160,7 @@ function TaskForm({
   onClose,
   onSave,
   onDelete,
+  onRefreshCreated,
   dirtyRef,
 }: TaskFormDialogProps & {
   value: TaskFormValue;
@@ -208,6 +215,27 @@ function TaskForm({
       ref.current = () => false;
     };
   }, [dirtyRef, value.title, value.description]);
+
+  /*
+    「刷新看看」在途的那一次。刷新期间用户若又按了提交：不能再发第二个 POST（上一个
+    可能已经建好了），先等这次刷新——认出来了宿主已经把表单换成那条任务，这次提交
+    就此作罢；认不出才照常提交。
+  */
+  const refreshRef = React.useRef<Promise<boolean> | null>(null);
+  const refreshCreated = React.useCallback(() => {
+    if (!onRefreshCreated) return Promise.resolve(false);
+    if (!refreshRef.current) {
+      const run = onRefreshCreated().finally(() => {
+        refreshRef.current = null;
+      });
+      refreshRef.current = run;
+    }
+    return refreshRef.current;
+  }, [onRefreshCreated]);
+  const saveUnlessFound = async (next: TaskFormValue) => {
+    if (refreshRef.current && (await refreshRef.current)) return;
+    await onSave(next);
+  };
 
   const selectedBackend = backends.find(
     (backend) => backend.sync_id === exec.agentBackendSyncId,
@@ -276,8 +304,11 @@ function TaskForm({
       // 没有 Agent 时机器与模型两颗 pill 是禁用态、端口根本没被调用，此刻的
       // exec 只可能是换 Agent 之前留下的：跟着存下去等于记了一件从没成立过
       // 的事（读回来时那张卡说「没人负责，但它跑在那台机器上」）。
+      onTimeoutRefresh={
+        !value.id && onRefreshCreated ? () => void refreshCreated() : undefined
+      }
       onSave={(next) =>
-        onSave(
+        saveUnlessFound(
           next.assigneeAgentId
             ? {
                 ...next,

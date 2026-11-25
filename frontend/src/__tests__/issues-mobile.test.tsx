@@ -224,6 +224,27 @@ describe("看板手机形态", () => {
   });
 });
 
+describe("看板卡片与搜索框（J3、F20 宿主侧）", () => {
+  it("卡片上没有 #N：那是本页的临时代号，不是稳定编号", async () => {
+    await renderPhoneBoard();
+
+    const board = screen.getByTestId("issue-board");
+    expect(board.textContent).toContain("Fix the login redirect");
+    expect(board.textContent).not.toMatch(/#\d/);
+  });
+
+  it("搜索框占位是「搜索任务…」，不提编号；44px 高，计数带标签", async () => {
+    await renderPhoneBoard();
+
+    const input = screen.getByPlaceholderText("Search tasks…");
+    expect(input.getAttribute("aria-label")).toBe("Search tasks…");
+    expect(screen.getByTestId("board-search").innerHTML).toContain("h-11");
+    expect(screen.getByTestId("board-search-count").textContent).toMatch(
+      /\d+ tasks?/,
+    );
+  });
+});
+
 describe("看板页头下的「网络不稳定」细条（任务 10 遗留）", () => {
   it("细条紧贴页头下方、只有一条，不压在筛选条或卡片上", async () => {
     meStatus = "unstable";
