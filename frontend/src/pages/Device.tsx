@@ -1,10 +1,10 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { CircleAlert, ShieldCheck } from "lucide-react";
 import { Button, Alert, AlertDescription } from "@agentre-hub/agentre-ui";
-import AuthLayout from "@/components/AuthLayout";
-import CodeInput from "@/components/CodeInput";
+import AuthLayout, { AuthMobileHeader } from "@/components/AuthLayout";
+import CodeInput, { type CodeInputHandle } from "@/components/CodeInput";
 import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
 import PageTitle from "@/components/PageTitle";
 import { useIsMobile } from "@/components/use-is-mobile";
@@ -47,6 +47,8 @@ export default function Device() {
   const [failure, setFailure] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
   const errorId = useId();
+  const formId = useId();
+  const codeInputRef = useRef<CodeInputHandle>(null);
 
   useEffect(() => {
     const norm = parseUserCode(initial);
@@ -95,6 +97,8 @@ export default function Device() {
     // 解析不过就地报错，一个请求都不发。
     if (!norm) {
       setCodeError("incomplete");
+      // 焦点去第一个空格：报错后用户要补的就是那一格（I22）。
+      codeInputRef.current?.focusFirstEmpty();
       return;
     }
     void loadPending(norm);
@@ -174,59 +178,112 @@ export default function Device() {
     return mobile ? approval : <AuthLayout>{approval}</AuthLayout>;
   }
 
+  const submitLabel = t("device.entry.submit");
+  const eyebrow = (
+    <div className="flex items-center gap-[7px] text-primary-text">
+      <ShieldCheck className="size-3.5" aria-hidden="true" />
+      <span className="text-xs font-semibold">{t("device.eyebrow")}</span>
+    </div>
+  );
+  const codeFields = (
+    <>
+      <div className="flex flex-col gap-3">
+        <CodeInput
+          ref={codeInputRef}
+          value={chars}
+          onChange={onCodeChange}
+          invalid={!!codeError}
+          describedBy={codeError ? errorId : undefined}
+        />
+        {codeError && (
+          <p
+            id={errorId}
+            className="flex items-start gap-2 text-aux text-destructive-text"
+          >
+            <CircleAlert
+              className="mt-0.5 size-3.5 shrink-0"
+              aria-hidden="true"
+            />
+            {t(`device.entry.errors.${codeError}`)}
+          </p>
+        )}
+      </div>
+
+      {failure !== null && (
+        <Alert
+          variant="destructive"
+          className="border-destructive bg-destructive-soft"
+        >
+          <AlertDescription>{failureText(failure)}</AlertDescription>
+        </Alert>
+      )}
+    </>
+  );
+
+  // 手机：与确认页同一版式——「✕ 授权设备」页头、内容靠上（页头已写「授权设备」，
+  // 卡片里的眉题不再重复）、「继续」钉在拇指区。钉底按钮在 form 之外，靠 form 属性提交。
+  if (mobile) {
+    return (
+      <AuthLayout
+        header={
+          <AuthMobileHeader
+            to="/"
+            icon="close"
+            label={t("device.add.close")}
+            title={t("device.approve.mobileTitle")}
+          />
+        }
+        pinned={
+          <Button
+            type="submit"
+            form={formId}
+            disabled={submitting}
+            className="h-11 w-full"
+          >
+            {submitLabel}
+          </Button>
+        }
+      >
+        <form
+          id={formId}
+          onSubmit={onSubmitCode}
+          className="flex flex-col gap-6 pt-6"
+        >
+          <div className="flex flex-col gap-2.5">
+            <PageTitle>{t("device.entry.title")}</PageTitle>
+            <p className="text-sm text-muted-foreground">
+              {t("device.entry.description")}
+            </p>
+          </div>
+          {codeFields}
+          <p className="text-xs text-muted-foreground">
+            {t("device.entry.footnote")}
+          </p>
+        </form>
+      </AuthLayout>
+    );
+  }
+
   return (
     <AuthLayout>
       <div className="w-full max-w-[496px] rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10">
         <form onSubmit={onSubmitCode} className="flex flex-col gap-[26px]">
           <div className="flex flex-col gap-2.5">
-            <div className="flex items-center gap-[7px] text-primary-text">
-              <ShieldCheck className="size-3.5" aria-hidden="true" />
-              <span className="text-xs font-semibold">
-                {t("device.eyebrow")}
-              </span>
-            </div>
+            {eyebrow}
             <PageTitle>{t("device.entry.title")}</PageTitle>
             <p className="text-sm text-muted-foreground">
               {t("device.entry.description")}
             </p>
           </div>
 
-          <div className="flex flex-col gap-3">
-            <CodeInput
-              value={chars}
-              onChange={onCodeChange}
-              invalid={!!codeError}
-              describedBy={codeError ? errorId : undefined}
-            />
-            {codeError && (
-              <p
-                id={errorId}
-                className="flex items-start gap-2 text-aux text-destructive-text"
-              >
-                <CircleAlert
-                  className="mt-0.5 size-3.5 shrink-0"
-                  aria-hidden="true"
-                />
-                {t(`device.entry.errors.${codeError}`)}
-              </p>
-            )}
-          </div>
-
-          {failure !== null && (
-            <Alert
-              variant="destructive"
-              className="border-destructive bg-destructive-soft"
-            >
-              <AlertDescription>{failureText(failure)}</AlertDescription>
-            </Alert>
-          )}
+          {codeFields}
 
           <Button
             type="submit"
             disabled={submitting}
             className="h-auto w-full py-[13px]"
           >
-            {t("device.entry.submit")}
+            {submitLabel}
           </Button>
 
           <p className="text-center text-xs text-muted-foreground">

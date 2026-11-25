@@ -456,7 +456,7 @@ describe("授权确认：中文界面能力摘要", () => {
 
     await screen.findByRole("heading", {
       level: 1,
-      name: "允许这台设备访问你的 Agentre 账户？",
+      name: "允许这台设备访问你的 Agentre 账号？",
     });
     expect(screen.queryByText(/这台设备将获得能力：/)).toBeNull();
   });

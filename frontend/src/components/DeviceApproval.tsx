@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Cpu, ShieldCheck, Timer, X } from "lucide-react";
+import { Cpu, ShieldCheck, Timer } from "lucide-react";
 
 import { Alert, AlertDescription, Button } from "@agentre-hub/agentre-ui";
-import AuthLayout from "@/components/AuthLayout";
+import AuthLayout, { AuthMobileHeader } from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useMe } from "@/hooks/use-me";
@@ -241,21 +240,12 @@ export default function DeviceApproval({
     return (
       <AuthLayout
         header={
-          <header
-            data-testid="auth-mobile-header"
-            className="flex items-center gap-1 px-2 pt-[env(safe-area-inset-top,0px)]"
-          >
-            <Link
-              to="/"
-              aria-label={t("device.add.close")}
-              className="flex size-11 items-center justify-center rounded-full text-foreground"
-            >
-              <X className="size-5" aria-hidden="true" />
-            </Link>
-            <span className="text-prose font-semibold text-foreground">
-              {t("device.approve.mobileTitle")}
-            </span>
-          </header>
+          <AuthMobileHeader
+            to="/"
+            icon="close"
+            label={t("device.add.close")}
+            title={t("device.approve.mobileTitle")}
+          />
         }
         pinned={
           <>

@@ -1,10 +1,45 @@
 import { ReactNode } from "react";
+import { ChevronLeft, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { agentreLogoUrl } from "@agentre-hub/agentre-ui";
 
 import AppControls from "@/components/AppControls";
+
+/**
+ * 认证流手机页共用的页头：左 44px 图标键（‹ 回上一级 / ✕ 离开）+ 标题。
+ * 条款页、设备授权输码 / 确认页都用它，保证是同一个版式。
+ */
+export function AuthMobileHeader({
+  to,
+  icon,
+  label,
+  title,
+}: {
+  to: string;
+  icon: "back" | "close";
+  /** 图标键的无障碍名称。 */
+  label: string;
+  title: string;
+}) {
+  const Icon = icon === "back" ? ChevronLeft : X;
+  return (
+    <header
+      data-testid="auth-mobile-header"
+      className="flex items-center gap-1 px-2 pt-[env(safe-area-inset-top,0px)]"
+    >
+      <Link
+        to={to}
+        aria-label={label}
+        className="flex size-11 items-center justify-center rounded-full text-foreground"
+      >
+        <Icon className="size-5" aria-hidden="true" />
+      </Link>
+      <span className="text-prose font-semibold text-foreground">{title}</span>
+    </header>
+  );
+}
 
 /**
  * 认证流与 404 共用的三段外壳：品牌顶栏 / 居中主区 / 页脚。

@@ -2,7 +2,14 @@ import {
   rpcMethods,
   sessionCountsFromProtobuf,
 } from "@agentre-hub/agentre-wire";
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -1075,6 +1082,14 @@ export default function Devices() {
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameSubmitting, setRenameSubmitting] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  // Radix 打开时把焦点给第一个可聚焦元素（页头的 ✕），autoFocus 抢不过它；
+  // 等它落定后再把焦点拿回输入框（I23）。
+  useEffect(() => {
+    if (!renaming) return;
+    const id = requestAnimationFrame(() => renameInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [renaming]);
   /**
    * 撤销确认里那一行事实：种类 · 平台 · 版本 · 最后在线。
    *
@@ -1294,6 +1309,7 @@ export default function Devices() {
           />
           <DialogShellBody>
             <Input
+              ref={renameInputRef}
               autoFocus
               maxLength={128}
               value={renameValue}
