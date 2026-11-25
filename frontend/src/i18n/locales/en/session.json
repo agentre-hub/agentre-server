@@ -13,7 +13,11 @@
   },
   "status": {
     "connecting": "Connecting…",
-    "reconnecting": "Reconnecting…"
+    "reconnecting": "Reconnecting…",
+    "unreachable": "Can't connect",
+    "retryNow": "Retry now",
+    "unreachableRetry": "Can't connect · Retry now",
+    "retryCountdown": "The execution side is unreachable for now · next automatic retry in {{seconds}} s"
   },
   "banner": {
     "lost": {

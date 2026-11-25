@@ -391,13 +391,14 @@ describe("移动端会话详情：一层头部", () => {
     expect(within(band).getAllByText("Connecting")).toHaveLength(1);
   });
 
-  it("机器离线时状态字写「Offline · 时间」", async () => {
+  // 规格 2026-11-25 H5：页头只写「离线」，「N 分钟前」是对话最后活动、与机器最后在线对不上。
+  it("机器离线时状态字只写「Offline」，不带时间", async () => {
     mockMobileViewport();
     stubWithIdentity({ online: false });
     renderPage();
 
     const status = await screen.findByTestId("session-detail-meta-status");
-    await waitFor(() => expect(status.textContent).toMatch(/Offline · /));
+    await waitFor(() => expect(status.textContent).toBe("Offline"));
   });
 
   it("⋯ 开「对话信息」弹层：项目 / 运行在 / 模型 / 最后活动，动作复制对话号", async () => {

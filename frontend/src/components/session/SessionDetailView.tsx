@@ -34,7 +34,13 @@ import {
   type ReasoningEffortValue,
 } from "@agentre-hub/agentre-ui";
 
-import AppShell from "@/components/AppShell";
+import AppShell, { IdentityUnstableStrip } from "@/components/AppShell";
+import {
+  RetryCountdownStrip,
+  UNREACHABLE_AFTER_MS,
+  useDelayedFlag,
+} from "@/components/session/SessionConnectionIndicator";
+import { useMe } from "@/hooks/use-me";
 import { FailureNotice } from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
 import SessionDetailHeader from "@/components/session/SessionDetailHeader";
@@ -755,6 +761,7 @@ export default function SessionDetailView({
     relayTicket,
     relayTicketError,
     handshakeRejection,
+    nextRetryAt,
     reconnect,
   } = useRelayChannel(relayTarget, {
     onEvent: (f, at) => {
@@ -888,6 +895,23 @@ export default function SessionDetailView({
   // （与从前清单、attach、补齐写在同一趟里时一样）。渲染期重置，理由同上面换目标
   // 那一段：effect 里禁 setState。
   if (listed !== null && relayState !== "connected") setListed(null);
+
+  // 流式尾巴也只属于那一条连接：断线时没定稿的那半截不留着——重连后新增量接在它后面，
+  // 中间缺的那一段永远补不上（W28）。定稿的转录由补齐照常接回。
+  if (previewTail.length > 0 && relayState !== "connected") setPreviewTail([]);
+
+  /*
+    读不到清单（session.list 超时 / 报错）之后的退避重问（W16）。此前失败的那一格会一直
+    挂到 socket 下一次断开，而连接本身好好的——页面于是永远停在「读不到这条对话」。
+    2s 起、翻倍、30s 封顶；成功后计数归零。timer 回调里才写 state，effect 体内不写。
+  */
+  const listFailuresRef = useRef(0);
+  useEffect(() => {
+    if (listed?.ok !== false) return;
+    const delay = Math.min(2_000 * 2 ** (listFailuresRef.current - 1), 30_000);
+    const id = setTimeout(() => setListed(null), delay);
+    return () => clearTimeout(id);
+  }, [listed]);
 
   useEffect(() => {
     clientRef.current = client;
@@ -1214,7 +1238,9 @@ export default function SessionDetailView({
    */
   useAliveEffect(
     (alive) => {
-      if (!client || relayState !== "connected" || ready) return;
+      // 不再挡 `ready`：重连之后清单的答复已作废（上面渲染期那一行），摘要要重问一次，
+      // 否则头部与在跑与否停在断线前那一刻（规格 E4「重连后重问清单」）。
+      if (!client || relayState !== "connected") return;
       if (listed?.client === client) return;
       void (async () => {
         try {
@@ -1227,17 +1253,48 @@ export default function SessionDetailView({
           const list = sessionListFromProtobuf(listRaw);
           const s = list.sessions.find((x) => x.conversationId === sid) ?? null;
           setSummary(s);
+          // 上一次问失败而挂着的提示，这一次答上来就收起。
+          if (listFailuresRef.current > 0) setCatchUpFailed(false);
+          listFailuresRef.current = 0;
           setListed({ client, ok: true, summary: s });
         } catch {
           // 清单都问不到：读不到这台机器上的这一条，与补齐失败同一种呈现（要出声）。
-          // 重连之后 `listed` 作废，整趟重走。
+          // 退避重问（见上），重连之后 `listed` 作废，整趟重走。已经装载完（ready）的
+          // 页面只是刷新摘要失败，转录好好的，不为它出声。
           if (!alive()) return;
+          listFailuresRef.current += 1;
           setListed({ client, ok: false });
-          setCatchUpFailed(true);
+          if (!ready) setCatchUpFailed(true);
         }
       })();
     },
     [client, relayState, ready, listed, sid],
+  );
+
+  /*
+    同一个客户端上重连：补齐由 RelayClient.reconnect 对 watched 会话做，它失败了只是
+    吞掉（relayClient 的 catch），页面于是不知道——断线期间漏掉的终止帧补不回来，
+    「在跑」与三个点就永远挂着（W18）。这里在每次「重新连上」时自己再问一遍：正在飞的
+    那一串会被复用，失败则出声，成功则收起上次的失败提示。换了客户端的那条路
+    （reattachOnNewClient）自己已经会出声。
+  */
+  const wasConnectedRef = useRef(false);
+  useAliveEffect(
+    (alive) => {
+      const was = wasConnectedRef.current;
+      wasConnectedRef.current = relayState === "connected";
+      if (was || relayState !== "connected" || !ready || !client) return;
+      if (attachedClientRef.current !== client) return;
+      client
+        .catchUp(sid, originRef.current)
+        .then(() => {
+          if (alive()) setCatchUpFailed(false);
+        })
+        .catch(() => {
+          if (alive()) setCatchUpFailed(true);
+        });
+    },
+    [relayState, ready, client, sid],
   );
 
   // 清单 + 镜像都答过 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
@@ -1464,6 +1521,17 @@ export default function SessionDetailView({
     // 里，这里只把事实喂进去。
     deviceRevoked: device ? device.status !== DEVICE_ACTIVE : false,
   });
+
+  /*
+    「正在连接 / 重连」满约 20 秒仍没连上：页头改口「连不上 · 立即重试」，页头下写
+    「下次自动重试 N 秒后」（E1）。只在这两档里成立——机器离线、401、版本不符各有各的
+    话；连上或换了档立刻撤掉，下一段重新计时。
+  */
+  const unreachable = useDelayedFlag(
+    status === "connecting" || status === "reconnecting",
+    UNREACHABLE_AFTER_MS,
+  );
+  const { status: identityStatus } = useMe();
 
   // 增量投影:只归约新到的那几帧,并且只给被改到的那条消息换新身份。
   //
@@ -2355,6 +2423,8 @@ export default function SessionDetailView({
       model={fallbackModel}
       onDelete={onDelete}
       syncing={syncing}
+      unreachable={unreachable}
+      onRetry={reconnect}
     />
   );
 
@@ -2490,6 +2560,12 @@ export default function SessionDetailView({
       className="flex h-full min-h-0 flex-col"
     >
       {header}
+      {/* 页头下的两条细条：连不上时的重试倒计时；手机沉浸页上壳不替我们摆
+          「网络不稳定」（ownStrip），它跟在页头后面而不是压在转录顶上。 */}
+      {isPage && immersive && identityStatus === "unstable" ? (
+        <IdentityUnstableStrip />
+      ) : null}
+      {unreachable ? <RetryCountdownStrip nextRetryAt={nextRetryAt} /> : null}
       {/*
         设备名单读失败（规格 G1、W8）：只在头带下加一条横幅，转录与输入区原样留着——
         此前它换掉整页，转录被吞。横幅在滚动区之外，转录上沿的渐隐碰不到它。
@@ -2563,7 +2639,12 @@ export default function SessionDetailView({
   // 路由页形态：壳交出整块主区（flush），三带自己铺满它。
   if (isPage) {
     return (
-      <AppShell title={displayTitle} flush immersive={immersive}>
+      <AppShell
+        title={displayTitle}
+        flush
+        immersive={immersive}
+        ownStrip={immersive}
+      >
         {bands}
       </AppShell>
     );

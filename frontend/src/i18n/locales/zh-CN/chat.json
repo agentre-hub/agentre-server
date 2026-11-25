@@ -66,6 +66,7 @@
     "scopeMachines": "所有机器",
     "scopeAria": "切换范围，当前：{{name}}",
     "machinesOnline": "{{online}} / {{total}} 台机器在线",
+    "relayUnreachable": "执行端连不上 · {{online}} / {{total}} 台机器在线",
     "online": "在线",
     "offline": "离线",
     "offlineSince": "没有网络 · {{time}} 的内容",

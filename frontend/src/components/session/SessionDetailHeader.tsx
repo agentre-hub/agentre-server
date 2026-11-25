@@ -122,6 +122,12 @@ export interface SessionDetailHeaderProps {
    * 置灰、状态字写「同步中」，新的一到就复原。不给 = 原样。桌面不读。
    */
   syncing?: boolean;
+  /**
+   * 连了约 20 秒仍没连上（规格 E1）：状态改写「连不上」并给「立即重试」（接 `onRetry`）。
+   * 不给 = 原样（连接中 / 重连中）。
+   */
+  unreachable?: boolean;
+  onRetry?: () => void;
 }
 
 /** meta 行小头像要的那三样：与账号 Agent 清单（/v1/workspace/agents）同名同形。 */
@@ -276,6 +282,11 @@ async function copySessionId(
   });
 }
 
+/** 通道正在（重）连——「连不上」只在这两档里才成立。 */
+function connectingNow(status: SessionViewStatus): boolean {
+  return status === "connecting" || status === "reconnecting";
+}
+
 /** 手机页头状态字落在哪一档（与 toAgentStatus 的点色是两件事：这里只管说哪句话）。 */
 function phoneStatusWord(
   t: (key: string, opts?: Record<string, unknown>) => string,
@@ -293,11 +304,13 @@ function phoneStatusWord(
   // 通道正在（重）连：此刻其余各维都观察不到，先说通道。
   if (status === "connecting" || status === "reconnecting")
     return t("session.phoneHeader.status.connecting");
-  if (
-    status === "machineOffline" ||
-    status === "desktopAppNotRunning" ||
-    status === "pinnedAgentredUnavailable"
-  ) {
+  // 机器离线 / App 没开：页头只写「离线」（规格 H5，对比稿 v10 B）。「N 分钟前」是这条
+  // 对话最后一次活动，与机器最后在线的时间不是一回事，并排写出来就是互相打架；
+  // 最后在线交给底部只读带说。
+  if (status === "machineOffline" || status === "desktopAppNotRunning") {
+    return t("session.phoneHeader.status.offlineNoTime");
+  }
+  if (status === "pinnedAgentredUnavailable") {
     return input.lastMessageAt
       ? t("session.phoneHeader.status.offline", {
           time: formatRelativeTime(input.lastMessageAt, input.language),
@@ -336,6 +349,8 @@ function PhoneSessionHeader({
   model,
   onDelete,
   syncing = false,
+  unreachable = false,
+  onRetry,
 }: SessionDetailHeaderProps) {
   const { t, i18n } = useTranslation();
   const { t: uiT } = useUiTranslation();
@@ -359,18 +374,21 @@ function PhoneSessionHeader({
     status !== "pinnedAgentredUnavailable" &&
     status !== "deviceRevoked" &&
     status !== "loggedOut";
-  const word = showSyncing
-    ? t("session.phoneHeader.status.syncing")
-    : phoneStatusWord(t, {
-        status,
-        running,
-        stopping,
-        decisionPending,
-        lifecycleState: identity?.lifecycleState,
-        lastMessageAt: identity?.lastMessageAt,
-        language: i18n.language,
-      });
-  const connecting = status === "connecting" || status === "reconnecting";
+  const stuck = unreachable && !!onRetry && connectingNow(status);
+  const word = stuck
+    ? t("session.status.unreachable")
+    : showSyncing
+      ? t("session.phoneHeader.status.syncing")
+      : phoneStatusWord(t, {
+          status,
+          running,
+          stopping,
+          decisionPending,
+          lifecycleState: identity?.lifecycleState,
+          lastMessageAt: identity?.lastMessageAt,
+          language: i18n.language,
+        });
+  const connecting = connectingNow(status);
 
   const metaParts: SessionHeaderMetaPart[] = [
     {
@@ -392,6 +410,17 @@ function PhoneSessionHeader({
               <StatusDot status={agentStatus} size="xs" />
             ))}
           <span className="truncate">{word}</span>
+          {stuck && (
+            // 44px 高的点按区靠负边距伸出副标题行，不撑高 52px 的页头。
+            <button
+              type="button"
+              data-testid="session-detail-retry"
+              onClick={onRetry}
+              className="-my-3 inline-flex min-h-11 shrink-0 cursor-pointer items-center px-1 font-medium text-primary-text outline-none hover:underline focus-visible:focus-outline"
+            >
+              {t("session.status.retryNow")}
+            </button>
+          )}
         </span>
       ),
     },
@@ -541,6 +570,8 @@ function DesktopSessionHeader({
   decisionPending,
   onStop,
   stopping,
+  unreachable = false,
+  onRetry,
 }: SessionDetailHeaderProps) {
   const { t, i18n } = useTranslation();
 
@@ -732,7 +763,11 @@ function DesktopSessionHeader({
           <>
             {/* 正在连 / 正在重连（决策 2）：横幅不再承担这两个状态，它们在这里。
                 `connected` 与 B / C 档下这一枚不渲染，头部因此不会常驻一块噪音。 */}
-            <SessionConnectionIndicator status={status} />
+            <SessionConnectionIndicator
+              status={status}
+              unreachable={unreachable}
+              onRetry={onRetry}
+            />
             {/* 停止：wire 上一直有 runtime.abort，这一端真发得出去。只在这一轮真的
                 在跑的时候摆——闲着的时候没有什么可停；后端明确停不了时宿主不给
                 onStop，也不摆。点下去之后禁用到这一轮结束（不是请求返回）。 */}

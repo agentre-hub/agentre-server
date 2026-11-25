@@ -100,7 +100,9 @@ export function deriveSessionViewStatus(
     relayTargetResolved,
     protocolMismatch,
   } = input;
-  if (!meValid) return "loggedOut";
+  // 中继取票/重拨撞上 401（relayState=signedOut）与 /auth/me 失效是同一件事：账号没了，
+  // 不再重拨，出口只有重新登录。排在最前：它比其余任何一档都更接近用户此刻要做的事。
+  if (!meValid || relayState === "signedOut") return "loggedOut";
   if (deviceRevoked) return "deviceRevoked";
   if (machineOnline === false) {
     return targetKind === "desktop" ? "desktopAppNotRunning" : "machineOffline";

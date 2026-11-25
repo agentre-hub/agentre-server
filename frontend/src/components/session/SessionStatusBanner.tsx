@@ -13,6 +13,7 @@ import { Link } from "react-router-dom";
 
 import {
   Button,
+  cn,
   MachineOfflineBanner,
   StatusBanner,
   type StatusBannerTone,
@@ -131,6 +132,8 @@ export default function SessionStatusBanner({
 }) {
   const { t, i18n } = useTranslation();
   const isMobile = useIsMobile();
+  // 触屏上出口按钮不小于 44px（规格：触屏可点区域）；桌面保持 sm 档不变。
+  const touchTarget = isMobile ? "min-h-11" : undefined;
   const tier = tierOf(status);
   // 正常态与瞬态都不占内容区（决策 1 / 2）。
   if (tier === null || tier === "transient") return null;
@@ -220,7 +223,7 @@ export default function SessionStatusBanner({
           <Button
             variant="outline"
             size="sm"
-            className="w-full @md:w-auto"
+            className={cn("w-full @md:w-auto", touchTarget)}
             onClick={onReconnect}
           >
             <RotateCw aria-hidden className="size-3.5" />
@@ -238,7 +241,7 @@ export default function SessionStatusBanner({
             <Button
               variant="outline"
               size="sm"
-              className="w-full @md:w-auto"
+              className={cn("w-full @md:w-auto", touchTarget)}
               onClick={reloadPage}
             >
               <RotateCw aria-hidden className="size-3.5" />
@@ -252,7 +255,11 @@ export default function SessionStatusBanner({
         return deviceLink();
       case "loggedOut":
         return (
-          <Button asChild size="sm" className="w-full @md:w-auto">
+          <Button
+            asChild
+            size="sm"
+            className={cn("w-full @md:w-auto", touchTarget)}
+          >
             {/* 早就写好、却从没被任何一处引用过的那个键，终于有了归宿。 */}
             <Link to="/login">{t("session.relogin")}</Link>
           </Button>
@@ -265,7 +272,12 @@ export default function SessionStatusBanner({
 
   function deviceLink(): ReactNode {
     return (
-      <Button asChild variant="outline" size="sm" className="w-full @md:w-auto">
+      <Button
+        asChild
+        variant="outline"
+        size="sm"
+        className={cn("w-full @md:w-auto", touchTarget)}
+      >
         <Link to="/devices">{t("session.banner.viewDevice")}</Link>
       </Button>
     );

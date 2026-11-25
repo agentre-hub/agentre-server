@@ -66,6 +66,7 @@
     "scopeMachines": "All machines",
     "scopeAria": "Switch scope, current: {{name}}",
     "machinesOnline": "{{online}} / {{total}} machines online",
+    "relayUnreachable": "Execution side unreachable · {{online}} / {{total}} machines online",
     "online": "Online",
     "offline": "Offline",
     "offlineSince": "No network · content from {{time}}",

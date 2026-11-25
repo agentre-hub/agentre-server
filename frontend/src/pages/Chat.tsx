@@ -1641,6 +1641,10 @@ export default function Chat() {
     dot: online ? "running" : "idle",
   });
   const onlineMachineCount = sessionMachines.filter((d) => d.online).length;
+  // 已去抖的「不可达」（useMachineReachability 里熬过 3 秒才报），所以这里不会随重连抖动闪。
+  const relayUnreachable = Object.values(reach.machineStates).some(
+    (state) => state === "unreachable",
+  );
   const phoneSubtitle: PhoneSubtitle =
     offlineSince !== null && sessionIndex.loaded
       ? {
@@ -1653,23 +1657,33 @@ export default function Chat() {
           }),
           dot: "idle",
         }
-      : phoneScope.kind === "agent"
-        ? presence(!!scopedAgent?.has_available_target)
-        : scopedDevice
-          ? presence(scopedDevice.online)
-          : {
-              // 名单还没到 / 取不到时数量未知，写「—」而不是 0（W25）。
-              text: t(
-                "chat.phone.machinesOnline",
-                devicesKnown
-                  ? {
-                      online: onlineMachineCount,
-                      total: sessionMachines.length,
-                    }
-                  : { online: "—", total: "—" },
-              ),
-              dot: devicesKnown && onlineMachineCount > 0 ? "running" : "idle",
-            };
+      : relayUnreachable
+        ? {
+            // 执行端连不上（E1）：保留机器在线数，只把「连不上」说在前面。
+            text: t("chat.phone.relayUnreachable", {
+              online: devicesKnown ? onlineMachineCount : "—",
+              total: devicesKnown ? sessionMachines.length : "—",
+            }),
+            dot: "waiting",
+          }
+        : phoneScope.kind === "agent"
+          ? presence(!!scopedAgent?.has_available_target)
+          : scopedDevice
+            ? presence(scopedDevice.online)
+            : {
+                // 名单还没到 / 取不到时数量未知，写「—」而不是 0（W25）。
+                text: t(
+                  "chat.phone.machinesOnline",
+                  devicesKnown
+                    ? {
+                        online: onlineMachineCount,
+                        total: sessionMachines.length,
+                      }
+                    : { online: "—", total: "—" },
+                ),
+                dot:
+                  devicesKnown && onlineMachineCount > 0 ? "running" : "idle",
+              };
   /**
    * 搜索框下「命中几条」。端点那几轴、且没有本地再收窄时，是端点在完整集合上数的；
    * 机器那一档与「需要你 / 进行中」只能数手上这一份。

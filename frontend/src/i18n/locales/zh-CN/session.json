@@ -13,7 +13,11 @@
   },
   "status": {
     "connecting": "连接中…",
-    "reconnecting": "重连中…"
+    "reconnecting": "重连中…",
+    "unreachable": "连不上",
+    "retryNow": "立即重试",
+    "unreachableRetry": "连不上 · 立即重试",
+    "retryCountdown": "执行端暂时连不上 · 下次自动重试 {{seconds}} 秒后"
   },
   "banner": {
     "lost": {

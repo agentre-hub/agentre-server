@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { useDelayedFlag } from "@/components/session/SessionConnectionIndicator";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { runsSessions, type DeviceItem } from "@/lib/devices";
@@ -39,6 +40,13 @@ export interface ResolvedMachine extends MachineSessionPage {
  * 意义了——那台机器上剩下的几千条，用户滚到那儿再要。
  */
 export const MACHINE_LIST_PAGE_SIZE = 20;
+
+/**
+ * 机器「不可达」要持续这么久才对外说（规格 E5）。重连抖动时 relay 在 reconnecting 与
+ * connected 之间来回，每一下都翻一次组头、读屏每次都播报；说得晚一点，抖动就只是
+ * 一次「还在连」。恢复是立刻的——只对「出问题」这一头去抖。
+ */
+export const UNREACHABLE_DEBOUNCE_MS = 3_000;
 
 /** 机器交回来的一页。翻页的两端（首屏解析器与「查看全部」弹层）用同一个形状。 */
 export interface MachineSessionPage {
@@ -367,11 +375,21 @@ export function useMachineReachability({
    * 都出不来（那颗按钮只在 unreachable 这一档渲染）。清单陈旧但仍读得，所以行
    * 留着；说谎的是状态。
    */
+  const anyUnreachable = onlineMachines.some(
+    (d) => machineState[d.fingerprint] === "unreachable",
+  );
+  // 任何一台持续不可达满 3 秒才算数；期间那一台按「没有这个信号」落到下面的
+  // 已交出清单 → connected、否则 connecting，不闪。
+  const unreachableConfirmed = useDelayedFlag(
+    anyUnreachable,
+    UNREACHABLE_DEBOUNCE_MS,
+  );
   const machineStates = useMemo(() => {
     const states: Record<number, MachineState> = {};
     for (const device of onlineMachines) {
       states[device.id] =
-        machineState[device.fingerprint] === "unreachable"
+        machineState[device.fingerprint] === "unreachable" &&
+        unreachableConfirmed
           ? "unreachable"
           : machineState[device.fingerprint] === "connecting"
             ? "connecting"
@@ -380,7 +398,7 @@ export function useMachineReachability({
               : "connecting";
     }
     return states;
-  }, [onlineMachines, resolved, machineState]);
+  }, [onlineMachines, resolved, machineState, unreachableConfirmed]);
 
   const onResolved = useCallback((fp: string, machine: ResolvedMachine) => {
     setResolved((prev) => ({ ...prev, [fp]: machine }));
