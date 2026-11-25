@@ -42,6 +42,7 @@ import {
   type ChatImageAttachment,
 } from "@agentre-hub/agentre-ui";
 import {
+  useCallback,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -54,6 +55,7 @@ import { useTranslation } from "react-i18next";
 import { useDeviceMentions } from "@/hooks/use-device-mentions";
 import { useSessionSkillCommands } from "@/hooks/use-session-skill-commands";
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
+import { useComposerDraft, useDraftKey, type Draft } from "@/lib/drafts";
 
 /**
  * 「把输入框里此刻的内容交出去」，与按发送键是同一件事（走同一个 form 提交）。
@@ -99,6 +101,9 @@ export default function SessionComposer({
   submitHandleRef,
   touch = false,
   onAppendEdited,
+  draftKey: draftKeyProp,
+  initialDraft,
+  onDraftChange,
 }: {
   backendType?: string;
   /**
@@ -198,8 +203,34 @@ export default function SessionComposer({
   touch?: boolean;
   /** 最近一次 `appendDraft` 放进去的字被改动过（见包的 `onAppendEdited`）。 */
   onAppendEdited?: () => void;
+  /**
+   * 这个输入框的草稿存在哪（见 `useComposerDraft`）：随输入保存、回来恢复、发出或清空
+   * 即清除。不给时取外面 `DraftKeyContext` 给的；都没有 = 不保留草稿。
+   */
+  draftKey?: string;
+  /** 开场就放进输入框的草稿（换 Agent 时带过来的），优先于库里存的。 */
+  initialDraft?: Draft;
+  /** 草稿每次变化也报给宿主（新对话换 Agent 要带走它）。 */
+  onDraftChange?: (draft: Draft) => void;
 }) {
   const { t } = useTranslation();
+  const contextDraftKey = useDraftKey();
+  const draftKey = draftKeyProp ?? contextDraftKey;
+  // 草稿要够得着输入框的句柄，而宿主那只是可选的：自己持有一只，再把它同步给宿主。
+  const ownHandleRef = useRef<ChatComposerHandle | null>(null);
+  const setHandle = useCallback(
+    (handle: ChatComposerHandle | null) => {
+      ownHandleRef.current = handle;
+      if (composerHandleRef) composerHandleRef.current = handle;
+    },
+    [composerHandleRef],
+  );
+  const reportDraft = useComposerDraft({
+    draftKey,
+    handleRef: ownHandleRef,
+    seed: initialDraft,
+    onDraftChange,
+  });
   // 发送按钮走输入框自己的 submit：只有它知道富文本里的提及要序列化成什么。
   const ownRef = useRef<AIChatInputHandle>(null);
   const inputRef = ownRef;
@@ -242,7 +273,8 @@ export default function SessionComposer({
     <div ref={rootRef} data-testid="session-detail-composer-form">
       <div data-testid="session-detail-composer">
         <ChatComposer
-          ref={composerHandleRef}
+          ref={setHandle}
+          onDraftChange={reportDraft}
           inputHandleRef={inputRef}
           topSlot={queueSlot}
           disabled={disabled}

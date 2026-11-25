@@ -32,7 +32,11 @@ import {
   vi,
 } from "vitest";
 
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
+
 import { api } from "@/lib/api";
+import { draftStore, useDraftKey } from "@/lib/drafts";
+import { bindAccount } from "@/lib/localStore";
 import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -68,27 +72,30 @@ vi.mock("@/lib/relayClientPool", async (importOriginal) => {
 // 会话详情本身由 session-detail*.test.tsx 守；这里只认 Chat 在移动端把哪一条、以什么
 // 形态、带着哪条返回地址交给它。
 vi.mock("@/components/session/SessionDetailView", () => ({
-  default: (props: {
+  default: function StubSessionDetail(props: {
     deviceId: number;
     conversationId: string;
     form?: string;
     backTo?: string;
     onDelete?: () => void;
-  }) => (
-    <div
-      data-testid="mobile-session-detail"
-      data-device-id={props.deviceId}
-      data-session-id={props.conversationId}
-      data-form={props.form ?? "page"}
-      data-back-to={props.backTo ?? ""}
-    >
-      {props.onDelete ? (
-        <button type="button" onClick={props.onDelete}>
-          stub delete
-        </button>
-      ) : null}
-    </div>
-  ),
+  }) {
+    return (
+      <div
+        data-testid="mobile-session-detail"
+        data-device-id={props.deviceId}
+        data-session-id={props.conversationId}
+        data-form={props.form ?? "page"}
+        data-back-to={props.backTo ?? ""}
+        data-draft-key={useDraftKey() ?? ""}
+      >
+        {props.onDelete ? (
+          <button type="button" onClick={props.onDelete}>
+            stub delete
+          </button>
+        ) : null}
+      </div>
+    );
+  },
 }));
 
 const mockedApi = vi.mocked(api);
@@ -901,6 +908,198 @@ describe("移动端对话页:空态 W8 页内切机器轴", () => {
  * ☰ · 范围名 ⌄（副标题）· ⌕ · ✎；筛选胶囊；按 需要你 / 进行中 / 今天 / 更早 分段；
  * 手机行；搜索与高亮；长按菜单；空态出口；离线副标题；返回恢复。
  */
+describe("草稿静默保留（C1）：新对话草稿与「换一个 Agent」", () => {
+  const g = globalThis as Record<string, unknown>;
+  const twoAgents = [
+    ...agents,
+    {
+      sync_id: "ag-2",
+      name: "前端 Agent",
+      avatar_color: "#0ea5e9",
+      has_available_target: true,
+      exec_targets: [
+        {
+          rank: 1,
+          device_name: "书房小主机",
+          availability: "available",
+          current: true,
+          device_unspecified: false,
+        },
+      ],
+    },
+  ];
+  const plan = {
+    agent_sync_id: "ag-1",
+    tiers: [
+      {
+        rank: 1,
+        backend_sync_id: "b-a",
+        device_id: 1,
+        device_name: "书房小主机",
+        backend_type: "claudecode",
+        kind: "agentred",
+        availability: "available",
+        current: true,
+      },
+    ],
+    chosen: {
+      device_fingerprint: "fp-1",
+      device_id: 1,
+      device_name: "书房小主机",
+      backend_sync_id: "b-a",
+      backend_type: "claudecode",
+      kind: "agentred",
+    },
+    projects: [],
+  };
+
+  beforeEach(() => {
+    g.indexedDB = new IDBFactory();
+    g.IDBKeyRange = IDBKeyRange;
+    bindAccount(1);
+  });
+  afterEach(() => {
+    bindAccount(null);
+    delete g.indexedDB;
+  });
+
+  function stubWithPlan(saved: unknown[] = [waitingMirrored]) {
+    stubApi(saved, [agentred], { agents: twoAgents });
+    const listing = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      if (String(path).startsWith("/v1/workspace/dispatch-target?"))
+        return plan;
+      return listing(path, ...rest);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+  }
+
+  async function openDraftWith(agentTestId: string) {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    fireEvent.click(await screen.findByTestId(agentTestId));
+    await screen.findByTestId("draft-session");
+  }
+
+  function editable(): HTMLElement & {
+    editor?: { commands: { setContent: (v: string) => void } };
+  } {
+    const el = document.querySelector<HTMLElement>(
+      '[data-testid="session-detail-composer"] .ProseMirror',
+    );
+    if (!el) throw new Error("输入框没渲染出来");
+    return el;
+  }
+
+  async function typeAndAttach(text: string) {
+    await waitFor(() => editable());
+    act(() => {
+      editable().editor?.commands.setContent(`<p>${text}</p>`);
+    });
+    fireEvent.change(
+      screen.getByLabelText("Add image", { selector: "input" }),
+      {
+        target: {
+          files: [
+            new File([new Uint8Array([1, 2, 3])], "shot.png", {
+              type: "image/png",
+            }),
+          ],
+        },
+      },
+    );
+    await screen.findByAltText("shot.png");
+  }
+
+  it("新对话草稿：写了字、贴了图就退回列表，再开一条新对话时它们还在", async () => {
+    stubWithPlan();
+    renderChat();
+    await openDraftWith("agent-pick-ag-1");
+    await typeAndAttach("写到一半的第一句");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+
+    await openDraftWith("agent-pick-ag-1");
+    await waitFor(() =>
+      expect(editable().textContent).toBe("写到一半的第一句"),
+    );
+    await screen.findByAltText("shot.png");
+  });
+
+  it("「换一个 Agent」：选择器浮在草稿上（草稿不卸载），选定后文字与图片带到新 Agent", async () => {
+    stubWithPlan();
+    renderChat();
+    await openDraftWith("agent-pick-ag-1");
+    await typeAndAttach("先写好再换人");
+    const draftBefore = screen.getByTestId("draft-session");
+
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    // 选择器是叠在草稿上的一层：草稿节点仍在，没有被换成挑选页。
+    await screen.findByTestId("new-conversation-sheet");
+    expect(screen.getByTestId("draft-session")).toBe(draftBefore);
+
+    fireEvent.click(await screen.findByTestId("agent-pick-ag-2"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("draft-recipient").textContent).toContain(
+        "前端 Agent",
+      ),
+    );
+    await waitFor(() => expect(editable().textContent).toBe("先写好再换人"));
+    await screen.findByAltText("shot.png");
+    expect(screen.queryByTestId("new-conversation-sheet")).toBeNull();
+  });
+
+  it("「换一个 Agent」后关掉选择器：仍在原草稿上，字与图都在", async () => {
+    stubWithPlan();
+    renderChat();
+    await openDraftWith("agent-pick-ag-1");
+    await typeAndAttach("不换了");
+
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    await screen.findByTestId("new-conversation-sheet");
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("draft-recipient").textContent).toContain(
+      "后端 Agent",
+    );
+    expect(editable().textContent).toBe("不换了");
+  });
+
+  it("手机首页：有草稿的对话副行以红色「[Draft]」开头，后面是草稿首行；没有草稿的照旧", async () => {
+    stubWithPlan([waitingMirrored, runningMirrored]);
+    await draftStore.put("session:42", {
+      text: "\n 改一下登录页 \n第二行",
+      images: [],
+    });
+    renderChat();
+
+    const line = await screen.findByText("改一下登录页");
+    const prefix = within(line.parentElement as HTMLElement).getByText(
+      "[Draft]",
+    );
+    expect(prefix.className).toContain("text-destructive-text");
+    const other = (await screen.findByText("跑着呢")).closest("li")!;
+    expect(other.textContent).not.toContain("[Draft]");
+  });
+
+  it("对话页：输入框的草稿键就是这条对话（换一条换一份）", async () => {
+    stubWithPlan();
+    renderChat("/chat/42?device=1");
+    const detail = await screen.findByTestId("mobile-session-detail");
+    expect(detail.getAttribute("data-draft-key")).toBe("session:42");
+  });
+});
+
 describe("手机首页：对话列表", () => {
   const now = Date.now();
   /** 今天早些时候结束、还没读过的一条（未读点）。 */

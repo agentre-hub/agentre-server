@@ -50,6 +50,7 @@ import {
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
 import { describeFailure } from "@/lib/describeFailure";
+import { NEW_CONVERSATION_DRAFT_KEY, type Draft } from "@/lib/drafts";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import {
   deriveTitle,
@@ -96,6 +97,8 @@ export function DraftSession({
   onStarted,
   onBack,
   onChangeRecipient,
+  initialDraft,
+  onDraftChange,
 }: {
   agent: NewConvAgent;
   /** 账号里全部 Agent，供输入框的 @ 菜单用（第一句同样能提及别人）。 */
@@ -115,6 +118,10 @@ export function DraftSession({
    * 的话那条 effect 会用只剩 compose 的地址替掉当前地址，列表的范围随之丢掉。
    */
   onChangeRecipient?: () => void;
+  /** 换 Agent 时带过来的草稿（文字 + 图片），优先于库里存的那份。 */
+  initialDraft?: Draft;
+  /** 草稿每次变化都报上去，宿主换 Agent 时据此带走它。 */
+  onDraftChange?: (draft: Draft) => void;
 }) {
   const { t } = useTranslation();
   /**
@@ -840,6 +847,10 @@ export function DraftSession({
               agents={mentionAgents}
               composerHandleRef={composerRef}
               submitHandleRef={submitRef}
+              // 新对话草稿全账号一份：退出、重载、换 Agent 都不丢，发出或清空才清除。
+              draftKey={NEW_CONVERSATION_DRAFT_KEY}
+              initialDraft={initialDraft}
+              onDraftChange={onDraftChange}
               // 手机用触屏档（回车换行、空时胶囊），与对话页底部停靠区同一个输入框形态。
               touch={oneRow}
               // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧

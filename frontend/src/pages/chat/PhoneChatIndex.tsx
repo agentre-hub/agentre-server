@@ -44,11 +44,13 @@ import {
   type SessionPathTarget,
 } from "@/components/session/SessionIndex";
 import { toAgentStatus } from "@/lib/attentionAdapter";
+import { conversationDraftKey, useDraftMap } from "@/lib/drafts";
 import type { ProjectNode } from "@/lib/projects";
 import { formatRelativeTime } from "@/lib/sessionView";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 import {
   isRowUnread,
+  rowSubline,
   startOfToday,
   toPhaseItem,
   type PhoneCounts,
@@ -254,6 +256,7 @@ export function PhoneChatIndex({
 }: PhoneChatIndexProps) {
   const { t, i18n } = useTranslation();
   const { t: uiT } = useUiTranslation();
+  const drafts = useDraftMap();
   // 搜索词还在（从对话返回）时，回来仍是搜索那一屏。
   const [searchOpen, setSearchOpen] = useState(() => searchQuery !== "");
   const listRef = useRef<HTMLDivElement>(null);
@@ -360,7 +363,26 @@ export function PhoneChatIndex({
       ? projectPath(row.projectSyncId, projectById)
       : null;
     const where = path ?? uiT("sessionIndex.free.name");
-    const secondary = hideAgent || !agent ? where : `${agent.name} · ${where}`;
+    const content = hideAgent || !agent ? where : `${agent.name} · ${where}`;
+    const subline = rowSubline(row, {
+      content,
+      draft: drafts.get(conversationDraftKey(row.conversationId)),
+    });
+    const secondary =
+      subline.kind === "content" ? (
+        content
+      ) : (
+        <>
+          {subline.kind === "draft" ? (
+            <span className="font-medium text-destructive-text">
+              {t("chat.phone.draftPrefix")}
+            </span>
+          ) : (
+            <span>{t("chat.phone.pendingPrefix")}</span>
+          )}{" "}
+          <span>{subline.text || t("chat.phone.draftImageOnly")}</span>
+        </>
+      );
     const href =
       row.deviceId === undefined
         ? undefined

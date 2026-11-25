@@ -44,6 +44,11 @@ import {
   type DeviceItem,
 } from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
+import {
+  conversationDraftKey,
+  DraftKeyContext,
+  type Draft,
+} from "@/lib/drafts";
 import { readRecentAgents } from "@/lib/recentAgents";
 import ResolvedSessionDetail, {
   type SessionDetailSeed,
@@ -299,8 +304,18 @@ export default function Chat() {
     | { step: "pick" }
     | { step: "project" }
     // projectSyncId 只有从项目组头进来时才有：那颗 ＋ 问的是「在这个项目里开对话」。
-    | { step: "draft"; agent: NewConvAgent; projectSyncId?: string }
+    | {
+        step: "draft";
+        agent: NewConvAgent;
+        projectSyncId?: string;
+        /** 手机上「换一个 Agent」的选择器浮在草稿上：草稿不卸载，选定才换人。 */
+        picking?: boolean;
+        /** 换 Agent 时带过来的草稿（文字 + 图片），开场放进新草稿的输入框。 */
+        carry?: Draft;
+      }
   >(null);
+  /** 新对话草稿此刻的内容（DraftSession 报上来的），换 Agent 时带去下一个。 */
+  const liveNewDraft = useRef<Draft | undefined>(undefined);
   /**
    * 派发种子留在这一页的内存里、不进历史记录：浏览器刷新会保留 history.state，放在那里
    * 的话刷新之后还拿着派发那一刻的机器去连，绕过按地址认领（规格决策 4）。
@@ -1127,14 +1142,26 @@ export default function Chat() {
   const composeDraft =
     compose?.step === "draft" ? (
       <DraftSession
+        // 换了 Agent 就是另一份草稿页（机器计划、模型、权限都按 Agent 重算）；
+        // 文字与图片经 carry 带过去。
+        key={compose.agent.sync_id}
         agent={compose.agent}
         agents={agents}
         projects={newConvProjects}
         initialProjectSyncId={compose.projectSyncId}
+        initialDraft={compose.carry}
+        onDraftChange={(draft) => {
+          liveNewDraft.current = draft;
+        }}
         onStarted={(session) => onDraftStarted(session, compose.agent)}
         // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
         onBack={isMobile ? () => setCompose(null) : undefined}
-        onChangeRecipient={beginCompose}
+        onChangeRecipient={
+          // 手机：选择器浮在草稿上；桌面右栏里没有这一颗。
+          isMobile
+            ? () => setCompose({ ...compose, picking: true })
+            : beginCompose
+        }
       />
     ) : null;
 
@@ -1441,25 +1468,29 @@ export default function Chat() {
       selectedRow && selectedRow.saved !== false ? selectedRow : undefined;
     return (
       <>
-        <ResolvedSessionDetail
-          conversationId={openConversationId}
-          deviceParam={deviceParam}
-          seed={detailSeed}
-          form="page"
-          backTo={chatIndexAddress(location.search)}
-          initialTitle={detailTitle}
-          initialUserText={openSeed?.userText}
-          initialAgent={openSeed?.agent}
-          initialModelNote={openSeed?.modelNote}
-          initialEffortNote={openSeed?.effortNote}
-          initialTurnStartedAt={openSeed?.turnStartedAt}
-          onMarkedRead={markRead}
-          onDelete={
-            deletableRow
-              ? () => sessionIndex.askDelete(deletableRow)
-              : undefined
-          }
-        />
+        <DraftKeyContext.Provider
+          value={conversationDraftKey(openConversationId)}
+        >
+          <ResolvedSessionDetail
+            conversationId={openConversationId}
+            deviceParam={deviceParam}
+            seed={detailSeed}
+            form="page"
+            backTo={chatIndexAddress(location.search)}
+            initialTitle={detailTitle}
+            initialUserText={openSeed?.userText}
+            initialAgent={openSeed?.agent}
+            initialModelNote={openSeed?.modelNote}
+            initialEffortNote={openSeed?.effortNote}
+            initialTurnStartedAt={openSeed?.turnStartedAt}
+            onMarkedRead={markRead}
+            onDelete={
+              deletableRow
+                ? () => sessionIndex.askDelete(deletableRow)
+                : undefined
+            }
+          />
+        </DraftKeyContext.Provider>
         <DeleteSessionDialog
           open={sessionIndex.pendingDelete !== null}
           onOpenChange={(open) => {
@@ -1672,19 +1703,23 @@ export default function Chat() {
               /* 地址上开着一条会话：右栏嵌入它的真实详情（embedded 形态：无外壳/
                  面包屑，由外层给尺寸）。先认出承载机器，再交给 SessionDetailView。 */
               <div className="min-h-0 flex-1">
-                <ResolvedSessionDetail
-                  conversationId={openConversationId}
-                  deviceParam={deviceParam}
-                  seed={detailSeed}
-                  form="embedded"
-                  initialTitle={detailTitle}
-                  initialUserText={openSeed?.userText}
-                  initialAgent={openSeed?.agent}
-                  initialModelNote={openSeed?.modelNote}
-                  initialEffortNote={openSeed?.effortNote}
-                  initialTurnStartedAt={openSeed?.turnStartedAt}
-                  onMarkedRead={markRead}
-                />
+                <DraftKeyContext.Provider
+                  value={conversationDraftKey(openConversationId)}
+                >
+                  <ResolvedSessionDetail
+                    conversationId={openConversationId}
+                    deviceParam={deviceParam}
+                    seed={detailSeed}
+                    form="embedded"
+                    initialTitle={detailTitle}
+                    initialUserText={openSeed?.userText}
+                    initialAgent={openSeed?.agent}
+                    initialModelNote={openSeed?.modelNote}
+                    initialEffortNote={openSeed?.effortNote}
+                    initialTurnStartedAt={openSeed?.turnStartedAt}
+                    onMarkedRead={markRead}
+                  />
+                </DraftKeyContext.Provider>
               </div>
             ) : (
               /* 未选中 / 没有真实会话：按 kpP7A 的空态层级呈现（共享 EmptyState）。
@@ -1735,11 +1770,30 @@ export default function Chat() {
           不弹层。 */}
       {isMobile && (
         <NewConversationSheet
-          open={compose?.step === "pick"}
-          onOpenChange={(open) => setCompose(open ? { step: "pick" } : null)}
+          open={
+            compose?.step === "pick" ||
+            (compose?.step === "draft" && compose.picking === true)
+          }
+          onOpenChange={(open) =>
+            compose?.step === "draft"
+              ? // 关掉选择器：回到原草稿，不收草稿。
+                setCompose({ ...compose, picking: open })
+              : setCompose(open ? { step: "pick" } : null)
+          }
           agents={agents}
           recentIds={recentIds}
-          onPick={(agent) => setCompose({ step: "draft", agent })}
+          onPick={(agent) =>
+            compose?.step === "draft"
+              ? setCompose({
+                  step: "draft",
+                  agent,
+                  // 同一个 Agent：就是关掉选择器；换人：把此刻的文字与图片带过去。
+                  ...(agent.sync_id === compose.agent.sync_id
+                    ? { projectSyncId: compose.projectSyncId }
+                    : { carry: liveNewDraft.current }),
+                })
+              : setCompose({ step: "draft", agent })
+          }
           onFromProject={() => setCompose({ step: "project" })}
           settled={agentsSettled}
         />
