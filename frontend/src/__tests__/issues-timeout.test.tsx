@@ -48,13 +48,22 @@ let serverIssues: ReturnType<typeof issue>[] = [];
 let gate: Promise<void> | null = null;
 let boardReadFails = false;
 
-const boardOf = () => ({
-  issues: serverIssues,
-  labels: [],
-  stage_counts: { todo: serverIssues.length, doing: 0, review: 0, done: 0 },
-  stage_totals: { todo: serverIssues.length, doing: 0, review: 0, done: 0 },
-  project_counts: [],
-});
+/** 服务端按 keyword 过滤；没有 keyword 参数就是全量。 */
+const boardOf = (path = "") => {
+  const keyword = new URLSearchParams(path.split("?")[1] ?? "").get("keyword");
+  const issues = keyword
+    ? serverIssues.filter((row) =>
+        row.title.toLowerCase().includes(keyword.toLowerCase()),
+      )
+    : serverIssues;
+  return {
+    issues,
+    labels: [],
+    stage_counts: { todo: issues.length, doing: 0, review: 0, done: 0 },
+    stage_totals: { todo: issues.length, doing: 0, review: 0, done: 0 },
+    project_counts: [],
+  };
+};
 
 const creates = () =>
   mockedApi.mock.calls.filter(
@@ -80,7 +89,7 @@ async function renderBoard(phone: boolean) {
     if (path.startsWith("/v1/workspace/issues")) {
       if (gate) await gate;
       if (boardReadFails) throw new Error("offline");
-      return boardOf();
+      return boardOf(path);
     }
     if (path === "/v1/workspace/projects") return { projects: [] };
     if (path === "/v1/workspace/agents") return { agents: [] };
@@ -239,5 +248,64 @@ describe.each([
       ).not.toMatch(/New task/),
     );
     expect(creates()).toHaveLength(1);
+  });
+});
+
+describe("看板有筛选时的超时查找（F5）", () => {
+  const filterBy = async (keyword: string) => {
+    fireEvent.change(screen.getByPlaceholderText("Search tasks…"), {
+      target: { value: keyword },
+    });
+    await waitFor(() =>
+      expect(
+        mockedApi.mock.calls.some(([p]) =>
+          String(p).includes(`keyword=${keyword}`),
+        ),
+      ).toBe(true),
+    );
+  };
+
+  it("刚建的那条被关键词筛掉了也认得出：直接打开，不再 POST；板上仍是筛过的", async () => {
+    await renderBoard(false);
+    await filterBy("Old");
+    await submitUntilTimeout("Phone task");
+    serverIssues = [issue("iss-new", "Phone task"), ...serverIssues];
+
+    fireEvent.click(refreshButton());
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("task-form-breadcrumb").textContent,
+      ).not.toMatch(/New task/),
+    );
+    expect(creates()).toHaveLength(1);
+    // 看板自己仍按关键词显示：新那条不在板上。
+    expect(screen.getByTestId("issue-board").textContent).not.toContain(
+      "Phone task",
+    );
+  });
+
+  it("被筛掉的同名旧任务不算刚建的：没建成时仍允许再提交", async () => {
+    serverIssues = [
+      issue("iss-old", "Old one"),
+      issue("iss-hid", "Phone task"),
+    ];
+    await renderBoard(false);
+    await filterBy("Old");
+    await submitUntilTimeout("Phone task");
+
+    fireEvent.click(refreshButton());
+
+    await waitFor(() =>
+      expect(screen.getByTestId("task-form-submit")).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+    expect(screen.getByTestId("task-form-breadcrumb").textContent).toMatch(
+      /New task/,
+    );
+    fireEvent.click(screen.getByTestId("task-form-submit"));
+    await waitFor(() => expect(creates()).toHaveLength(2));
   });
 });

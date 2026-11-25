@@ -110,7 +110,8 @@ export function useBoard(
   const knownIdsRef = React.useRef<ReadonlySet<string>>(new Set());
   const lastCreateRef = React.useRef<{
     fields: IssueFields;
-    knownBefore: ReadonlySet<string>;
+    /** 提交前**不带筛选**的全量标识（读不到则退回当前板上那份）。 */
+    knownBefore: Promise<ReadonlySet<string>>;
   } | null>(null);
 
   /**
@@ -211,7 +212,16 @@ export function useBoard(
       if (value.id) {
         await updateIssue(ids.syncIdOf(value.id), fields);
       } else {
-        lastCreateRef.current = { fields, knownBefore: knownIdsRef.current };
+        // 基线不能用当前板：板上有筛选时，被筛掉的同名旧任务会被误认成刚建的。
+        const onBoard = knownIdsRef.current;
+        lastCreateRef.current = {
+          fields,
+          knownBefore: fetchBoard("")
+            .then(
+              (all) => new Set((all?.issues ?? []).map((row) => row.sync_id)),
+            )
+            .catch(() => onBoard),
+        };
         await createIssue(fields);
       }
       await reload();
@@ -223,13 +233,21 @@ export function useBoard(
     const last = lastCreateRef.current;
     setRefreshing(true);
     try {
-      const { board, cause } = await runFetch();
-      if (!board) throw cause;
+      // 查找不吃板子当前的筛选：新建的那条可能正被关键词 / 范围筛在视野外。全量那份
+      // 只用来判定，不写状态；板子自己照旧重读（仍按当前筛选显示）。
+      const [, all] = await Promise.all([
+        runFetch(),
+        fetchBoard("").then(
+          (board) => ({ board, cause: null }),
+          (cause: unknown) => ({ board: null, cause }),
+        ),
+      ]);
+      if (!all.board) throw all.cause;
       if (!last) return null;
       const found = findSubmittedIssue(
-        board.issues ?? [],
+        all.board.issues ?? [],
         last.fields,
-        last.knownBefore,
+        await last.knownBefore,
       );
       return found ? toTaskFormValue(found, ids) : null;
     } finally {
