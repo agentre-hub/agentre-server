@@ -644,7 +644,6 @@ describe("E：账号已登出与触屏出口", () => {
     const cases: [SessionViewStatus, "link" | "button", string][] = [
       ["lost", "button", "Reconnect"],
       ["loggedOut", "link", "Sign in again"],
-      ["desktopAppNotRunning", "link", "View device"],
       ["pinnedAgentredUnavailable", "link", "View device"],
     ];
     it.each(cases)("%s 的出口有 min-h-11", (status, role, name) => {

@@ -62,6 +62,14 @@ vi.mock("@/hooks/use-me", async (importOriginal) => {
   };
 });
 
+// 账号级通道的读数由用例给（首页副行的来源，与 ConnectionStatus 读的是同一个 hook）。
+const account = vi.hoisted(() => ({ state: "connected" as string }));
+vi.mock("@/hooks/use-account-channel", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/use-account-channel")>();
+  return { ...actual, useAccountChannelState: () => account.state };
+});
+
 const mockedApi = vi.mocked(api);
 const mockUseRelay = vi.mocked(useRelayChannel);
 
@@ -128,6 +136,7 @@ beforeEach(async () => {
   relayState = "connecting";
   nextRetryAt = null;
   identity.status = "ready";
+  account.state = "connected";
   resetLiveTurns();
 });
 
@@ -533,5 +542,109 @@ describe("E1：首页页头副行", () => {
     expect(screen.getByTestId("chat-phone-subtitle").textContent).toBe(
       "Execution side unreachable · 1 / 2 machines online",
     );
+  });
+});
+
+describe("E1：首页副行不依赖机器轴（账号级通道）", () => {
+  function mountHome() {
+    mockMobileViewport();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/agent-sessions?")) {
+        const params = new URLSearchParams(path.split("?")[1] ?? "");
+        if (params.get("per_group") === "1") return { total: 0 };
+        return { total: 0, groups: [] };
+      }
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            deviceRow,
+            { ...deviceRow, id: 2, fingerprint: "fp-2", online: false },
+          ],
+        };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/workspace/projects") return { projects: [] };
+      throw new Error("unexpected: " + path);
+    });
+    stubClient();
+    mockUseRelay.mockImplementation(() => ({
+      client: fakeClient as never,
+      relayState: "connected",
+      relayTicket: null,
+      relayTicketError: null,
+      handshakeRejection: null,
+      reconnect,
+    }));
+    const tree = () => (
+      <MemoryRouter initialEntries={["/chat?axis=agent"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route path="/chat/:conversationId?" element={<Chat />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    const view = render(tree());
+    return () => act(async () => view.rerender(tree()));
+  }
+
+  it("连接中满 20 秒：任何一轴的副行都写「执行端连不上」并保留在线数；连上即撤", async () => {
+    account.state = "connecting";
+    const rerender = mountHome();
+    const subtitle = await screen.findByTestId("chat-phone-subtitle");
+    await waitFor(() => expect(subtitle.textContent).toContain("1 / 2"));
+    await advance(19_000);
+    expect(subtitle.textContent).not.toMatch(/unreachable/i);
+    await advance(1_500);
+    expect(screen.getByTestId("chat-phone-subtitle").textContent).toBe(
+      "Execution side unreachable · 1 / 2 machines online",
+    );
+    account.state = "connected";
+    await rerender();
+    expect(screen.getByTestId("chat-phone-subtitle").textContent).toContain(
+      "machines online",
+    );
+    expect(screen.getByTestId("chat-phone-subtitle").textContent).not.toMatch(
+      /unreachable/i,
+    );
+  });
+
+  it("未连接（disconnected）同样算：不是只有 connecting", async () => {
+    account.state = "disconnected";
+    mountHome();
+    await screen.findByTestId("chat-phone-subtitle");
+    await advance(20_500);
+    expect(screen.getByTestId("chat-phone-subtitle").textContent).toMatch(
+      /unreachable/i,
+    );
+  });
+});
+
+describe("H5：离线时只留底部只读带（手机）", () => {
+  const appDevice = { ...deviceRow, kind: "desktop", online: false };
+
+  it("只读带写「最后在线 …」，手机上不再挂顶部横幅", async () => {
+    mockMobileViewport();
+    stubApi(appDevice, [
+      { peer_fingerprint: "fp-1", conversation_id: "42", title: "重构登录页" },
+    ]);
+    stubClient();
+    mountDetail("page");
+    const band = await screen.findByTestId("session-compose-readonly");
+    expect(band.textContent).toMatch(/last seen/i);
+    expect(
+      document.querySelector('[data-session-status="desktopAppNotRunning"]'),
+    ).toBeNull();
+  });
+
+  it("桌面保持原样：顶部横幅仍在", async () => {
+    stubApi(appDevice, [
+      { peer_fingerprint: "fp-1", conversation_id: "42", title: "重构登录页" },
+    ]);
+    stubClient();
+    mountDetail();
+    await screen.findByTestId("session-compose-readonly");
+    expect(
+      document.querySelector('[data-session-status="desktopAppNotRunning"]'),
+    ).not.toBeNull();
   });
 });

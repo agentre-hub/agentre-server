@@ -2517,6 +2517,7 @@ export default function SessionDetailView({
       cwd={identity?.cwd}
       atBottom={scrollback.atBottom}
       machineName={device?.name}
+      machineLastSeenMs={device?.last_seen_at}
       backendType={summary?.backendType}
       agents={agents}
       messages={messages}

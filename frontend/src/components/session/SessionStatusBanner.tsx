@@ -139,7 +139,12 @@ export default function SessionStatusBanner({
   if (tier === null || tier === "transient") return null;
   // 手机上离线不挂横幅（规格 2026-11-05 决策 8）：页头写「离线 · 时间」，输入框
   // 那一位换成只读带——默认停在底部时顶上的横幅本来就看不到。
-  if (isMobile && status === "machineOffline") return null;
+  // 规格 H5：离线 / App 没开时只留底部只读带（它写「最后在线 …」），页头只写「离线」。
+  if (
+    isMobile &&
+    (status === "machineOffline" || status === "desktopAppNotRunning")
+  )
+    return null;
 
   /**
    * 「最后在线」走全站的相对时间口径（`formatRelativeTime`，与索引行、详情头部

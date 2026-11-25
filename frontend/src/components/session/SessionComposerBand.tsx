@@ -18,7 +18,7 @@ import {
   type TranscriptPorts,
 } from "@agentre-hub/agentre-ui";
 
-import { computeContextUsage } from "@/lib/sessionView";
+import { computeContextUsage, formatRelativeTime } from "@/lib/sessionView";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { usePutBackUndelivered } from "@/components/session/useSteerQueue";
 import { TranscriptSessionId } from "@/components/session/transcriptFrame";
@@ -120,6 +120,8 @@ export interface SessionComposerBandProps {
   /** 贴底与否决定这一带的上边界（规格 2026-08-23 决策 6）。 */
   atBottom: boolean;
   machineName: string | undefined;
+  /** 那台机器最后在线的时刻（Unix 毫秒）；只读带上写「最后在线 …」。取不到就不写。 */
+  machineLastSeenMs?: number;
   backendType: string | undefined;
   /**
    * 「问哪台机器要 Skill 补全」的三样事实，原样透传给输入框（见 SessionComposer 的
@@ -195,6 +197,7 @@ export default function SessionComposerBand({
   status,
   atBottom,
   machineName,
+  machineLastSeenMs,
   backendType,
   agentSyncId,
   targetFingerprint,
@@ -225,7 +228,7 @@ export default function SessionComposerBand({
   decisionPorts,
   dockConfirming = false,
 }: SessionComposerBandProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const composerModule = useSessionComposerModule();
   // 手机：输入框走触屏档，只读条带「查看设备」的出口（规格 2026-11-05 决策 8 / 9）。
   const isMobile = useIsMobile();
@@ -318,7 +321,21 @@ export default function SessionComposerBand({
             ) : (
               <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />
             )}
-            {readonlyNote}
+            <span className="flex min-w-0 flex-col">
+              <span>{readonlyNote}</span>
+              {/* 最后在线只在这一处说（规格 H5）：页头只写「离线」，手机上顶部横幅撤了。 */}
+              {machineLastSeenMs && status !== "deviceRevoked" ? (
+                <time
+                  data-testid="session-compose-last-seen"
+                  dateTime={new Date(machineLastSeenMs).toISOString()}
+                  title={new Date(machineLastSeenMs).toLocaleString()}
+                >
+                  {t("session.banner.lastSeen", {
+                    time: formatRelativeTime(machineLastSeenMs, i18n.language),
+                  })}
+                </time>
+              ) : null}
+            </span>
             {/* 手机上停在这一带的出口：去看那台机器（撤销那一档它不会回来，不摆）。 */}
             {isMobile && status !== "deviceRevoked" ? (
               <Link

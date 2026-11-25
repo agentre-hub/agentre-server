@@ -63,7 +63,14 @@ import ResolvedSessionDetail, {
   type SessionDetailSeed,
 } from "@/components/session/ResolvedSessionDetail";
 import { useIsMobile } from "@/components/use-is-mobile";
-import { useAccountChannel } from "@/hooks/use-account-channel";
+import {
+  useAccountChannel,
+  useAccountChannelState,
+} from "@/hooks/use-account-channel";
+import {
+  UNREACHABLE_AFTER_MS,
+  useDelayedFlag,
+} from "@/components/session/SessionConnectionIndicator";
 import {
   AccountChannelDevicePresence,
   AccountChannelSyncVersion,
@@ -734,6 +741,12 @@ export default function Chat() {
     keyword: sessionIndex.debouncedSearch,
     filter: dataFilter,
   });
+  // 账号级中继通道连不上满 ~20 秒（与对话页头同一个阈值）：首页副行据此说话，不依赖机器轴。
+  const accountChannelState = useAccountChannelState();
+  const accountUnreachable = useDelayedFlag(
+    accountChannelState !== "connected",
+    UNREACHABLE_AFTER_MS,
+  );
   const { forgetResolved } = reach;
 
   /**
@@ -1642,9 +1655,9 @@ export default function Chat() {
   });
   const onlineMachineCount = sessionMachines.filter((d) => d.online).length;
   // 已去抖的「不可达」（useMachineReachability 里熬过 3 秒才报），所以这里不会随重连抖动闪。
-  const relayUnreachable = Object.values(reach.machineStates).some(
-    (state) => state === "unreachable",
-  );
+  const relayUnreachable =
+    accountUnreachable ||
+    Object.values(reach.machineStates).some((state) => state === "unreachable");
   const phoneSubtitle: PhoneSubtitle =
     offlineSince !== null && sessionIndex.loaded
       ? {
