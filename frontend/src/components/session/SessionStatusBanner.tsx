@@ -22,6 +22,7 @@ import {
   type ProtocolRejection,
 } from "@/lib/protocolMismatch";
 import { useIsMobile } from "@/components/use-is-mobile";
+import { reloadPage } from "@/hooks/use-update-available";
 import { formatRelativeTime, type SessionViewStatus } from "@/lib/sessionView";
 
 /**
@@ -229,9 +230,22 @@ export default function SessionStatusBanner({
       // 这三档的出口都是设备页。`protocolMismatch` 尤其不能给「重新连接」：重拨
       // 一次只会被同样拒一次（客户端那一侧已经据此停掉重试了），要动的是那台机器
       // 上的构建。
-      // 页面旧的那一头例外：要动的是这个控制台自己，用户在设备页什么都做不了。
+      // 页面旧的那一头例外：要动的是这个控制台自己，用户在设备页什么都做不了——
+      // 出口是「重新加载」，与新版本提示条同一个动作（规格 2026-11-25 决策 B1）。
       case "protocolMismatch":
-        if (rejection?.stale === "page") return null;
+        if (rejection?.stale === "page") {
+          return (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full @md:w-auto"
+              onClick={reloadPage}
+            >
+              <RotateCw aria-hidden className="size-3.5" />
+              {t("common.reload")}
+            </Button>
+          );
+        }
         return deviceLink();
       case "desktopAppNotRunning":
       case "pinnedAgentredUnavailable":

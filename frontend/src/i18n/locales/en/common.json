@@ -4,6 +4,8 @@
   "cancel": "Cancel",
   "loading": "Loading…",
   "retry": "Retry",
+  "reload": "Reload",
+  "pageLoadFailed": "The page didn't load",
   "language": {
     "label": "Language"
   },

@@ -42,9 +42,400 @@
       content="#18191b"
     />
     <title>Agentre Server</title>
+    <script>
+      // 主题在首帧之前定下（与应用同一个偏好 agentre.theme：light / dark / system），
+      // 启动壳因此一开始就是对的深浅色；ThemeProvider 起来后写的是同一套 class。
+      (function () {
+        var pref = null;
+        try {
+          pref = localStorage.getItem("agentre.theme");
+        } catch (e) {}
+        var dark =
+          pref === "dark" ||
+          (pref !== "light" &&
+            !!window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
+    <!--
+      启动壳的样式（规格 2026-11-25 决策 B2）。颜色是共享包 tokens.css 里同名 token 的
+      抄本——这一段在应用样式表到达之前就要画出来，用不了 Tailwind；pwa-install.test.ts
+      逐个对回包里的值，除 :root / .dark 两块之外不许出现色值字面量。
+    -->
+    <style>
+      :root {
+        --sheet: #ffffff;
+        --chrome: #ececee;
+        --foreground: #18181b;
+        --muted-foreground: #65656d;
+        --muted: #f4f4f5;
+        --secondary: #f4f4f5;
+        --primary: #3b6896;
+        --primary-text: #3b6896;
+      }
+      .dark {
+        --sheet: #1b1c1f;
+        --chrome: #111214;
+        --foreground: #e8e8e9;
+        --muted-foreground: #909399;
+        --muted: #202122;
+        --secondary: #292a2e;
+        --primary: #5b8dbf;
+        --primary-text: #8eb6dc;
+      }
+      #boot-shell {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483000;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--sheet);
+        color: var(--foreground);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto,
+          sans-serif;
+      }
+      .boot-phone {
+        display: flex;
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+      }
+      .boot-header {
+        padding-top: env(safe-area-inset-top, 0px);
+      }
+      .boot-bar {
+        position: relative;
+        display: flex;
+        height: 52px;
+        align-items: center;
+        gap: 4px;
+        padding: 0 12px;
+      }
+      .boot-icon {
+        display: flex;
+        width: 44px;
+        height: 44px;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+      }
+      .boot-icon:first-child {
+        margin-left: -8px;
+      }
+      .boot-icon svg {
+        width: 20px;
+        height: 20px;
+      }
+      .boot-accent {
+        color: var(--primary-text);
+      }
+      .boot-title {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .boot-line {
+        display: block;
+        border-radius: 6px;
+        background: var(--muted);
+      }
+      .boot-progress {
+        position: absolute;
+        right: 0;
+        bottom: -1px;
+        left: 0;
+        height: 2px;
+        overflow: hidden;
+      }
+      .boot-progress span {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -40%;
+        width: 40%;
+        border-radius: 9999px;
+        background: var(--primary);
+        animation: boot-progress 1.6s ease-in-out infinite;
+      }
+      @keyframes boot-progress {
+        to {
+          left: 100%;
+        }
+      }
+      .boot-chips {
+        display: flex;
+        gap: 6px;
+        padding: 0 12px 10px;
+      }
+      .boot-chip {
+        height: 32px;
+        border-radius: 9999px;
+        background: var(--muted);
+      }
+      .boot-list {
+        flex: 1;
+        overflow: hidden;
+        padding: 0 8px;
+      }
+      .boot-row {
+        display: flex;
+        min-height: 64px;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 8px;
+      }
+      .boot-row:nth-child(2) {
+        opacity: 0.8;
+      }
+      .boot-row:nth-child(3) {
+        opacity: 0.6;
+      }
+      .boot-row:nth-child(4) {
+        opacity: 0.45;
+      }
+      .boot-row:nth-child(n + 5) {
+        opacity: 0.3;
+      }
+      .boot-avatar {
+        width: 44px;
+        height: 44px;
+        flex-shrink: 0;
+        border-radius: 12px;
+        background: var(--secondary);
+      }
+      .boot-lines {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .boot-row .boot-line {
+        background: var(--secondary);
+        animation: boot-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+      @keyframes boot-pulse {
+        50% {
+          opacity: 0.5;
+        }
+      }
+      .boot-slow {
+        display: none;
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px 16px max(12px, env(safe-area-inset-bottom, 0px));
+        background: var(--sheet);
+        color: var(--muted-foreground);
+        font-size: 13px;
+      }
+      #boot-shell[data-slow] .boot-slow {
+        display: flex;
+      }
+      .boot-spinner {
+        width: 12px;
+        height: 12px;
+        border: 1.5px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 9999px;
+        animation: boot-spin 1s linear infinite;
+      }
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      /* 桌面宽度的第一屏是总览，不是这张列表：只铺外框底色，慢网那一行照出。 */
+      @media (min-width: 768px) {
+        #boot-shell,
+        .boot-slow {
+          background: var(--chrome);
+        }
+        .boot-phone {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-progress span,
+        .boot-row .boot-line,
+        .boot-spinner {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <!--
+      启动壳（规格 2026-11-25 决策 B2、审计 W31）：与手机首页同形的页头 + 筛选条 + 列表
+      骨架，HTML 一到就画，不等脚本。它在 #root 之外、盖在上面，应用第一屏画出来之前
+      一直留着——「加载中…」占位、切出去的页还没取到时的空白都被它盖住，不会闪一下再空。
+      8 秒仍没起来，底部出一行「网络较慢，仍在加载…」。撤掉它的判据在下面的脚本里。
+    -->
+    <div id="boot-shell">
+      <div class="boot-phone" aria-hidden="true">
+        <div class="boot-header" data-boot="header">
+          <div class="boot-bar">
+            <span class="boot-icon">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="4" x2="20" y1="12" y2="12" />
+                <line x1="4" x2="20" y1="6" y2="6" />
+                <line x1="4" x2="20" y1="18" y2="18" />
+              </svg>
+            </span>
+            <span class="boot-title">
+              <span class="boot-line" style="width: 64px; height: 16px"></span>
+              <span class="boot-line" style="width: 96px; height: 10px"></span>
+            </span>
+            <span class="boot-icon">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.3-4.3" />
+              </svg>
+            </span>
+            <span class="boot-icon boot-accent">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+                />
+                <path
+                  d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"
+                />
+              </svg>
+            </span>
+            <span class="boot-progress"><span></span></span>
+          </div>
+          <div class="boot-chips">
+            <span class="boot-chip" data-boot="chip" style="width: 52px"></span>
+            <span class="boot-chip" data-boot="chip" style="width: 60px"></span>
+            <span class="boot-chip" data-boot="chip" style="width: 60px"></span>
+            <span class="boot-chip" data-boot="chip" style="width: 48px"></span>
+          </div>
+        </div>
+        <div class="boot-list">
+          <div class="boot-row" data-boot="row">
+            <span class="boot-avatar"></span>
+            <span class="boot-lines">
+              <span class="boot-line" style="width: 68%; height: 14px"></span>
+              <span class="boot-line" style="width: 60%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row">
+            <span class="boot-avatar"></span>
+            <span class="boot-lines">
+              <span class="boot-line" style="width: 59%; height: 14px"></span>
+              <span class="boot-line" style="width: 52%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row">
+            <span class="boot-avatar"></span>
+            <span class="boot-lines">
+              <span class="boot-line" style="width: 50%; height: 14px"></span>
+              <span class="boot-line" style="width: 60%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row">
+            <span class="boot-avatar"></span>
+            <span class="boot-lines">
+              <span class="boot-line" style="width: 41%; height: 14px"></span>
+              <span class="boot-line" style="width: 48%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row">
+            <span class="boot-avatar"></span>
+            <span class="boot-lines">
+              <span class="boot-line" style="width: 56%; height: 14px"></span>
+              <span class="boot-line" style="width: 40%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row">
+            <span class="boot-avatar"></span>
+            <span class="boot-lines">
+              <span class="boot-line" style="width: 46%; height: 14px"></span>
+              <span class="boot-line" style="width: 54%; height: 12px"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="boot-slow" role="status">
+        <span class="boot-spinner" aria-hidden="true"></span>
+        <span id="boot-slow-text"></span>
+      </div>
+    </div>
     <div id="root"></div>
+    <script>
+      (function () {
+        var SLOW_MS = 8000;
+        // 第一屏 = #root 里出现了能读或能点的东西。RequireAuth 的「加载中…」只是一行
+        // 字，sonner 的通知区是空的 <section>，切出去的页没取到时是空——这些都不算。
+        var READY =
+          "main, header, nav, form, h1, h2, button, a[href], input, textarea";
+        var shell = document.getElementById("boot-shell");
+        var app = document.getElementById("root");
+        if (!shell || !app) return;
+
+        var stored = null;
+        try {
+          stored = localStorage.getItem("agentre.lang");
+        } catch (e) {}
+        var zh = /^zh/i.test(stored || navigator.language || "");
+        document.getElementById("boot-slow-text").textContent = zh
+          ? "网络较慢，仍在加载…"
+          : "Slow network, still loading…";
+
+        var slow = setTimeout(function () {
+          shell.setAttribute("data-slow", "");
+        }, SLOW_MS);
+        var observer = new MutationObserver(check);
+
+        function check() {
+          if (!app.querySelector(READY)) return;
+          observer.disconnect();
+          clearTimeout(slow);
+          // 等第一屏真的画到屏上（下一帧之后）再撤，中间不露出一帧空白。
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+              shell.remove();
+            });
+          });
+        }
+
+        observer.observe(app, { childList: true, subtree: true });
+        check();
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

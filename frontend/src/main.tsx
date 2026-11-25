@@ -8,12 +8,18 @@ import "./styles/globals.css";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import { loadCsrfToken } from "./lib/api";
 import { registerServiceWorker } from "./lib/service-worker";
+import { startUpdateWatch } from "./hooks/use-update-available";
 import { lockZoomWhenStandalone } from "./lib/standaloneZoomLock";
 
 loadCsrfToken();
 // 生产才注册 PWA service worker：dev 下 vite 的 HMR 客户端会与 SW 抢资源。
-// 注册失败只在模块里落一条 warn，绝不阻塞应用启动。
-void registerServiceWorker({ enabled: import.meta.env.PROD });
+// 注册失败只在模块里落一条 warn，绝不阻塞应用启动。注册上了就开始盯新版本：
+// 启动问一次、回前台再问，有新版本时顶部出「控制台有新版本 · 重新加载」。
+void registerServiceWorker({ enabled: import.meta.env.PROD }).then(
+  (registration) => {
+    if (registration) startUpdateWatch();
+  },
+);
 // 从主屏幕打开（standalone）时禁止缩放，更像原生 App；Safari 标签页照常可缩放。
 lockZoomWhenStandalone();
 createRoot(document.getElementById("root")!).render(

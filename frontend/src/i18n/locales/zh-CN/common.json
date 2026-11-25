@@ -4,6 +4,8 @@
   "cancel": "取消",
   "loading": "加载中…",
   "retry": "重试",
+  "reload": "重新加载",
+  "pageLoadFailed": "页面没加载出来",
   "language": {
     "label": "语言"
   },

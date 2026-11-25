@@ -25,6 +25,7 @@ import {
 } from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useKeyboardViewport } from "@/components/use-keyboard-viewport";
+import UpdateAvailableBar from "@/components/UpdateAvailableBar";
 import { UserMenu } from "@/components/UserMenu";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
@@ -433,18 +434,17 @@ export default function AppShell({
     时，桌面放在内容列最上面，手机上压在页面那条 52px 页头（PhonePageHeader，所有手机
     页同一高度）的下沿——那条页头在页面自己的树里，外壳插不进它后面。压着的那一条
     不接指针，点按照旧落到下面。
+
+    「控制台有新版本 · 重新加载」（决策 B1，对比稿 d8 B）跟它同一个位置、排在它下面；
+    压着的时候只有这一条接指针——它有按钮，且可关闭。
   */
   const shellHeader = !ownHeader && !immersive;
   const unstable = identityStatus === "unstable";
-  const unstableStrip = (overlay: boolean) => (
+  const unstableStrip = (
     <div
       role="status"
       data-testid="identity-unstable"
-      className={cn(
-        "flex shrink-0 items-center gap-2 bg-status-waiting-bg px-4 py-1.5 text-xs text-status-waiting-text",
-        overlay &&
-          "pointer-events-none absolute inset-x-0 top-[calc(52px_+_env(safe-area-inset-top,0px))] z-20",
-      )}
+      className="flex shrink-0 items-center gap-2 bg-status-waiting-bg px-4 py-1.5 text-xs text-status-waiting-text"
     >
       <WifiOff className="size-3.5 shrink-0" aria-hidden="true" />
       <span className="min-w-0 truncate">{t("appShell.unstable")}</span>
@@ -536,7 +536,12 @@ export default function AppShell({
               <AppControls />
             </header>
           )}
-          {unstable && (shellHeader || !isMobile) && unstableStrip(false)}
+          {(shellHeader || !isMobile) && (
+            <>
+              {unstable && unstableStrip}
+              <UpdateAvailableBar />
+            </>
+          )}
           {/*
           索引列与内容页同在这一行。没有顶栏的页上沿也得离开外框，这 8px 由这一行的
           pt-2 给，索引列与内容页一起让：对话页左列顶行与右栏顶带（同为 56px）因此仍在
@@ -585,7 +590,12 @@ export default function AppShell({
             </div>
           </div>
         </div>
-        {unstable && !shellHeader && isMobile && unstableStrip(true)}
+        {!shellHeader && isMobile && (
+          <div className="pointer-events-none absolute inset-x-0 top-[calc(52px_+_env(safe-area-inset-top,0px))] z-20 flex flex-col">
+            {unstable && unstableStrip}
+            <UpdateAvailableBar className="pointer-events-auto" />
+          </div>
+        )}
       </div>
       {mobileDrawer}
     </MobileDrawerProvider>
