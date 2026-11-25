@@ -28,5 +28,11 @@
     "goDevices": "去设备页",
     "copyDiagnostics": "复制诊断信息",
     "copied": "诊断信息已复制"
+  },
+  "serverUnreachable": {
+    "title": "连不上服务器",
+    "body": "网络回来后会自动进入，不用重新登录。",
+    "retrying": "正在自动重试 · 第 {{n}} 次",
+    "retryNow": "立即重试"
   }
 }

@@ -6,8 +6,20 @@ export function setCsrfToken(t: string | null) {
   if (t) sessionStorage.setItem("csrf", t);
   else sessionStorage.removeItem("csrf");
 }
+export function hasCsrfToken(): boolean {
+  return csrfToken !== null;
+}
 export function loadCsrfToken() {
   csrfToken = sessionStorage.getItem("csrf");
+}
+
+/**
+ * 任何请求回 401 时喊谁（规格 2026-11-25 决策 A2/A3：只有 401 才算登出）。由身份模块
+ * 注册——它决定要不要清空本地、去登录页；这里只负责「看到了 401」，不认识登录页。
+ */
+let unauthorizedHandler: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn;
 }
 
 export class ApiError extends Error {
@@ -66,6 +78,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       credentials: "include",
       signal: ctl.signal,
     });
+    // 先于解析响应体：401 就是 401，代理塞回一页 HTML 也一样。
+    if (res.status === 401) unauthorizedHandler?.();
     envelope = await res.json();
   } catch (err) {
     throw timedOut ?? err;

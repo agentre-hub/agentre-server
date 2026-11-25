@@ -9,6 +9,7 @@ import {
   MessagesSquare,
   Monitor,
   Settings as SettingsIcon,
+  WifiOff,
 } from "lucide-react";
 
 import AppControls from "@/components/AppControls";
@@ -133,7 +134,7 @@ export default function AppShell({
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const keyboard = useKeyboardViewport();
-  const { me } = useMe();
+  const { me, status: identityStatus } = useMe();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const openDrawer = useCallback(() => setDrawerOpen(true), []);
   const [deviceMeta, setDeviceMeta] = useState<DeviceMeta | null>(null);
@@ -425,6 +426,32 @@ export default function AppShell({
   ) : null;
 
   /*
+    身份核对失败、用着本地身份时的「网络不稳定」细条（规格 2026-11-25 决策 A3，对比稿
+    d1 B 帧 3）：不换页、不挡操作，只说一句屏上是刚才的内容、正在重试。
+
+    落在页头之下。外壳自己画页头时跟在它后面；页面自己画页头（ownHeader / 沉浸形态）
+    时，桌面放在内容列最上面，手机上压在页面那条 52px 页头（PhonePageHeader，所有手机
+    页同一高度）的下沿——那条页头在页面自己的树里，外壳插不进它后面。压着的那一条
+    不接指针，点按照旧落到下面。
+  */
+  const shellHeader = !ownHeader && !immersive;
+  const unstable = identityStatus === "unstable";
+  const unstableStrip = (overlay: boolean) => (
+    <div
+      role="status"
+      data-testid="identity-unstable"
+      className={cn(
+        "flex shrink-0 items-center gap-2 bg-status-waiting-bg px-4 py-1.5 text-xs text-status-waiting-text",
+        overlay &&
+          "pointer-events-none absolute inset-x-0 top-[calc(52px_+_env(safe-area-inset-top,0px))] z-20",
+      )}
+    >
+      <WifiOff className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 truncate">{t("appShell.unstable")}</span>
+    </div>
+  );
+
+  /*
     整页不滚：滚动落在 main 里。根若是 min-h-screen，页面高于视口时整份文档往下
     滚——「把输入框钉在底上」就无从谈起（侧栏、顶栏、会话列表会一起被卷走）。所以
     根是 h-dvh + overflow-hidden，非 flush 的页由 main 自己 overflow-y-auto。
@@ -509,6 +536,7 @@ export default function AppShell({
               <AppControls />
             </header>
           )}
+          {unstable && (shellHeader || !isMobile) && unstableStrip(false)}
           {/*
           索引列与内容页同在这一行。没有顶栏的页上沿也得离开外框，这 8px 由这一行的
           pt-2 给，索引列与内容页一起让：对话页左列顶行与右栏顶带（同为 56px）因此仍在
@@ -557,6 +585,7 @@ export default function AppShell({
             </div>
           </div>
         </div>
+        {unstable && !shellHeader && isMobile && unstableStrip(true)}
       </div>
       {mobileDrawer}
     </MobileDrawerProvider>

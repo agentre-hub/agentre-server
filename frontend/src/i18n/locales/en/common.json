@@ -28,5 +28,11 @@
     "goDevices": "Go to devices",
     "copyDiagnostics": "Copy diagnostics",
     "copied": "Diagnostics copied"
+  },
+  "serverUnreachable": {
+    "title": "Can't reach the server",
+    "body": "You'll get in automatically once the network is back — no need to sign in again.",
+    "retrying": "Retrying automatically · attempt {{n}}",
+    "retryNow": "Retry now"
   }
 }
