@@ -5,7 +5,13 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
@@ -610,5 +616,212 @@ describe("部门详情手机页头", () => {
     const header = await screen.findByTestId("org-detail-header");
     expect(within(header).getByRole("button", { name: "Close" })).toBeTruthy();
     expect(within(header).getByRole("textbox", { name: "Name" })).toBeTruthy();
+  });
+});
+
+function HistoryProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <span data-testid="path">{location.pathname}</span>
+      <button onClick={() => navigate(-1)}>system-back</button>
+    </>
+  );
+}
+
+function renderOrgHistory(entries: string[]) {
+  return render(
+    <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+      <ThemeProvider>
+        <HistoryProbe />
+        <Routes>
+          <Route path="/org/:kind?/:syncId?" element={<Org />} />
+        </Routes>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+const systemBack = () => fireEvent.click(screen.getByText("system-back"));
+
+/** react-router 在 window.history.state 记着自己的位置；MemoryRouter 不写它，用例手动垫。 */
+function setHistoryIdx(idx: number | undefined) {
+  window.history.replaceState(idx === undefined ? null : { idx }, "");
+}
+
+/**
+ * 页头 ‹ = 回到上一处（规格 2026-11-25 D3）：有上一处就退一步，否则以替换方式回到
+ * 上级；两种情况历史都不能变长。
+ */
+describe("Agent / 部门详情 ‹ 不 push（D3、I11）", () => {
+  afterEach(() => setHistoryIdx(undefined));
+
+  it("有上一处：‹ 退一步，随后系统返回直接到更早的一页，不会回到刚离开的 Agent", async () => {
+    mockMobileViewport();
+    setHistoryIdx(2);
+    renderOrgHistory(["/start", "/org", "/org/agent/agent-alice"]);
+
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/org"),
+    );
+    systemBack();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/start"),
+    );
+  });
+
+  it("深链进 Agent 没有上一处：‹ 以替换回 /org，系统返回回到进来之前", async () => {
+    mockMobileViewport();
+    setHistoryIdx(undefined);
+    renderOrgHistory(["/start", "/org/agent/agent-alice"]);
+
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/org"),
+    );
+    systemBack();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/start"),
+    );
+  });
+
+  it("部门详情同一条规则", async () => {
+    mockMobileViewport();
+    setHistoryIdx(undefined);
+    renderOrgHistory(["/start", "/org/department/dept-eng"]);
+
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/org"),
+    );
+    systemBack();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/start"),
+    );
+  });
+});
+
+/**
+ * Agent 系统提示词与描述离开页面时自动保存（F4、I12）：返回、卸载、页面进后台
+ * （pagehide）都先存一次；没改过不存，已经存过不重复存。
+ */
+describe("Agent 系统提示词与描述离开即存（F4、I12）", () => {
+  const updates = () =>
+    mockedApi.mock.calls
+      .filter((c) => c[0] === "/v1/workspace/org/agents/update")
+      .map((c) => JSON.parse((c[1] as RequestInit).body as string));
+  const promptBox = () =>
+    screen.getByLabelText("System prompt", { selector: "textarea" });
+
+  afterEach(() => setHistoryIdx(undefined));
+
+  it("打完字直接点 ‹（不失焦）：提示词与描述都存了", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "Ops helper" },
+    });
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+
+    await waitFor(() => expect(updates().length).toBe(2));
+    expect(updates()).toContainEqual({
+      sync_id: "agent-alice",
+      prompt_json: JSON.stringify(["Be brief"]),
+    });
+    expect(updates()).toContainEqual({
+      sync_id: "agent-alice",
+      description: "Ops helper",
+    });
+  });
+
+  it("页面进后台（pagehide）也存，随后离开不再重复存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    window.dispatchEvent(new Event("pagehide"));
+    await waitFor(() => expect(updates().length).toBe(1));
+
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+    expect(updates().length).toBe(1);
+  });
+
+  it("失焦已存过，再离开不重复存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    fireEvent.blur(promptBox());
+    await waitFor(() => expect(updates().length).toBe(1));
+
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+    expect(updates().length).toBe(1);
+  });
+
+  it("没改过的文字离开不存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    window.dispatchEvent(new Event("pagehide"));
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+    expect(updates().length).toBe(0);
+  });
+
+  it("存失败：文字留在框里，页头出现既有的「保存失败 + 重试」", async () => {
+    mockMobileViewport();
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && (!init || init.method === undefined))
+        return chart;
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      if (path === "/v1/workspace/org/agents/update") throw new Error("boom");
+      throw new Error(`unexpected request: ${path}`);
+    });
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    window.dispatchEvent(new Event("pagehide"));
+
+    const status = await within(header).findByTestId("org-detail-save-status");
+    await waitFor(() => expect(status.textContent).toContain("boom"));
+    expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect((promptBox() as HTMLTextAreaElement).value).toBe("Be brief");
+  });
+
+  it("存成功：页头下显示「已保存」", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    window.dispatchEvent(new Event("pagehide"));
+
+    const status = await within(header).findByTestId("org-detail-save-status");
+    await waitFor(() => expect(status.textContent).toMatch(/Saved/));
+  });
+
+  it("部门描述同样离开即存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/department/dept-eng"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "Builders" },
+    });
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+
+    await waitFor(() =>
+      expect(mockedApi).toHaveBeenCalledWith(
+        "/v1/workspace/org/departments/update",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
   });
 });

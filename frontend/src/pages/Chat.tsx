@@ -12,6 +12,7 @@ import {
   Link,
   useLocation,
   useNavigate,
+  useNavigationType,
   useParams,
   useSearchParams,
 } from "react-router-dom";
@@ -241,6 +242,7 @@ export default function Chat() {
   }>();
   const openConversationId = routeConversationId ?? null;
   const location = useLocation();
+  const navigationType = useNavigationType();
   const deviceParam = readDeviceParam(searchParams);
   /**
    * 异步回调里要的是**此刻**的地址，不是回调造出来那一刻的：保存 / 删除的应答回来时
@@ -377,6 +379,29 @@ export default function Chat() {
   // 一次 localStorage。
   const [recentIds, setRecentIds] = useState<string[]>([]);
   /**
+   * 这一页（pathname + search）是怎么来的、上一页是哪：删除对话后要知道「退一步」是不是
+   * 恰好回到列表。只在页换了时前进——浮层的记号（同地址、只换 state）不算一页。
+   */
+  const trailRef = useRef({
+    cur: location,
+    prev: null as typeof location | null,
+    type: navigationType,
+  });
+  useEffect(() => {
+    const trail = trailRef.current;
+    if (
+      trail.cur.pathname === location.pathname &&
+      trail.cur.search === location.search
+    ) {
+      return;
+    }
+    trailRef.current = {
+      cur: location,
+      prev: trail.cur,
+      type: navigationType,
+    };
+  }, [location, navigationType]);
+  /**
    * 离开当前开着的会话，回到不开任何会话的 `/chat`（范围参数留着）。
    *
    * 用 replace：这是系统替用户离开，不是用户想退回去的一格——后退回一条已删除的
@@ -404,10 +429,26 @@ export default function Chat() {
       // 右栏正开着这一条时一并收起：它已经不存在了，留在那里等于让用户对着一份
       // 已经删掉的转录继续读。身份就是 conversation_id，与行的键同一个值。
       if (locationRef.current.conversationId === row.conversationId) {
-        leaveSession();
+        // 手机上这条是从同一份列表点进来的（push 的一格）：退回那一格，历史里不留
+        // 「列表、列表」两份重复项（D3、I14）。深链打开、或上一格不是这份列表时
+        // 仍用 replace。浮层记号压在上面时 -1 只会退掉记号，同样走 replace。
+        const trail = trailRef.current;
+        const current = locationRef.current;
+        if (
+          isMobile &&
+          current.layer === 0 &&
+          trail.type === "PUSH" &&
+          trail.prev?.pathname === "/chat" &&
+          chatIndexAddress(trail.prev.search) ===
+            chatIndexAddress(current.search)
+        ) {
+          void nav(-1);
+        } else {
+          leaveSession();
+        }
       }
     },
-    [leaveSession],
+    [isMobile, leaveSession, nav],
   );
   /**
    * 右栏正开着的那条写进了账号：`?device=` 只是未保存会话的寻址兜底，从此由账号那一行

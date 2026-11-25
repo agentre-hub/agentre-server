@@ -34,6 +34,7 @@ import {
 
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
+import { MobileDrawerProvider } from "@/components/console/MobileNav";
 import { api } from "@/lib/api";
 import { draftStore, useDraftKey } from "@/lib/drafts";
 import { bindAccount } from "@/lib/localStore";
@@ -1690,5 +1691,152 @@ describe("手机首页：范围弹层", () => {
     expect(
       within(sheet).getByTestId("scope-item-agent-ag-9").textContent,
     ).toContain("裸 Agent");
+  });
+});
+
+/**
+ * 返回与焦点（规格 2026-11-25 D3、D5）：删除不留重复历史项、设备进的机器轴有 ‹ 回设备、
+ * 列表 → 详情 → 返回焦点回刚打开的那一行、滚动位置按「范围 + 筛选」分别记。
+ */
+describe("手机对话页：返回、焦点与滚动记忆（D3、D5）", () => {
+  const path = () => screen.getByTestId("chat-location").textContent;
+  const all = [waitingMirrored, runningMirrored];
+
+  afterEach(() => window.history.replaceState(null, ""));
+
+  async function deleteOpenSession() {
+    const detail = await screen.findByTestId("mobile-session-detail");
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "stub delete" }),
+    );
+    fireEvent.click(await screen.findByTestId("delete-session-confirm"));
+  }
+  function stubDelete() {
+    const listApi = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (p, init) => {
+      if (p === "/v1/saved-sessions/delete") return {};
+      return listApi(p, init);
+    });
+  }
+
+  it("删除从列表打开的对话：回到列表且不留重复历史，系统返回直达更早一页", async () => {
+    stubApi([waitingMirrored]);
+    stubDelete();
+    renderChat("/chat?axis=agent", "/start");
+
+    fireEvent.click(await screen.findByRole("link", { name: /等你批/ }));
+    await deleteOpenSession();
+    await waitFor(() => expect(path()).toBe("/chat?axis=agent"));
+
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() => expect(path()).toBe("/start"));
+  });
+
+  it("深链打开的对话（它就是唯一一项）删除后以替换回列表，系统返回回到进来之前", async () => {
+    stubApi([waitingMirrored]);
+    stubDelete();
+    renderChat("/chat/42?axis=agent", "/start");
+
+    await deleteOpenSession();
+    await waitFor(() => expect(path()).toBe("/chat?axis=agent"));
+
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() => expect(path()).toBe("/start"));
+  });
+
+  function renderWithDrawer(entries: string[]) {
+    return render(
+      <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+        <ThemeProvider>
+          <MobileDrawerProvider value={{ open: () => {} }}>
+            <LocationProbe />
+            <Routes>
+              <Route path="/chat/:conversationId?" element={<Chat />} />
+              <Route path="/devices/:id" element={<p>device page</p>} />
+            </Routes>
+          </MobileDrawerProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("从设备进的单台机器对话页：页头是 ‹ 不是 ☰，按下回设备（有上一处就退一步）", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    window.history.replaceState({ idx: 1 }, "");
+    renderWithDrawer(["/devices/1", "/chat?axis=machine&machine=1"]);
+
+    const head = await screen.findByTestId("chat-mobile-header");
+    expect(
+      within(head).queryByRole("button", { name: "Open menu" }),
+    ).toBeNull();
+    fireEvent.click(within(head).getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(path()).toBe("/devices/1"));
+  });
+
+  it("没有上一处（深链）：‹ 以替换回设备详情", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderWithDrawer(["/chat?axis=machine&machine=1"]);
+
+    const head = await screen.findByTestId("chat-mobile-header");
+    fireEvent.click(within(head).getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(path()).toBe("/devices/1"));
+  });
+
+  it("从抽屉进的 /chat（含不收窄的机器轴）仍是 ☰", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderWithDrawer(["/chat?axis=machine"]);
+
+    const head = await screen.findByTestId("chat-mobile-header");
+    expect(
+      within(head).getByRole("button", { name: "Open menu" }),
+    ).toBeTruthy();
+    expect(within(head).queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  it("列表 → 详情 → 返回：焦点回到刚打开的那一行", async () => {
+    stubApi(all);
+    renderChat();
+
+    const link = await screen.findByRole("link", { name: /跑着呢/ });
+    fireEvent.click(link);
+    await screen.findByTestId("mobile-session-detail");
+    fireEvent.click(screen.getByTestId("history-back"));
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("link", { name: /跑着呢/ }),
+      ),
+    );
+  });
+
+  it("滚动位置按「范围 + 筛选」分别记：全部滚到 300，切到「进行中」再切回仍是 300", async () => {
+    stubApi(all);
+    renderChat("/chat?axis=agent");
+
+    await screen.findByText("等你批");
+    const list = screen.getByTestId("chat-phone-list");
+    list.scrollTop = 300;
+    fireEvent.scroll(list);
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("filter-chip-running").getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    expect(list.scrollTop).toBe(0);
+    list.scrollTop = 40;
+    fireEvent.scroll(list);
+
+    fireEvent.click(screen.getByTestId("filter-chip-all"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("filter-chip-all").getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    expect(list.scrollTop).toBe(300);
   });
 });

@@ -39,6 +39,19 @@ function isTopLevelPath(pathname: string): boolean {
   return TOP_LEVEL_PATHS.has(normalized);
 }
 
+/**
+ * `/chat?axis=machine&machine=<设备>` 是从设备详情「查看这台机器的对话」下钻进来的
+ * （App.tsx 的 DeviceSessionsRedirect 落成这个地址）：它虽在 /chat 下，却是设备的子页，
+ * 页头给 ‹ 回设备（D3、I20）。不带 `machine` 的机器轴是抽屉进来的整页范围，仍是 ☰。
+ */
+function deviceDrillDownOf(pathname: string, search: string): string | null {
+  if (pathname.replace(/\/+$/, "") !== "/chat") return null;
+  const params = new URLSearchParams(search);
+  if (params.get("axis") !== "machine") return null;
+  const id = Number(params.get("machine"));
+  return Number.isInteger(id) && id > 0 ? `/devices/${id}` : null;
+}
+
 /** 没有可退的历史（直接打开深链、PWA 冷启动）时，返回落到它所属的顶层页。 */
 function parentOf(pathname: string): string {
   const first = pathname.split("/").filter(Boolean)[0];
@@ -69,11 +82,12 @@ const BUTTON_CLASS = cn(PHONE_HEADER_BUTTON_CLASS, "-ml-2");
 /** 页头左侧：顶层页 ☰（开抽屉），非顶层页返回。命中区 44px。 */
 export function MobileNavButton() {
   const { t } = useTranslation();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const back = useMobileBack();
   const drawer = useContext(MobileDrawerContext);
+  const drillDownParent = deviceDrillDownOf(pathname, search);
 
-  if (isTopLevelPath(pathname) && drawer) {
+  if (isTopLevelPath(pathname) && drawer && !drillDownParent) {
     return (
       <button
         type="button"
@@ -89,7 +103,7 @@ export function MobileNavButton() {
     <button
       type="button"
       aria-label={t("appShell.drawer.back")}
-      onClick={() => back(parentOf(pathname))}
+      onClick={() => back(drillDownParent ?? parentOf(pathname))}
       className={BUTTON_CLASS}
     >
       <ChevronLeft className="size-5" aria-hidden="true" />

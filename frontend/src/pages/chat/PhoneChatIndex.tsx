@@ -29,6 +29,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -60,13 +61,20 @@ import {
 } from "@/pages/chat/phoneRows";
 
 /**
- * 手机首页的滚动位置，按范围记（规格 2026-11-05「首页」返回恢复）。
+ * 手机首页的滚动位置，按「范围 + 筛选」记（规格 2026-11-05「首页」返回恢复；2026-11-25
+ * D5：换筛选不能冲掉别的筛选的位置，「全部」滚到 1082 → 进行中 → 回全部要回到 1082）。
  *
  * 打开一条对话时这一屏整个让给详情（Chat 在手机上不留第二栏），列表的 DOM 随之卸掉；
- * 返回时按范围把位置放回去。模块级而不是组件状态：卸掉的组件留不住任何东西。
- * 筛选不用记在这里——它是 Chat 的状态，Chat 在 `/chat` 与 `/chat/:id` 之间不卸载。
+ * 返回时把位置放回去。模块级而不是组件状态：卸掉的组件留不住任何东西。
+ * 筛选本身是 Chat 的状态，Chat 在 `/chat` 与 `/chat/:id` 之间不卸载。
  */
 const scrollMemory = new Map<string, number>();
+
+/**
+ * 刚打开的那一行（D5）：返回列表时焦点回到它。同样要跨组件卸载，所以放模块里；
+ * 回焦一次就清掉，不会在之后无关的重绘里再抢焦点。
+ */
+let lastOpenedRow: string | null = null;
 
 /** 新数据替换本地数据时，离开的行淡出多久后从列表里拿掉（与 fade-out 时长一致）。 */
 const LEAVE_MS = 200;
@@ -263,19 +271,34 @@ export function PhoneChatIndex({
   // 搜索词还在（从对话返回）时，回来仍是搜索那一屏。
   const [searchOpen, setSearchOpen] = useState(() => searchQuery !== "");
   const listRef = useRef<HTMLDivElement>(null);
+  const memoryKey = `${scopeKey}|${filter}`;
 
   // 位置在列表真的摆出来之后才放回去：骨架那一刻放回去会被内容撑开时冲掉；摆着的
   // 还是上一范围的旧行时同理，等新范围的行落地再放。
   useLayoutEffect(() => {
     const el = listRef.current;
     if (!el || !settled || refreshing) return;
-    el.scrollTop = scrollMemory.get(scopeKey) ?? 0;
-  }, [scopeKey, settled, refreshing]);
+    el.scrollTop = scrollMemory.get(memoryKey) ?? 0;
+    // 从详情返回：焦点回到刚打开的那一行，且不让浏览器为了聚焦再滚一次。
+    if (lastOpenedRow !== null) {
+      const row = Array.from(
+        el.querySelectorAll<HTMLElement>("[data-nav-target]"),
+      ).find((node) => node.dataset.navTarget === lastOpenedRow);
+      lastOpenedRow = null;
+      row?.focus({ preventScroll: true });
+    }
+  }, [memoryKey, settled, refreshing]);
 
   const onScroll = useCallback(() => {
     const el = listRef.current;
-    if (el) scrollMemory.set(scopeKey, el.scrollTop);
-  }, [scopeKey]);
+    if (el) scrollMemory.set(memoryKey, el.scrollTop);
+  }, [memoryKey]);
+  const onListClickCapture = useCallback((e: MouseEvent) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>(
+      "[data-nav-target]",
+    );
+    if (row) lastOpenedRow = row.dataset.navTarget ?? null;
+  }, []);
 
   // 旧样子换成新数据：渲染期比一次，不经 effect（state 由事件 / 定时器回调之外只在
   // 这里推进，与 Chat 的 heldCounts 同一个写法）。
@@ -703,6 +726,7 @@ export function PhoneChatIndex({
         data-testid="chat-phone-list"
         aria-busy={!settled || refreshing || syncing || undefined}
         onScroll={onScroll}
+        onClickCapture={onListClickCapture}
         className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,0px)]"
       >
         {banners ? <div className="space-y-3 px-4 pt-3">{banners}</div> : null}

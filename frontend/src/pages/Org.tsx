@@ -18,7 +18,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "@/components/AppShell";
 import { errorText } from "@/lib/errorText";
 import { useIsMobile } from "@/components/use-is-mobile";
-import { EmptyState } from "@/components/console";
+import { EmptyState, useMobileBack } from "@/components/console";
 import {
   Button,
   Skeleton,
@@ -101,6 +101,8 @@ export default function Org() {
   const { chart, backends, loading, error, reload } = useOrgData();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  // ‹ = 回到上一处（D3）：有上一处退一步、没有则以替换回 /org；不 push，历史不变长。
+  const back = useMobileBack();
   const params = useParams<{ kind?: string; syncId?: string }>();
 
   // 选中态的真源是**地址**，不是页面内的一个 state。移动端下钻靠它才让手机的返回键
@@ -436,7 +438,7 @@ export default function Org() {
                   });
                 }}
                 onReload={() => void reload()}
-                onBack={isMobile ? () => setSelection(null) : undefined}
+                onBack={isMobile ? () => back("/org") : undefined}
                 onClose={() => setSelection(null)}
                 alert={detailAlert}
               />
@@ -465,7 +467,7 @@ export default function Org() {
                     await reload();
                   })
                 }
-                onBack={isMobile ? () => setSelection(null) : undefined}
+                onBack={isMobile ? () => back("/org") : undefined}
                 onClose={() => setSelection(null)}
               />
             ) : (
