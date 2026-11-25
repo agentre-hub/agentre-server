@@ -1,7 +1,7 @@
 // Package personaltoken 是个人 token 管理端点的传输契约（规格 2026-11-25-agrctl-account-peer
 // 「个人 token 与范围」）。
 //
-// 四个端点都只认人：浏览器会话或 `cli` 设备的 access token。个人 token 自己调用一律 403。
+// 四个管理端点都只认人（另有只认个人 token 的 self）：浏览器会话或 `cli` 设备的 access token。个人 token 自己调用一律 403。
 // 时间都是 unix 毫秒。
 package personaltoken
 
@@ -49,6 +49,16 @@ type ListRequest struct {
 
 type ListResponse struct {
 	Tokens []Token `json:"tokens"`
+}
+
+// SelfRequest 让一枚个人 token 查询自己：名字、范围、到期时间。只认个人 token（其它调用方
+// 403，它们用 ListRequest）；个人 token 没有别的办法知道自己是哪一枚。
+type SelfRequest struct {
+	mux.Meta `path:"/v1/personal-tokens/self" method:"GET"`
+}
+
+type SelfResponse struct {
+	Item Token `json:"item"`
 }
 
 // RotateRequest 给同名 token 换一个新密钥：名字、范围、对端指纹不变，旧密钥立即作废。

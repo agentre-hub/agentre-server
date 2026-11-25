@@ -58,6 +58,8 @@ type Caller struct {
 	AccountID int64
 	DeviceID  int64
 	Kind      string
+	// Handle 是凭据句柄（ResolveBearer 交出的那个）；只有 Self 用它认出「这枚 token」。
+	Handle string
 }
 
 // isHuman 判定调用方能不能管理 token：浏览器会话，或 `cli` 设备。个人 token、桌面、
@@ -137,7 +139,17 @@ type PersonalTokenSvc interface {
 	WatchRelayCredential(ctx context.Context, accountID int64, handle string) func(context.Context) bool
 }
 
+// SelfSvc 是「个人 token 查自己」这一个角色，与管理接口分开：调用方不同（只有个人 token），
+// 使用者也不同（whoami）。Self 交出调用方那枚个人 token 自己的事实（无密钥）；浏览器会话与
+// 设备答 403——它们有 List；行已被吊销或不归这个账号答 404。
+type SelfSvc interface {
+	Self(ctx context.Context, caller Caller) (TokenView, error)
+}
+
 var defaultSvc PersonalTokenSvc = New()
+
+// DefaultSelf 是进程默认的 SelfSvc。
+func DefaultSelf() SelfSvc { return New() }
 
 func Default() PersonalTokenSvc     { return defaultSvc }
 func SetDefault(s PersonalTokenSvc) { defaultSvc = s }
@@ -267,6 +279,24 @@ func (s *personalTokenSvc) List(ctx context.Context, caller Caller) ([]TokenView
 		return nil, err
 	}
 	return s.views(ctx, caller.AccountID, rows)
+}
+
+func (s *personalTokenSvc) Self(ctx context.Context, caller Caller) (TokenView, error) {
+	if caller.AccountID == 0 || caller.Kind != device_svc.KindPersonalToken || !IsHandle(caller.Handle) {
+		return TokenView{}, i18n.NewForbiddenError(ctx, code.Forbidden)
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(caller.Handle, handlePrefix), 10, 64)
+	if err != nil {
+		return TokenView{}, i18n.NewForbiddenError(ctx, code.Forbidden)
+	}
+	row, err := personal_token_repo.PersonalToken().Find(ctx, id)
+	if err != nil {
+		return TokenView{}, err
+	}
+	if row == nil || row.UserID != caller.AccountID {
+		return TokenView{}, i18n.NewNotFoundError(ctx, code.NotFound)
+	}
+	return s.view(ctx, caller.AccountID, row)
 }
 
 func (s *personalTokenSvc) Delete(ctx context.Context, caller Caller, name string) error {

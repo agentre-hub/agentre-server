@@ -422,6 +422,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeRead)).Bind(
 		deviceCtr.List,
 	)
+	// 个人 token 查自己（agrctl whoami）：不要求任何具体范围——每枚 token 都该能看见自己的
+	// 名字、范围与到期；非个人 token 的调用方由 personal_token_svc.Self 判 403。
+	accountCallers.Bind(personalTokenCtr.Self)
 	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat)).Bind(
 		// R15：从 web 给「某 Agent + 某项目」取派发计划（哪台 agentred、逐档原因）。
 		workspaceCtr.DispatchTarget,

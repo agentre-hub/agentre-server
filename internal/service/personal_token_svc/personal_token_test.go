@@ -422,3 +422,43 @@ func TestWatchRelayCredential(t *testing.T) {
 		})
 	})
 }
+
+func TestSelf(t *testing.T) {
+	ctx := context.Background()
+	patCaller := Caller{AccountID: 7, Kind: device_svc.KindPersonalToken, Handle: "pat:11"}
+	Convey("Self", t, func() {
+		svc, tokens, devices := setup(t)
+
+		Convey("when a personal token asks about itself, then its own facts are returned without a secret", func() {
+			tokens.EXPECT().Find(gomock.Any(), int64(11)).Return(&personal_token_entity.PersonalToken{
+				ID: 11, UserID: 7, Name: "ci", TokenHash: "digest", Scopes: "read,chat", ExpiresAt: 9000,
+				CreatedByDeviceID: 3,
+			}, nil)
+			devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return(cliDevice(), nil)
+			view, err := svc.Self(ctx, patCaller)
+			So(err, ShouldBeNil)
+			So(view, ShouldResemble, TokenView{Name: "ci", Scopes: []string{"read", "chat"}, ExpiresAt: 9000,
+				CreatedByDeviceID: 3, CreatedByDeviceName: "laptop"})
+		})
+
+		Convey("when the caller is a browser session or a device, then it is forbidden and nothing is read", func() {
+			for _, who := range []Caller{sessionCaller, cliCaller} {
+				_, err := svc.Self(ctx, who)
+				status, _ := httpError(err)
+				So(status, ShouldEqual, http.StatusForbidden)
+			}
+		})
+
+		Convey("when the token row is gone or belongs to another account, then it is a 404", func() {
+			tokens.EXPECT().Find(gomock.Any(), int64(11)).Return(nil, nil)
+			_, err := svc.Self(ctx, patCaller)
+			status, _ := httpError(err)
+			So(status, ShouldEqual, http.StatusNotFound)
+
+			tokens.EXPECT().Find(gomock.Any(), int64(11)).Return(&personal_token_entity.PersonalToken{ID: 11, UserID: 8, Name: "x"}, nil)
+			_, err = svc.Self(ctx, patCaller)
+			status, _ = httpError(err)
+			So(status, ShouldEqual, http.StatusNotFound)
+		})
+	})
+}

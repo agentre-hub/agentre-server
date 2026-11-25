@@ -26,13 +26,23 @@ func (h *PersonalToken) service() personal_token_svc.PersonalTokenSvc {
 	return personal_token_svc.Default()
 }
 
+// selfService 取查自己的实现：注入的 svc 同时实现了 SelfSvc 就用它，否则用默认实现。
+func (h *PersonalToken) selfService() personal_token_svc.SelfSvc {
+	if s, ok := h.svc.(personal_token_svc.SelfSvc); ok {
+		return s
+	}
+	return personal_token_svc.DefaultSelf()
+}
+
 // caller 取鉴权中间件放进上下文的身份：浏览器会话没有设备号与设备形态。
 func caller(c *gin.Context) (personal_token_svc.Caller, error) {
 	userID, err := ginctx.RequireUserID(c)
 	if err != nil {
 		return personal_token_svc.Caller{}, err
 	}
-	return personal_token_svc.Caller{AccountID: userID, DeviceID: ginctx.DeviceID(c), Kind: ginctx.DeviceKind(c)}, nil
+	return personal_token_svc.Caller{
+		AccountID: userID, DeviceID: ginctx.DeviceID(c), Kind: ginctx.DeviceKind(c), Handle: ginctx.CredentialHandle(c),
+	}, nil
 }
 
 func (h *PersonalToken) Create(c *gin.Context, req *api.CreateRequest) (*api.IssueResponse, error) {
@@ -64,6 +74,18 @@ func (h *PersonalToken) List(c *gin.Context, _ *api.ListRequest) (*api.ListRespo
 		items = append(items, toToken(view))
 	}
 	return &api.ListResponse{Tokens: items}, nil
+}
+
+func (h *PersonalToken) Self(c *gin.Context, _ *api.SelfRequest) (*api.SelfResponse, error) {
+	who, err := caller(c)
+	if err != nil {
+		return nil, err
+	}
+	view, err := h.selfService().Self(c.Request.Context(), who)
+	if err != nil {
+		return nil, err
+	}
+	return &api.SelfResponse{Item: toToken(view)}, nil
 }
 
 func (h *PersonalToken) Rotate(c *gin.Context, req *api.RotateRequest) (*api.IssueResponse, error) {
