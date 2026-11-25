@@ -98,9 +98,12 @@ function SystemBack() {
   );
 }
 
-function renderShell(initial = "/chat", title?: string) {
+function renderShell(initial = "/chat", title?: string, prev?: string) {
   return render(
-    <MemoryRouter initialEntries={[initial]}>
+    <MemoryRouter
+      initialEntries={prev ? [prev, initial] : [initial]}
+      initialIndex={prev ? 1 : 0}
+    >
       <ThemeProvider>
         <TouchProvider touch>
           <AppShell title={title}>
@@ -283,6 +286,20 @@ describe("移动端左抽屉导航", () => {
     fireEvent.click(within(drawer).getByRole("link", { name: /Devices/ }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByTestId("path").textContent).toBe("/devices");
+  });
+
+  it("手机：从抽屉去别的页，记号被换掉；返回一次回到打开抽屉的页（抽屉关着），再返回到更早一页", async () => {
+    mockMobileViewport();
+    renderShell("/chat", undefined, "/prev");
+    const drawer = await openDrawer();
+    fireEvent.click(within(drawer).getByRole("link", { name: /Devices/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("path").textContent).toBe("/devices");
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.getByTestId("path").textContent).toBe("/chat");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.getByTestId("path").textContent).toBe("/prev");
   });
 
   it("手机：点当前页那一项只是关抽屉，历史不留多余的一条", async () => {

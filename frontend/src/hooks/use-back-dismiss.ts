@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
-import { useLocation, useNavigate, useNavigationType } from "react-router-dom";
+import {
+  useLocation,
+  useNavigate,
+  useNavigationType,
+  type Location,
+} from "react-router-dom";
 
 import { useIsMobile } from "@/components/use-is-mobile";
 
@@ -22,7 +27,7 @@ export function backDismissLayerOf(state: unknown): number {
  *   - 浮层开着时路由已经换走（点了抽屉里的链接）：新地址上没有记号，浮层跟着收起，
  *     不再多退一格；
  *   - 浮层开着时页面自己 replace 了地址（换筛选、换范围；记号随之被换掉）：浮层
- *     不是被返回键关的，留着，并在新地址上重新压一条记号；
+ *     不是被返回键关的，留着；历史收回成「新地址 + 记号」两格，不多一条；
  *   - 桌面宽度从不碰 history。
  *
  * 与 useFilePreviewLayer 同一路子（location.state 里的记号 + navigate(-1)）；
@@ -42,23 +47,32 @@ export function useBackDismiss(open: boolean, close: () => void): void {
     closeRef.current = close;
   });
   // 这一层的记号：level 是压进去的层数，landed 是已经在 location 上看到它落地。
-  const entryRef = useRef<{ level: number; landed: boolean } | null>(null);
+  const entryRef = useRef<{
+    level: number;
+    landed: boolean;
+    pathname: string;
+    // 页面 replace 了地址、正在把多出来的那一格收回去：记着要落到的地址。
+    collapse?: { to: Location; key: string };
+  } | null>(null);
 
   // 在当前地址上压一条带记号的历史，并记下这一层。
-  const push = useCallback(() => {
-    const here = locationRef.current;
-    const level = backDismissLayerOf(here.state) + 1;
-    entryRef.current = { level, landed: false };
-    void navigate(
-      { pathname: here.pathname, search: here.search, hash: here.hash },
-      {
-        state: {
-          ...(typeof here.state === "object" ? here.state : null),
-          [BACK_DISMISS_STATE_KEY]: level,
+  const push = useCallback(
+    (at?: Location) => {
+      const here = at ?? locationRef.current;
+      const level = backDismissLayerOf(here.state) + 1;
+      entryRef.current = { level, landed: false, pathname: here.pathname };
+      void navigate(
+        { pathname: here.pathname, search: here.search, hash: here.hash },
+        {
+          state: {
+            ...(typeof here.state === "object" ? here.state : null),
+            [BACK_DISMISS_STATE_KEY]: level,
+          },
         },
-      },
-    );
-  }, [navigate]);
+      );
+    },
+    [navigate],
+  );
 
   const active = open && enabled;
   useEffect(() => {
@@ -78,19 +92,41 @@ export function useBackDismiss(open: boolean, close: () => void): void {
     }
   }, [active, navigate, push]);
 
-  // 记号落地后又掉下去：被返回键退掉了就把浮层收起来；被 replace 换掉了就重压一条。
+  // 记号落地后又掉下去：
+  //   - 被返回键退掉 / 路由换走了：把浮层收起来；
+  //   - 同一页上被 replace 换掉（换筛选、换范围）：浮层留着。replace 换掉的是记号那
+  //     一格，它下面还垫着换之前的那一格，直接重压会多出一条；所以先退回下面那一格，
+  //     把新地址 replace 上去，再压回记号——历史与没开浮层时一样长。
   const layer = backDismissLayerOf(location.state);
   useEffect(() => {
     const entry = entryRef.current;
     if (!entry) return;
+    if (entry.collapse) {
+      if (layer === 0 && location.key !== entry.collapse.key) {
+        const to = entry.collapse.to;
+        entry.collapse = undefined;
+        void navigate(
+          { pathname: to.pathname, search: to.search, hash: to.hash },
+          { replace: true, state: to.state },
+        );
+        push(to);
+      }
+      return;
+    }
     if (layer >= entry.level) {
       entry.landed = true;
     } else if (entry.landed) {
-      if (navigationType === "REPLACE") push();
-      else {
+      if (
+        navigationType === "REPLACE" &&
+        location.pathname === entry.pathname
+      ) {
+        entry.landed = false;
+        entry.collapse = { to: location, key: location.key };
+        void navigate(-1);
+      } else {
         entryRef.current = null;
         closeRef.current();
       }
     }
-  }, [layer, location.key, navigationType, push]);
+  }, [layer, location, navigationType, navigate, push]);
 }

@@ -147,11 +147,9 @@ describe("useBackDismiss", () => {
     back();
     expect(screen.queryByTestId("overlay-a")).toBeNull();
     expect(path()).toBe("/page");
-    // 浮层关了就是关了：再开再从界面关，不多留一条。
-    fireEvent.click(screen.getByText("open-a"));
-    fireEvent.click(screen.getByText("close-a"));
-    expect(screen.queryByTestId("overlay-a")).toBeNull();
-    expect(path()).toBe("/page");
+    // replace 没有多留一条：再返回直接回上一页。
+    back();
+    expect(path()).toBe("/prev");
   });
 
   it("桌面：不碰历史，开关浮层都不产生导航", () => {

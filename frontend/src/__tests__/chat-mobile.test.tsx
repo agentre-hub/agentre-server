@@ -299,9 +299,12 @@ function HistoryBack() {
   );
 }
 
-function renderChat(entry = "/chat") {
+function renderChat(entry = "/chat", prev?: string) {
   return render(
-    <MemoryRouter initialEntries={[entry]}>
+    <MemoryRouter
+      initialEntries={prev ? [prev, entry] : [entry]}
+      initialIndex={prev ? 1 : 0}
+    >
       <ThemeProvider>
         <LocationProbe />
         <HistoryBack />
@@ -392,6 +395,31 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(sheet.classList.contains("grid")).toBe(false);
     expect(sheet.classList.contains("flex")).toBe(true);
     expect(sheet.classList.contains("flex-col")).toBe(true);
+  });
+
+  it("挑 Agent 弹层：系统返回关掉它，停在列表；从界面关掉不多留一条历史", async () => {
+    stubApi([waitingMirrored]);
+    renderChat("/chat", "/prev");
+    expect(await screen.findByText("等你批")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("chat-location").textContent).toBe("/chat");
+    expect(screen.getByText("等你批")).toBeTruthy();
+
+    // 再开再从界面关：记号退掉，没有残留的一条。
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    fireEvent.click(screen.getByTestId("history-back"));
+    expect(screen.getByTestId("chat-location").textContent).toBe("/prev");
   });
 
   it("从弹层挑 Agent 进草稿，草稿的返回回到列表，不再把挑 Agent 的弹层升起来", async () => {

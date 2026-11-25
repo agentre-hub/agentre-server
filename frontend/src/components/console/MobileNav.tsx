@@ -124,6 +124,7 @@ export function MobileDrawer({
   children: ReactNode;
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
   // 系统返回先关抽屉（D1）：抽屉开着时历史里有它的一条记号。
   useBackDismiss(open, () => onOpenChange(false));
   return (
@@ -143,19 +144,21 @@ export function MobileDrawer({
           e.preventDefault();
           current.focus();
         }}
-        // 点到去别处的链接：不在这里关抽屉。链接的跳转先发出，紧接着再退抽屉那条记号
-        // 的 navigate(-1) 会把刚跳的页退回来；路由一换，useBackDismiss 看到记号没了
-        // 自己会收。点到的就是当前页（跳转是 replace，会把记号换成新条目、抽屉被误判
-        // 为还开着）则拦下跳转，当作普通的关闭。
+        // 抽屉里的链接：跳转改成 replace，换掉抽屉压在历史里的那条记号——从新页返回一
+        // 次就回到打开抽屉的那页（抽屉关着），不会先落在一条抽屉的残留上。换掉记号后
+        // useBackDismiss 看到路由变了自己会收抽屉；这里不直接关，退记号的 navigate(-1)
+        // 会把刚跳的页退回来。点到的就是当前页：拦下跳转，当作普通的关闭。
         onClickCapture={(e) => {
           const link = (e.target as HTMLElement).closest("a");
-          if (!link) return;
-          if (
-            link.pathname + link.search ===
-            location.pathname + location.search
-          ) {
-            e.preventDefault();
+          if (!link || link.target) return;
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          if (link.origin !== window.location.origin) return;
+          e.preventDefault();
+          const to = link.pathname + link.search + link.hash;
+          if (to === location.pathname + location.search + location.hash) {
             onOpenChange(false);
+          } else {
+            void navigate(to, { replace: true });
           }
         }}
         className={cn(
