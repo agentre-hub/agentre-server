@@ -48,6 +48,9 @@ type stubDeviceSvc struct {
 	renameCalls []renameCall
 	// pending 非空时 Pending 返回它，否则保持 unimplemented。
 	pending *device_svc.PendingInfo
+	// mintCalls 记下每次代签 cli 子设备的入参——账号与调用设备必须取自令牌身份。
+	mintCalls []device_svc.MintCLIChildInput
+	mintErr   error
 }
 
 type ownedCall struct{ userID, deviceID int64 }
@@ -145,6 +148,17 @@ func (s *stubDeviceSvc) Rename(ctx context.Context, userID, deviceID int64, disp
 		}
 	}
 	return "", i18n.NewNotFoundError(ctx, code.DeviceNotFound)
+}
+
+func (s *stubDeviceSvc) MintCLIChild(_ context.Context, in device_svc.MintCLIChildInput) (*device_svc.TokenOutput, error) {
+	s.mintCalls = append(s.mintCalls, in)
+	if s.mintErr != nil {
+		return nil, s.mintErr
+	}
+	return &device_svc.TokenOutput{
+		AccessToken: "child-access", RefreshToken: "child-refresh",
+		ExpiresIn: 3600, RefreshExpiresIn: 7776000, DeviceID: 55,
+	}, nil
 }
 
 var _ device_svc.DeviceSvc = (*stubDeviceSvc)(nil)
@@ -911,4 +925,84 @@ func TestRename_RejectsARequestThatOmitsTheField(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	assert.Empty(t, stub.renameCalls, "字段都没给，一个字都不该写")
+}
+
+// ---- 桌面代签 cli 子设备：POST /v1/devices/cli-children ----
+
+const cliChildrenURL = "/v1/devices/cli-children"
+
+func TestMintCLIChild_DesktopBearerGetsATokenPairShapedLikeTheDeviceFlow(t *testing.T) {
+	stub := &stubDeviceSvc{}
+	server := newDeviceTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 10, Kind: device_entity.KindDesktop})
+
+	resp := doRequest(t, http.MethodPost, server.URL+cliChildrenURL, "", token,
+		`{"fingerprint":"sha256:child-fingerprint","name":"agrctl on mac"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var envelope struct {
+		Data api_device.CLIChildDeviceResponse `json:"data"`
+	}
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(body, &envelope))
+	assert.Equal(t, api_device.CLIChildDeviceResponse{
+		AccessToken: "child-access", TokenType: "Bearer", ExpiresIn: 3600,
+		RefreshToken: "child-refresh", RefreshExpiresIn: 7776000, DeviceID: 55,
+	}, envelope.Data)
+	// 账号与调用设备取自令牌解析出的身份，不接受参数里的身份。
+	require.Equal(t, []device_svc.MintCLIChildInput{
+		{UserID: 7, CallerDeviceID: 10, Fingerprint: "sha256:child-fingerprint", Name: "agrctl on mac"},
+	}, stub.mintCalls)
+}
+
+func TestMintCLIChild_EverythingButADesktopDeviceBearerIsRefusedBeforeTheService(t *testing.T) {
+	cases := map[string]device_svc.Principal{
+		"cli device":     {AccountID: 7, DeviceID: 10, Kind: device_entity.KindCLI},
+		"personal token": {AccountID: 7, Kind: device_svc.KindPersonalToken, Scopes: []string{"read", "chat", "devices:write"}},
+	}
+	for name, principal := range cases {
+		t.Run(name, func(t *testing.T) {
+			stub := &stubDeviceSvc{}
+			server := newDeviceTestServer(t, stub)
+
+			resp := doRequest(t, http.MethodPost, server.URL+cliChildrenURL, "", bearertest.Issue(principal),
+				`{"fingerprint":"sha256:child-fingerprint","name":"x"}`)
+
+			require.Equal(t, http.StatusForbidden, resp.StatusCode)
+			require.Empty(t, stub.mintCalls)
+		})
+	}
+}
+
+func TestMintCLIChild_NoCredentialIsUnauthorizedNotMissing(t *testing.T) {
+	server := newDeviceTestServer(t, &stubDeviceSvc{})
+
+	resp := doRequest(t, http.MethodPost, server.URL+cliChildrenURL, "", "",
+		`{"fingerprint":"sha256:child-fingerprint","name":"x"}`)
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestMintCLIChild_ServiceRefusalKeepsItsStatus(t *testing.T) {
+	stub := &stubDeviceSvc{mintErr: i18n.NewForbiddenError(context.Background(), code.Forbidden)}
+	server := newDeviceTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 10, Kind: device_entity.KindAgentred})
+
+	resp := doRequest(t, http.MethodPost, server.URL+cliChildrenURL, "", token,
+		`{"fingerprint":"sha256:child-fingerprint","name":"x"}`)
+
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestMintCLIChild_RejectsAMissingOrShortFingerprint(t *testing.T) {
+	stub := &stubDeviceSvc{}
+	server := newDeviceTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 10, Kind: device_entity.KindDesktop})
+
+	for _, body := range []string{`{"name":"x"}`, `{"fingerprint":"short","name":"x"}`} {
+		resp := doRequest(t, http.MethodPost, server.URL+cliChildrenURL, "", token, body)
+		require.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+	}
+	require.Empty(t, stub.mintCalls)
 }

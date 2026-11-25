@@ -462,6 +462,11 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.GetAvatar,
 		engineCtr.Snapshot,
 	)
+	// 桌面代签 agrctl 子设备：只认设备 access token，cli 设备与个人 token 在路由组上 403
+	// （先于请求体绑定）；agentred 等其余设备由服务层按库内 kind 拒。
+	g.Group("/", middleware.AccountBearerAuth(accountBearer), middleware.DenyCLIAndTokens()).Bind(
+		deviceCtr.MintCLIChild,
+	)
 	// agrctl 资源管理（规格 2026-09-22 agrctl-resource-management「server 执行者」）：
 	// 控制台派发到 agentred 的会话里，agent 调 agrctl，agentred 在会话里审批后转过来。
 	// **只认设备 access token**——浏览器会话进不来，所以不需要 CSRF；提供方与后端的写入

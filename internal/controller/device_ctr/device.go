@@ -307,6 +307,30 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 	}, nil
 }
 
+// MintCLIChild 让桌面设备为自己代签一台 agrctl（cli）子设备，无需浏览器批准：调用方凭
+// 自己的设备 access token 就是账号授权过的（规格 2026-11-25「身份与登录 → 桌面代签」）。
+//
+// 路由组已经在绑定请求体之前拒掉 cli 设备与个人 token；其余不是桌面的设备（agentred 等）
+// 由服务层按调用设备的库内 kind 拒掉。账号与调用设备只取自令牌身份。
+func (d *Device) MintCLIChild(c *gin.Context, req *api.CLIChildDeviceRequest) (*api.CLIChildDeviceResponse, error) {
+	ctx := device_svc.WithClientInfo(c.Request.Context(), c.ClientIP(), c.GetHeader("User-Agent"))
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
+	}
+	out, err := device_svc.Default().MintCLIChild(ctx, device_svc.MintCLIChildInput{
+		UserID: userID, CallerDeviceID: ginctx.DeviceID(c), Fingerprint: req.Fingerprint, Name: req.Name,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &api.CLIChildDeviceResponse{
+		AccessToken: out.AccessToken, TokenType: "Bearer",
+		ExpiresIn: out.ExpiresIn, RefreshToken: out.RefreshToken,
+		RefreshExpiresIn: out.RefreshExpiresIn, DeviceID: out.DeviceID,
+	}, nil
+}
+
 // oauthErrToHTTP 把 device_svc.OAuthError 映射成 HTTP 状态 + 业务 code，并在 body 里附 RFC 8628 字段。
 func oauthErrToHTTP(c *gin.Context, err error) error {
 	var oe *device_svc.OAuthError

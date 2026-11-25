@@ -30,6 +30,8 @@ type DeviceRepo interface {
 	// 归属由调用方（device_svc.Rename）判过才落到这里；这条 UPDATE 只按 id 写。
 	UpdateDisplayName(ctx context.Context, id int64, displayName string, nowMs int64) error
 	Revoke(ctx context.Context, id, nowMs int64) error
+	// ListActiveChildren 列出由 parentID 这台桌面代签、仍在用的 cli 子设备。
+	ListActiveChildren(ctx context.Context, parentID int64) ([]*device_entity.Device, error)
 	ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error)
 	// ListActiveByUsers 一次查一批账号的在用设备，含义与逐个调用 ListByUser 相同
 	// （同样的 status=ACTIVE 过滤、同样按 last_seen_at DESC 排序），只是把发往数据库
@@ -73,7 +75,7 @@ func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "user_id"}, {Name: "fingerprint"}},
 			DoUpdates: clause.AssignmentColumns([]string{
-				"name", "kind", "platform", "version",
+				"name", "kind", "platform", "version", "parent_device_id",
 				"last_seen_at", "status", "updatetime",
 			}),
 		}).Create(d).Error; err != nil {
@@ -142,6 +144,15 @@ func (r *repo) ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int6
 		for _, d := range rows {
 			out[d.UserID] = append(out[d.UserID], d)
 		}
+	}
+	return out, nil
+}
+
+func (r *repo) ListActiveChildren(ctx context.Context, parentID int64) ([]*device_entity.Device, error) {
+	var out []*device_entity.Device
+	if err := db.Ctx(ctx).Where("parent_device_id=? AND status=?", parentID, consts.ACTIVE).
+		Find(&out).Error; err != nil {
+		return nil, err
 	}
 	return out, nil
 }
