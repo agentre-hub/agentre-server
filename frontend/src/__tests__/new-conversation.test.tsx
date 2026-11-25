@@ -19,7 +19,13 @@ import {
   within,
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   afterAll,
   afterEach,
@@ -3164,5 +3170,182 @@ describe("手机上的新对话", () => {
         "Third Agent",
       ),
     );
+  });
+});
+
+/**
+ * 手机上新对话的各步骤进历史（规格 2026-11-25 D2）：挑 Agent 弹层、「从项目里挑」整屏、
+ * 草稿整屏各有自己的历史项；系统返回 = 页头 ‹ 做的那件事，草稿按 C1 本来就保留。
+ */
+describe("手机上新对话各步骤进历史", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function HistoryProbe() {
+    const navigate = useNavigate();
+    const location = useLocation();
+    return (
+      <>
+        <span data-testid="history-path">{location.pathname}</span>
+        <button onClick={() => navigate(-1)}>system-back</button>
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  function renderWithHistory() {
+    return render(
+      <MemoryRouter initialEntries={["/prev", "/chat"]} initialIndex={1}>
+        <ThemeProvider>
+          <HistoryProbe />
+          <Routes>
+            <Route path="/prev" element={<p>previous page</p>} />
+            <Route path="/chat/:conversationId?" element={<Chat />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+  const systemBack = () => fireEvent.click(screen.getByText("system-back"));
+  const historyPath = () => screen.getByTestId("history-path").textContent;
+
+  async function openSheet() {
+    renderWithHistory();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    return screen.findByTestId("new-conversation-sheet");
+  }
+
+  it("挑 Agent 进草稿：系统返回回到列表（不是上一页、也不是弹层），再返回才离开", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+
+    systemBack();
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+    expect(screen.queryByTestId("new-conversation-sheet")).toBeNull();
+    expect(historyPath()).toBe("/chat");
+
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("草稿页头 ‹ 回列表后，历史没有多留的一条：再返回就是上一页", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("「从项目里挑」整屏：系统返回回到挑 Agent 弹层，再返回回列表，再返回离开", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("sheet-from-project"));
+    await screen.findByTestId("project-agent-pane");
+
+    systemBack();
+    expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
+    expect(screen.queryByTestId("project-agent-pane")).toBeNull();
+    expect(historyPath()).toBe("/chat");
+
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(historyPath()).toBe("/chat");
+
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("草稿上点收件人换 Agent：系统返回先收选择器、草稿还在，再返回才回列表", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    await screen.findByTestId("new-conversation-sheet");
+
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("draft-session")).toBeTruthy();
+
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+    expect(historyPath()).toBe("/chat");
+  });
+
+  it("发出第一句落到会话页：草稿的记号被会话地址换掉，历史里没有带记号的残留", async () => {
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+      savedToAccount: true,
+    });
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+    await waitFor(() => expect(historyPath()).toBe("/chat/99"));
+
+    // 会话地址换掉了草稿的记号：返回一次回到列表（不是一个带记号的 /chat），再一次才离开。
+    systemBack();
+    await waitFor(() => expect(historyPath()).toBe("/chat"));
+    expect(screen.queryByTestId("draft-session")).toBeNull();
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("桌面宽度不碰历史", async () => {
+    window.matchMedia = originalMatchMedia;
+    renderWithHistory();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /^(Start your first conversation|New conversation)$/,
+      }),
+    );
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    systemBack();
+    expect(historyPath()).toBe("/prev");
   });
 });

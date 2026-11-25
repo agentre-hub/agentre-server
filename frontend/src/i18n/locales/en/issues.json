@@ -16,5 +16,11 @@
     "followShort": "Follow agent",
     "modelFollow": "Model · Follow agent"
   },
-  "loadFailedWhat": "The board didn't load"
+  "loadFailedWhat": "The board didn't load",
+  "unsaved": {
+    "title": "Discard unsaved changes?",
+    "body": "Your edits to this task haven't been saved.",
+    "keep": "Keep editing",
+    "discard": "Discard"
+  }
 }

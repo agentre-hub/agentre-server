@@ -6,6 +6,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import i18n from "@/i18n";
+
 import {
   PhoneHeaderButton,
   PhonePage,
@@ -90,5 +92,36 @@ describe("PhonePage", () => {
     expect(body.getAttribute("data-slot")).toBe("phone-page-body");
     expect(body.className).toContain("overflow-y-auto");
     expect(body.contains(screen.getByTestId("h"))).toBe(false);
+  });
+});
+
+describe("PhonePage 的 strip 槽", () => {
+  it("细条落在页头与正文之间，在滚动区外（不随正文滚走）", () => {
+    render(
+      <PhonePage
+        header={<PhonePageHeader testId="h" title="设置" />}
+        strip={<div data-testid="strip">不稳定</div>}
+      >
+        <p>正文</p>
+      </PhonePage>,
+    );
+    const header = screen.getByTestId("h");
+    const strip = screen.getByTestId("strip");
+    expect(header.nextElementSibling).toBe(strip);
+    expect(strip.nextElementSibling?.getAttribute("data-slot")).toBe(
+      "phone-page-body",
+    );
+  });
+});
+
+describe("页标题与抽屉同名（F17）", () => {
+  it.each([
+    ["en", "Organization"],
+    ["zh-CN", "组织"],
+  ])("%s：抽屉里的「组织」与页标题是同一个名字", async (lng, name) => {
+    await i18n.changeLanguage(lng);
+    expect(i18n.t("nav.orgAgents")).toBe(name);
+    expect(i18n.t("org.pageTitle")).toBe(name);
+    await i18n.changeLanguage("en");
   });
 });

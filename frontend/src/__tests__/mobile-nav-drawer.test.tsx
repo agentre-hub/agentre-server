@@ -163,7 +163,7 @@ describe("移动端左抽屉导航", () => {
     for (const label of [
       "Chat",
       "Board",
-      "Agents & org",
+      "Organization",
       "Devices",
       "Activity stats",
       "Settings",

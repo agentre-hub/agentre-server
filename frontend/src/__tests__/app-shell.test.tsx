@@ -290,7 +290,7 @@ describe("账号菜单（任务 7）", () => {
     expect(links.map((link) => link.textContent?.trim())).toEqual([
       "Chat",
       "Board",
-      "Agents & org",
+      "Organization",
       "Devices",
       "Activity stats",
       "Settings",

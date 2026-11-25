@@ -37,11 +37,12 @@ import {
   type TaskFormValue,
 } from "@agentre-hub/agentre-ui";
 
-import AppShell from "@/components/AppShell";
+import AppShell, { IdentityUnstableStrip } from "@/components/AppShell";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { orderProjectTree } from "@/components/session/newconv/ProjectAgentPane";
 import type { NewConvAgent } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useMe } from "@/hooks/use-me";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
@@ -96,6 +97,7 @@ const STAGES: BoardStage[] = ["todo", "doing", "review", "done"];
 export default function Issues() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const { status: identityStatus } = useMe();
   // 代号本只在本页这一次生命周期里有效，所以它必须比任何一次取数活得久：懒初始化
   // 一次，之后每张卡、每个标签、每个项目都从同一本册子里认号。
   const [ids] = React.useState(createSyncIdRegistry);
@@ -226,7 +228,13 @@ export default function Issues() {
   );
 
   return (
-    <AppShell title={t("issues.title")} flush ownHeader={isMobile}>
+    <AppShell
+      title={t("issues.title")}
+      flush
+      ownHeader={isMobile}
+      // 手机页头自己画，「网络不稳定」细条由它摆在页头正下方（任务 10 遗留）。
+      ownStrip={isMobile}
+    >
       <div
         data-testid="issues-page"
         className="flex h-full min-h-0 min-w-0 flex-col"
@@ -263,6 +271,7 @@ export default function Issues() {
                 </PhoneHeaderButton>
               }
             />
+            {identityStatus === "unstable" ? <IdentityUnstableStrip /> : null}
             <div className="flex min-h-12 shrink-0 items-center gap-2 px-4 py-1">
               <BoardFilterBar
                 sheet

@@ -10,7 +10,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -22,6 +22,13 @@ import Issues from "@/pages/Issues";
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
+});
+
+// 「网络不稳定」细条的开关：核对失败时 useMe 报 unstable（外壳与看板页头都读它）。
+let meStatus: "ready" | "unstable" = "ready";
+vi.mock("@/hooks/use-me", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/use-me")>();
+  return { ...actual, useMe: () => ({ ...actual.useMe(), status: meStatus }) };
 });
 
 const mockedApi = vi.mocked(api);
@@ -70,6 +77,18 @@ function lastWrite(path: string): Record<string, unknown> {
   return JSON.parse(String((call[1] as RequestInit).body));
 }
 
+function HistoryProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <span data-testid="path">{location.pathname}</span>
+      <button onClick={() => navigate(-1)}>system-back</button>
+    </>
+  );
+}
+const systemBack = () => fireEvent.click(screen.getByText("system-back"));
+
 async function renderPhoneBoard() {
   mockMobileViewport();
   mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -98,7 +117,8 @@ async function renderPhoneBoard() {
     throw new Error(`unexpected request: ${path}`);
   });
   render(
-    <MemoryRouter initialEntries={["/issues"]}>
+    <MemoryRouter initialEntries={["/prev", "/issues"]} initialIndex={1}>
+      <HistoryProbe />
       <Issues />
     </MemoryRouter>,
     { wrapper: ThemeProvider },
@@ -107,6 +127,7 @@ async function renderPhoneBoard() {
 }
 
 beforeEach(async () => {
+  meStatus = "ready";
   mockedApi.mockReset();
   await i18n.changeLanguage("en");
 });
@@ -200,5 +221,180 @@ describe("看板手机形态", () => {
         title: "Phone task",
       });
     });
+  });
+});
+
+describe("看板页头下的「网络不稳定」细条（任务 10 遗留）", () => {
+  it("细条紧贴页头下方、只有一条，不压在筛选条或卡片上", async () => {
+    meStatus = "unstable";
+    await renderPhoneBoard();
+
+    const strips = screen.getAllByTestId("identity-unstable");
+    expect(strips).toHaveLength(1);
+    expect(screen.getByTestId("issues-mobile-header").nextElementSibling).toBe(
+      strips[0],
+    );
+  });
+
+  it("网络正常时不画", async () => {
+    await renderPhoneBoard();
+    expect(screen.queryByTestId("identity-unstable")).toBeNull();
+  });
+});
+
+describe("任务整屏页的历史与未保存改动（D2、F4）", () => {
+  const openFirstTask = async () => {
+    fireEvent.click(screen.getAllByTestId(/^board-card-body-/)[0]);
+    return screen.findByTestId("task-form");
+  };
+
+  it("没改动：系统返回直接关掉任务页、停在看板，不弹确认", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+
+    systemBack();
+
+    await waitFor(() => expect(screen.queryByTestId("task-form")).toBeNull());
+    expect(screen.queryByTestId("confirm-sheet")).toBeNull();
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+  });
+
+  it("没改动：✕ 直接关、不弹确认，再返回就是上一页（记号已退掉）", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+
+    fireEvent.click(screen.getByTestId("task-form-close"));
+
+    await waitFor(() => expect(screen.queryByTestId("task-form")).toBeNull());
+    expect(screen.queryByTestId("confirm-sheet")).toBeNull();
+    systemBack();
+    expect(screen.getByTestId("path").textContent).toBe("/prev");
+  });
+
+  it("改了标题点 ✕：先问「放弃未保存的修改？」，继续编辑为主，选了继续编辑留在任务页", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+    fireEvent.change(screen.getByTestId("task-title"), {
+      target: { value: "Changed title" },
+    });
+
+    fireEvent.click(screen.getByTestId("task-form-close"));
+
+    const sheet = await screen.findByTestId("confirm-sheet");
+    expect(within(sheet).getByText("Discard unsaved changes?")).toBeTruthy();
+    const keep = within(sheet).getByRole("button", { name: "Keep editing" });
+    const discard = within(sheet).getByRole("button", { name: "Discard" });
+    // 继续编辑是主按钮，排在放弃上面，44px 满宽堆叠。
+    expect(keep.compareDocumentPosition(discard)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(keep.getAttribute("data-variant")).toBe("default");
+    expect(keep.className).toContain("h-11");
+    expect(keep.className).toContain("w-full");
+
+    fireEvent.click(keep);
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect((screen.getByTestId("task-title") as HTMLInputElement).value).toBe(
+      "Changed title",
+    );
+  });
+
+  it("改了标题点 ✕ 再选放弃：关掉任务页，历史回到打开前（再返回是上一页）", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+    fireEvent.change(screen.getByTestId("task-title"), {
+      target: { value: "Changed title" },
+    });
+    fireEvent.click(screen.getByTestId("task-form-close"));
+    const sheet = await screen.findByTestId("confirm-sheet");
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Discard" }));
+
+    await waitFor(() => expect(screen.queryByTestId("task-form")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    systemBack();
+    expect(screen.getByTestId("path").textContent).toBe("/prev");
+  });
+
+  it("改了标题按系统返回：同样先问，任务页还在；继续编辑后再返回仍然先问", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+    fireEvent.change(screen.getByTestId("task-title"), {
+      target: { value: "Changed title" },
+    });
+
+    systemBack();
+    const sheet = await screen.findByTestId("confirm-sheet");
+    expect(screen.getByTestId("task-form")).toBeTruthy();
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+
+    fireEvent.click(
+      within(sheet).getByRole("button", { name: "Keep editing" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("task-form")).toBeTruthy();
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+
+    // 记号补回来了：再按一次返回还是先问，而不是直接离开看板。
+    systemBack();
+    expect(await screen.findByTestId("confirm-sheet")).toBeTruthy();
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+  });
+
+  it("改了标题按系统返回、再选放弃：关掉任务页并停在看板", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+    fireEvent.change(screen.getByTestId("task-title"), {
+      target: { value: "Changed title" },
+    });
+    systemBack();
+    const sheet = await screen.findByTestId("confirm-sheet");
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Discard" }));
+
+    await waitFor(() => expect(screen.queryByTestId("task-form")).toBeNull());
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+    systemBack();
+    expect(screen.getByTestId("path").textContent).toBe("/prev");
+  });
+
+  it("改回原样等于没改：不弹确认", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+    const title = screen.getByTestId("task-title") as HTMLInputElement;
+    const original = title.value;
+    fireEvent.change(title, { target: { value: "x" } });
+    fireEvent.change(title, { target: { value: original } });
+
+    fireEvent.click(screen.getByTestId("task-form-close"));
+
+    await waitFor(() => expect(screen.queryByTestId("task-form")).toBeNull());
+    expect(screen.queryByTestId("confirm-sheet")).toBeNull();
+  });
+
+  it("只改了属性（换阶段）也算改动：✕ 先问", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+    fireEvent.pointerDown(screen.getByTestId("task-pill-stage"));
+    fireEvent.click(screen.getByTestId("task-pill-stage"));
+    fireEvent.click(await screen.findByTestId("task-stage-review"));
+
+    fireEvent.click(screen.getByTestId("task-form-close"));
+
+    expect(await screen.findByTestId("confirm-sheet")).toBeTruthy();
+  });
+
+  it("保存键在页头右侧是文字键，不是实心按钮", async () => {
+    await renderPhoneBoard();
+    await openFirstTask();
+    expect(screen.getByTestId("issues-task-page").className).toContain(
+      "[&_[data-testid=task-form-submit]]:bg-transparent",
+    );
   });
 });

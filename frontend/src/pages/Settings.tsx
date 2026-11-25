@@ -16,7 +16,7 @@ import { Check, ChevronLeft, ChevronRight, Cloud, Laptop } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link, useSearchParams } from "react-router-dom";
 
-import AppShell from "@/components/AppShell";
+import AppShell, { IdentityUnstableStrip } from "@/components/AppShell";
 import {
   PhoneHeaderButton,
   PhonePage,
@@ -34,6 +34,7 @@ import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { LANGUAGE_LABELS, SUPPORTED_LANGUAGES } from "@/i18n";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useMe } from "@/hooks/use-me";
 import { AccountChannelSyncVersion } from "@/lib/accountChannel";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import {
@@ -161,6 +162,7 @@ type ProvidersHeaderContext = Parameters<
 export default function Settings() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const { status: identityStatus } = useMe();
   /**
    * 手机逐层页页头右侧那一格（「‹ · 标题 · 动作」）。面板经 renderHeader 交出的页面
    * 动作传送到这里，而不是摆在正文顶上。
@@ -420,8 +422,18 @@ export default function Settings() {
     return (
       // flush：页头钉在滚动区外、通栏（与账号、对话一致），正文自己滚——此前页头落进
       // 主区的 px-4 py-5 里，缩成一块灰框并跟着正文滚走（2026-11-20 第 5 项）。
-      <AppShell ownHeader flush title={t("nav.settings")}>
+      <AppShell
+        ownHeader
+        ownStrip={!editorOwnsHeader}
+        flush
+        title={t("nav.settings")}
+      >
         <PhonePage
+          strip={
+            identityStatus === "unstable" && !editorOwnsHeader ? (
+              <IdentityUnstableStrip />
+            ) : null
+          }
           header={
             editorOwnsHeader ? null : (
               <PhonePageHeader

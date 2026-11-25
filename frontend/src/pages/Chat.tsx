@@ -1,5 +1,12 @@
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ScopeTab } from "@agentre-hub/agentre-ui";
 import {
   Link,
@@ -243,12 +250,14 @@ export default function Chat() {
     conversationId: openConversationId,
     search: location.search,
     deviceParam,
+    layer: backDismissLayerOf(location.state),
   });
   useEffect(() => {
     locationRef.current = {
       conversationId: openConversationId,
       search: location.search,
       deviceParam,
+      layer: backDismissLayerOf(location.state),
     };
   });
 
@@ -317,14 +326,32 @@ export default function Chat() {
   >(null);
   /** 新对话草稿此刻的内容（DraftSession 报上来的），换 Agent 时带去下一个。 */
   const liveNewDraft = useRef<Draft | undefined>(undefined);
-  // 手机「挑一个 Agent」弹层（屏 23）是浮层：系统返回先关它（D1）。关法与弹层自己的
-  // onOpenChange(false) 一致——草稿上的选择器回到原草稿，其余收掉新对话。
-  const newConvSheetOpen =
-    compose?.step === "pick" ||
-    (compose?.step === "draft" && compose.picking === true);
-  useBackDismiss(newConvSheetOpen, () =>
+  /*
+    手机上新对话的各步骤进历史（规格 2026-11-25 D1、D2）：挑 Agent 弹层、「从项目里挑」
+    整屏、草稿整屏各压一条记号，系统返回 = 页头 ‹ 做的那件事——弹层收掉新对话、项目屏回
+    弹层、草稿回列表（草稿按 C1 已落本机，不丢）。草稿上的「换 Agent」选择器再压一层。
+
+    步骤之间换屏（弹层 → 项目屏 / 草稿，项目屏 → 弹层）是「退一条、压一条」：同时发出
+    会互相踩（与 selectScope 同一个坑）。所以界面里换屏走 goStep——历史上还有记号时先
+    让新步骤等着（settling），旧步骤收起时记号退干净（层数回 0）再压新的。返回键换屏时
+    记号已被它退掉，层数本来就是 0，不用等。
+  */
+  const composeLayer = backDismissLayerOf(location.state);
+  const [settling, setSettling] = useState(false);
+  if (settling && composeLayer === 0) setSettling(false);
+  const composeStep = compose?.step;
+  const goStep = useCallback((next: NonNullable<typeof compose>) => {
+    if (locationRef.current.layer > 0) setSettling(true);
+    setCompose(next);
+  }, []);
+  useBackDismiss(composeStep === "pick" && !settling, () => setCompose(null));
+  useBackDismiss(composeStep === "project" && !settling, () =>
+    setCompose({ step: "pick" }),
+  );
+  useBackDismiss(composeStep === "draft" && !settling, () => setCompose(null));
+  useBackDismiss(compose?.step === "draft" && compose.picking === true, () =>
     setCompose((prev) =>
-      prev?.step === "draft" ? { ...prev, picking: false } : null,
+      prev?.step === "draft" ? { ...prev, picking: false } : prev,
     ),
   );
   /**
@@ -473,7 +500,9 @@ export default function Chat() {
        */
       agent: NewConvAgent,
     ) => {
-      setCompose(null);
+      // compose 不在这里收：手机上草稿压着一条历史记号，这里先收、会话地址随后才到，
+      // 记号的退栈会赶在 push 前面把地址退回去。地址一换（openConversationId 变化）上面
+      // 那处渲染期调整就把它收掉，收的那一刻地址上已经没有记号，不会再多退一格。
       // 钉不住不影响这条对话开起来（第一轮就是按所选模型跑的），但后续轮次会回到
       // 跟随 Agent 绑定 —— 详情页必须如实说出来，否则它会显示成「跟随绑定」而
       // 用户明明选过。
@@ -508,6 +537,8 @@ export default function Chat() {
           savedToAccount ? {} : { device: deviceId },
           locationRef.current.search,
         ),
+        // 草稿压着记号时用会话地址把它换掉：历史是「上一页 → 会话」，一次返回就回去。
+        { replace: locationRef.current.layer > 0 },
       );
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
       // 却列不出来，看上去就像它没进账号。重取一次让它落成一行。
@@ -1133,8 +1164,8 @@ export default function Chat() {
     <NewConversationPane
       agents={agents}
       recentIds={recentIds}
-      onPick={(agent) => setCompose({ step: "draft", agent })}
-      onFromProject={() => setCompose({ step: "project" })}
+      onPick={(agent) => goStep({ step: "draft", agent })}
+      onFromProject={() => goStep({ step: "project" })}
       settled={agentsSettled}
     />
   );
@@ -1143,8 +1174,8 @@ export default function Chat() {
       projects={newConvProjects}
       agents={agents}
       stacked={isMobile}
-      onPick={(agent) => setCompose({ step: "draft", agent })}
-      onBack={() => setCompose({ step: "pick" })}
+      onPick={(agent) => goStep({ step: "draft", agent })}
+      onBack={() => goStep({ step: "pick" })}
       onNewProject={projectManagement.openCreate}
       projectsSettled={projectsSettled}
       agentsSettled={agentsSettled}
@@ -1166,7 +1197,12 @@ export default function Chat() {
         }}
         onStarted={(session) => onDraftStarted(session, compose.agent)}
         // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
-        onBack={isMobile ? () => setCompose(null) : undefined}
+        // 用 transition 收：草稿里「接着最近的对话」先 onBack 再 push 地址，路由状态也是
+        // transition 更新——同一批渲染里 compose 为空时地址已经是新的，草稿的记号退栈
+        // 不会误退掉刚 push 的那一条。
+        onBack={
+          isMobile ? () => startTransition(() => setCompose(null)) : undefined
+        }
         onChangeRecipient={
           // 手机：选择器浮在草稿上；桌面右栏里没有这一颗。
           isMobile
@@ -1815,9 +1851,9 @@ export default function Chat() {
                     ? { projectSyncId: compose.projectSyncId }
                     : { carry: liveNewDraft.current }),
                 })
-              : setCompose({ step: "draft", agent })
+              : goStep({ step: "draft", agent })
           }
-          onFromProject={() => setCompose({ step: "project" })}
+          onFromProject={() => goStep({ step: "project" })}
           settled={agentsSettled}
         />
       )}

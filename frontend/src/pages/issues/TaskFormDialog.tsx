@@ -9,6 +9,8 @@
  * （见 `lib/boardWire.ts` 的 `SyncIdRegistry`）。
  */
 import * as React from "react";
+import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 
 import {
   Dialog,
@@ -23,6 +25,8 @@ import {
   type TaskFormValue,
 } from "@agentre-hub/agentre-ui";
 
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
+import { backDismissLayerOf, useBackDismiss } from "@/hooks/use-back-dismiss";
 import type { SyncIdRegistry } from "@/lib/boardWire";
 import type { EngineBackend } from "@/lib/engineCatalog";
 import type { OrgBackendItem } from "@/pages/org/types";
@@ -67,9 +71,72 @@ export function TaskFormDialog({
   onClose,
   ...rest
 }: TaskFormDialogProps) {
-  if (!value) return null;
+  const { t } = useTranslation();
+  const page = rest.page ?? false;
+  const mobilePage = page && value !== null;
+  /*
+    整屏页进历史、有改动先问（规格 2026-11-25 D2、F4）。这些放在这一层——它一直挂着，
+    任务页关掉（保存成功、放弃）时记号才有人退。
+
+    - 系统返回退掉任务页的记号：没改动就关页；有改动则弹「放弃未保存的修改？」，页留着。
+      这时记号已经被返回键用掉了，要等确认收起、历史落回原页（layer 为 0）之后再补压
+      一条，否则再按一次返回就直接离开看板。补压前 `armed` 为假，不与确认框自己压的
+      那条记号抢同一个层数。
+    - ✕ 走同一道确认；没改动直接 `onClose`。
+  */
+  const dirtyRef = React.useRef<() => boolean>(() => false);
+  const [confirming, setConfirming] = React.useState(false);
+  const [markerLost, setMarkerLost] = React.useState(false);
+  const layer = backDismissLayerOf(useLocation().state);
+  if (markerLost && !confirming && layer === 0) setMarkerLost(false);
+  const armed = !(markerLost && (confirming || layer > 0));
+  useBackDismiss(mobilePage && armed, () => {
+    if (dirtyRef.current()) {
+      setMarkerLost(true);
+      setConfirming(true);
+    } else {
+      onClose();
+    }
+  });
+  const requestClose = React.useCallback(() => {
+    if (page && dirtyRef.current()) setConfirming(true);
+    else onClose();
+  }, [page, onClose]);
+
   return (
-    <TaskForm key={value.id ?? 0} value={value} onClose={onClose} {...rest} />
+    <>
+      {value ? (
+        <TaskForm
+          key={value.id ?? 0}
+          value={value}
+          onClose={requestClose}
+          dirtyRef={dirtyRef}
+          {...rest}
+        />
+      ) : null}
+      <ConfirmSheet
+        open={confirming && mobilePage}
+        title={t("issues.unsaved.title")}
+        description={t("issues.unsaved.body")}
+        onCancel={() => setConfirming(false)}
+        actions={[
+          {
+            label: t("issues.unsaved.keep"),
+            onSelect: () => setConfirming(false),
+            testId: "confirm-keep",
+          },
+          {
+            label: t("issues.unsaved.discard"),
+            variant: "secondary",
+            onSelect: () => {
+              setConfirming(false);
+              onClose();
+            },
+            testId: "confirm-discard",
+          },
+        ]}
+      />
+    </>
   );
 }
 
@@ -87,12 +154,60 @@ function TaskForm({
   onClose,
   onSave,
   onDelete,
-}: TaskFormDialogProps & { value: TaskFormValue }) {
+  dirtyRef,
+}: TaskFormDialogProps & {
+  value: TaskFormValue;
+  /** 外层问「有没有未保存的改动」的口子：整屏页关闭 / 返回前先问（F4）。 */
+  dirtyRef: React.MutableRefObject<() => boolean>;
+}) {
   const [exec, setExec] = React.useState<ExecSelection>(() => ({
     agentBackendSyncId: ids.syncIdOf(value.agentBackendId ?? 0),
     llmProviderKey: value.llmProviderKey,
     llmModelKey: value.llmModelKey,
   }));
+
+  /*
+    有没有未保存的改动（F4）。表单状态在共享包的壳里、没有「脏了」的出口，这里读 DOM：
+    标题与描述直接比初值；属性那一排（阶段 / 项目 / 标签 / Agent / 机器 / 模型）靠它们的
+    可见文字——用户第一次碰它们之前（pointer / 键盘事件在捕获阶段先于它们的处理）记一
+    份基线，之后文字变了才算改过。没碰过就不比，异步到的后端清单改了 pill 文字也不会
+    误报。
+  */
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const pillsBaseline = React.useRef<string | null>(null);
+  const readPills = () =>
+    rootRef.current?.querySelector('[data-testid="task-form-pills"]')
+      ?.textContent ?? "";
+  const notePillsTouch = (event: React.SyntheticEvent) => {
+    if (pillsBaseline.current !== null) return;
+    const target = event.target as Element;
+    if (
+      target.closest?.(
+        '[data-testid="task-title"],[data-testid="task-description"],[data-testid="task-form-close"]',
+      )
+    )
+      return;
+    pillsBaseline.current = readPills();
+  };
+  React.useEffect(() => {
+    dirtyRef.current = () => {
+      const field = (id: string) =>
+        rootRef.current?.querySelector<HTMLInputElement>(
+          `[data-testid="${id}"]`,
+        )?.value;
+      return (
+        (field("task-title") ?? value.title) !== value.title ||
+        (field("task-description") ?? value.description) !==
+          value.description ||
+        (pillsBaseline.current !== null &&
+          readPills() !== pillsBaseline.current)
+      );
+    };
+    const ref = dirtyRef;
+    return () => {
+      ref.current = () => false;
+    };
+  }, [dirtyRef, value.title, value.description]);
 
   const selectedBackend = backends.find(
     (backend) => backend.sync_id === exec.agentBackendSyncId,
@@ -183,12 +298,17 @@ function TaskForm({
   );
 
   // 整屏页：dvh 高的固定层，键盘升起时可视高度收缩，贴底的 pill 行随之停在键盘上方。
-  // 关闭语义与弹窗一致（onClose，不另问未保存）。
+  // 关闭 / 返回在有改动时先问（外层 TaskFormDialog 管确认与历史）。
   if (page) {
     return (
       <div
+        ref={rootRef}
         data-testid="issues-task-page"
-        className="fixed inset-x-0 top-0 z-50 h-dvh bg-sheet pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
+        onPointerDownCapture={notePillsTouch}
+        onClickCapture={notePillsTouch}
+        onKeyDownCapture={notePillsTouch}
+        // 保存是页头右侧的文字键（D4），不是实心按钮：壳里那颗提交键在这里只改观感。
+        className="fixed inset-x-0 top-0 z-50 h-dvh bg-sheet pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] [&_[data-testid=task-form-submit]]:bg-transparent [&_[data-testid=task-form-submit]]:px-3 [&_[data-testid=task-form-submit]]:text-primary-text [&_[data-testid=task-form-submit]]:hover:bg-rail-accent"
       >
         {shell}
       </div>
