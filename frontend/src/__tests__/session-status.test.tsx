@@ -734,7 +734,7 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
     expect(matchesSessionFilter(idle, "running")).toBe(false);
   });
 
-  it("sessionTitle:有标题就用标题;还没有标题的会话退化为「工作目录 · 后端 · 状态」", () => {
+  it("sessionTitle:有标题就用标题;还没有标题的会话叫「未命名对话」", () => {
     const t = i18n.t.bind(i18n);
     expect(
       sessionTitle(
@@ -757,14 +757,14 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
         },
         t,
       ),
-    ).toBe("/var/proj · codex · Idle");
-    // 连工作目录 / 后端都没有时不编造，用破折号占位；不认识的旧状态如实照抄。
+    ).toBe("Untitled conversation");
+    // 工作目录到不了本端，不再拼「— · 后端 · 状态」：统一叫「未命名对话」（H6）。
     expect(
       sessionTitle(
         { title: "", cwd: "", backendType: "", lifecycleState: "weird" },
         t,
       ),
-    ).toBe("— · — · weird");
+    ).toBe("Untitled conversation");
   });
 
   /**

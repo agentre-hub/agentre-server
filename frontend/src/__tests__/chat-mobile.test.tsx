@@ -915,8 +915,8 @@ describe("移动端对话页:空态 W8 页内切机器轴", () => {
     ).toContain("书房小主机");
   });
 
-  it("账号空且没有在线机器:出口是「添加设备」，指向 /devices", async () => {
-    stubApi([], []);
+  it("账号空、有设备但都不在线:出口是「添加设备」，指向 /devices", async () => {
+    stubApi([], [offlineMachine]);
     renderChat();
 
     const empty = await screen.findByTestId("chat-empty-state");
@@ -1257,6 +1257,68 @@ describe("手机首页：对话列表", () => {
         name: "Switch scope, current: 书房小主机",
       }),
     ).toBeTruthy();
+  });
+
+  describe("首次使用没有设备（J1、F3）", () => {
+    it("设备名单已知且为空：主按钮是「添加设备」指向 /devices，正文说先在电脑上装执行端，不再有「新对话」", async () => {
+      stubApi([], []);
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      const primary = within(empty).getByRole("link", { name: "Add a device" });
+      expect(primary.getAttribute("href")).toBe("/devices");
+      expect(primary.className).toContain("w-full");
+      expect(primary.className).toContain("h-11");
+      expect(empty.textContent).toContain(
+        "Install the agent on your computer first, then you can talk to agents here.",
+      );
+      expect(
+        within(empty).queryByRole("button", { name: "New conversation" }),
+      ).toBeNull();
+      expect(screen.queryByText("Pick an agent to get started.")).toBeNull();
+    });
+
+    it("设备名单还不知道（取数失败）：仍是「新对话」主按钮，不抢着说没有设备", async () => {
+      stubApi([], []);
+      const base = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, ...rest) => {
+        if (path === "/v1/devices") throw new Error("boom");
+        return base(path, ...rest);
+      });
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      expect(
+        within(empty).getByRole("button", { name: "New conversation" }),
+      ).toBeTruthy();
+      expect(empty.textContent).not.toContain("Install the agent");
+    });
+
+    it("有设备但都不在线：仍是「新对话」，「添加设备」文字出口至少 44px 高", async () => {
+      stubApi([], [offlineMachine]);
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      expect(
+        within(empty).getByRole("button", { name: "New conversation" }),
+      ).toBeTruthy();
+      const link = within(empty).getByRole("link", { name: "Add a device" });
+      expect(link.className).toContain("min-h-11");
+      expect(empty.textContent).not.toContain("Install the agent");
+    });
+
+    it("有在线设备：「按机器看设备上的对话」也是 44px", async () => {
+      stubApi([], [agentred]);
+      mockUseRelay.mockReturnValue(connectedRelay());
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      expect(
+        within(empty).getByRole("button", {
+          name: "Browse conversations by machine",
+        }).className,
+      ).toContain("min-h-11");
+    });
   });
 
   it("空态：主按钮「新对话」撑满宽", async () => {

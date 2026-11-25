@@ -5886,8 +5886,9 @@ describe("会话详情：头部", () => {
 
     await screen.findByText(/老会话转录/);
     const head = screen.getByTestId("session-detail-header");
-    // 与索引同一套退化：后端与状态说得出来，cwd 永不下行（R19）所以是「—」。
-    expect(head.textContent).toContain("claude");
+    // 与索引同一套：没有标题就叫「未命名对话」（H6），不拼 cwd 永不下行（R19）的「—」。
+    expect(head.textContent).toContain("Untitled conversation");
+    expect(head.textContent).not.toContain("—");
     expect(head.textContent).not.toContain("#42");
   });
 

@@ -176,6 +176,11 @@ export interface PhoneChatIndexProps {
   /** 一条都没有、也没在搜/筛时的出口（规格「空态」）。 */
   hasOnlineMachine: boolean;
   onFindOnMachine: () => void;
+  /**
+   * 设备名单**已知**且一台都没有（首次使用，J1）：主按钮换成「添加设备」。名单还没
+   * 到、或取数失败时不传 / 传 false——空数组说不出是「没有设备」还是「还不知道」。
+   */
+  noDevice?: boolean;
 
   hasMore: boolean;
   loadingMore: boolean;
@@ -258,6 +263,7 @@ export function PhoneChatIndex({
   onSave,
   hasOnlineMachine,
   onFindOnMachine,
+  noDevice = false,
   hasMore,
   loadingMore,
   loadMoreFailed,
@@ -540,26 +546,36 @@ export function PhoneChatIndex({
         <EmptyState
           icon={MessageCirclePlus}
           title={t("chat.noSessions")}
-          body={t("chat.startFirstBody")}
+          body={t(noDevice ? "chat.noDeviceBody" : "chat.startFirstBody")}
           testId="chat-empty-state"
           action={
-            <>
-              <Button size="lg" className="w-full" onClick={onCompose}>
-                {t("chat.startNew")}
+            noDevice ? (
+              <Button asChild size="lg" className="h-11 w-full">
+                <Link to="/devices">{t("chat.addDevice")}</Link>
               </Button>
-              {hasOnlineMachine ? (
-                <Button variant="link" onClick={onFindOnMachine}>
-                  {t("chat.findOnMachine")}
+            ) : (
+              <>
+                <Button size="lg" className="h-11 w-full" onClick={onCompose}>
+                  {t("chat.startNew")}
                 </Button>
-              ) : (
-                <Link
-                  to="/devices"
-                  className="text-sm font-medium text-primary-text hover:underline"
-                >
-                  {t("chat.addDevice")}
-                </Link>
-              )}
-            </>
+                {hasOnlineMachine ? (
+                  <Button
+                    variant="link"
+                    className="min-h-11"
+                    onClick={onFindOnMachine}
+                  >
+                    {t("chat.findOnMachine")}
+                  </Button>
+                ) : (
+                  <Link
+                    to="/devices"
+                    className="inline-flex min-h-11 items-center px-3 text-sm font-medium text-primary-text hover:underline"
+                  >
+                    {t("chat.addDevice")}
+                  </Link>
+                )}
+              </>
+            )
           }
         />
       </div>

@@ -103,8 +103,7 @@
     "idle": "Idle",
     "interrupted": "Interrupted",
     "failed": "Failed",
-    "waiting": "Waiting for your input",
-    "untitled": "{{cwd}} · {{backend}} · {{status}}"
+    "waiting": "Waiting for your input"
   },
   "transcript": {
     "empty": "No messages yet.",

@@ -1741,6 +1741,7 @@ export default function Chat() {
             onSave={sessionIndex.onSave}
             hasOnlineMachine={hasOnlineMachine}
             onFindOnMachine={() => openScopeSheet("machine")}
+            noDevice={devicesKnown && devices.length === 0}
             hasMore={sessionIndex.hasMore}
             loadingMore={sessionIndex.loadingMore}
             loadMoreFailed={sessionIndex.loadMoreFailed}

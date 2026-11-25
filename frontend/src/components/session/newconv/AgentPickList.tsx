@@ -9,6 +9,8 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { useIsMobile } from "@/components/use-is-mobile";
+
 /**
  * 组标题与计数之间的分隔符。是排版符号不是文案，因此不进 i18n——写成常量
  * 而不是 JSX 里的字面量，也是为了让 `i18next/no-literal-string` 不用为它开例外
@@ -57,6 +59,8 @@ export function AgentPickList({
   search?: { query: string; onClear: () => void };
 }) {
   const { t } = useTranslation();
+  // 触屏下空态的出口按钮不小于 44px（F18）；桌面仍是小号。
+  const phone = useIsMobile();
 
   const groups = useMemo(() => {
     // 分组与排序走共享包：桌面端命令面板的 `flattenAgents` 是同一条规则（判据是
@@ -114,7 +118,7 @@ export function AgentPickList({
         // 说完「从哪来」还差一条能走的路：登记设备在设备页，与设置页那条
         // 「先登记一台设备」同一个出口。
         action={
-          <Button asChild size="sm">
+          <Button asChild size="sm" className={phone ? "h-11 px-4" : undefined}>
             <Link to="/devices">{t("chat.noAgentsAction")}</Link>
           </Button>
         }
