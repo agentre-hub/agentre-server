@@ -196,9 +196,17 @@ export function AddDeviceGuide({
   useBackDismiss(live, () => onClose?.());
   useBackDismiss(live && step >= 2 && layer >= 1, () => setStep(1));
   useBackDismiss(live && step >= 3 && layer >= 2, () => setStep(2));
+  // 提交设备码要去别的路由：同样先退干净记号再去（push），否则目的地下面垫着几条
+  // 同地址的记号，从那里返回要多按几次才回到打开指引的页。
+  const [leaveTo, setLeaveTo] = useState<{
+    to: string;
+    state: unknown;
+  } | null>(null);
   useEffect(() => {
-    if (closing && layer === 0) onClose?.();
-  }, [closing, layer, onClose]);
+    if (!closing || layer !== 0) return;
+    if (leaveTo) void nav(leaveTo.to, { state: leaveTo.state });
+    else onClose?.();
+  }, [closing, layer, onClose, leaveTo, nav]);
   const requestClose = () => {
     if (history) setClosing(true);
     else onClose?.();
@@ -229,9 +237,14 @@ export function AddDeviceGuide({
     }
     // 带上所选方式：批准后的成功页要按它出第 3 步的命令（引导的 state 离开
     // 本页就丢了，只能靠路由 state 带过去）。
-    nav(`/device?user_code=${encodeURIComponent(norm)}`, {
-      state: { from: "add-guide", method },
-    });
+    const to = `/device?user_code=${encodeURIComponent(norm)}`;
+    const state = { from: "add-guide", method };
+    if (history) {
+      setLeaveTo({ to, state });
+      setClosing(true);
+    } else {
+      nav(to, { state });
+    }
   }
 
   const server = consoleOrigin();

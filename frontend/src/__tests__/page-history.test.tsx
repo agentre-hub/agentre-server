@@ -5,7 +5,13 @@
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -46,8 +52,8 @@ function Probe() {
   );
 }
 
-function Host() {
-  const [open, setOpen] = useState(true);
+function Host({ startOpen = true }: { startOpen?: boolean }) {
+  const [open, setOpen] = useState(startOpen);
   return open ? (
     <AddDeviceGuide compact onClose={() => setOpen(false)} />
   ) : (
@@ -133,6 +139,44 @@ describe("添加设备各步骤进历史（D2）", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.getByTestId("list")).toBeTruthy());
+    back();
+    expect(screen.getByTestId("path").textContent).toBe("/prev");
+  });
+
+  it("提交设备码离开整屏：几层记号退干净再去授权页，一次返回回到打开它的页、指引已关", async () => {
+    setViewport(true);
+    // 宿主页（设备页）重新挂上时指引是关着的（它的开关是页面自己的 state）。
+    const page = { left: false };
+    const DevicesPage = () => <Host startOpen={!page.left} />;
+    render(
+      <MemoryRouter initialEntries={["/prev", "/devices"]} initialIndex={1}>
+        <ThemeProvider>
+          <Probe />
+          <Routes>
+            <Route path="/prev" element={<p>previous</p>} />
+            <Route path="/devices" element={<DevicesPage />} />
+            <Route path="/device" element={<p data-testid="approval" />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /I have the device code/ }),
+    );
+    const boxes = await screen.findAllByRole("textbox");
+    "ABCD23"
+      .split("")
+      .forEach((c, i) => fireEvent.change(boxes[i], { target: { value: c } }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByTestId("approval")).toBeTruthy());
+    expect(screen.getByTestId("path").textContent).toBe("/device");
+    page.left = true;
+
+    back();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/devices"),
+    );
+    expect(screen.getByTestId("list")).toBeTruthy();
     back();
     expect(screen.getByTestId("path").textContent).toBe("/prev");
   });
