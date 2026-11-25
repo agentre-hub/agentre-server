@@ -480,6 +480,7 @@ export default function Chat() {
     scope: isMobile ? phoneServerScope(phoneScope) : undefined,
     onDeleted: onSessionDeleted,
     onSaved: onSessionSaved,
+    overlayLayer: backDismissLayerOf(location.state),
   });
   // 这两个（连同下面 reach 的 forgetResolved）单独拎出来：整个 hook 结果每次渲染都是
   // 新对象，把它整个钉进依赖数组会让下面几个 useCallback 每渲染换一次引用，索引里的

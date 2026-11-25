@@ -338,8 +338,11 @@ describe("端口转发「打开」（F7）", () => {
   afterEach(() => vi.restoreAllMocks());
 
   function renderForward() {
+    // 失败提示（FailureNotice）带「重新登录」的 next，要在 Router 里渲染。
     render(
-      <DevicePortForward deviceId={12} fingerprint="fp" offline={false} />,
+      <MemoryRouter>
+        <DevicePortForward deviceId={12} fingerprint="fp" offline={false} />
+      </MemoryRouter>,
     );
   }
   async function tapOpen() {

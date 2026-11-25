@@ -6,11 +6,9 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { useLocation } from "react-router-dom";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
-import { backDismissLayerOf } from "@/hooks/use-back-dismiss";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
 import { attentionReasonOf } from "@/lib/attentionAdapter";
@@ -66,6 +64,12 @@ export interface SessionIndexInput {
    * 保存的重试两条路都报，因此只交身份。
    */
   onSaved?: (conversationId: string) => void;
+  /**
+   * 此刻历史上的浮层层数，由住在 Router 里的宿主读出来给（backDismissLayerOf(location.state)）。
+   * 删成之后要等它回 0（确认 sheet 的历史记号退干净）才通知 onDeleted。
+   * 本 hook 不碰 Router；不给就按 0，即不等。
+   */
+  overlayLayer?: number;
 }
 
 /**
@@ -284,6 +288,7 @@ export function useSessionIndex({
   scope,
   onDeleted,
   onSaved,
+  overlayLayer = 0,
 }: SessionIndexInput): SessionIndexData {
   /** 服务端按当前轴给的组骨架（不带 scope 那一次的应答）。 */
   const [indexGroups, setIndexGroups] = useState<IndexGroupPayload[]>([]);
@@ -342,7 +347,6 @@ export function useSessionIndex({
    * 才跑，否则它们会和记号抢退格，落到错的一页。见下面的 effect。
    */
   const deletedRef = useRef<MirrorIndexRow | null>(null);
-  const overlayLayer = backDismissLayerOf(useLocation().state);
   // 搜索词：真实过滤索引里的行，不是假交互。
   const [searchQuery, setSearchQuery] = useState("");
 
