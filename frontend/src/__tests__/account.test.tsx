@@ -1038,3 +1038,128 @@ describe("Account page: sign-out sits at the bottom on mobile only", () => {
     expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
   });
 });
+
+// ── 任务 30：J7（会话图标按设备类型、时间不显示秒）与 I3/F10（44px 点按区） ──
+describe("Account page: sessions and times (task 30)", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function setViewport(mobile: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: mobile && query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    vi.restoreAllMocks();
+  });
+
+  const UA_ANDROID =
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
+  const UA_IPAD =
+    "Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
+
+  function serveSessions(uas: string[]) {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return ME;
+      if (path === "/v1/passkeys") return PASSKEYS;
+      if (path === "/v1/auth/sessions")
+        return {
+          sessions: uas.map((user_agent, i) => ({
+            user_agent,
+            ip: `198.51.100.${i + 1}`,
+            created_at: 1755000000000,
+            last_active_at: 1755100000000,
+            current: i === 0,
+          })),
+        };
+      throw new Error(`unexpected call: ${path}`);
+    });
+  }
+
+  const iconOf = (row: HTMLElement) =>
+    row.querySelector("svg")?.getAttribute("class") ?? "";
+
+  it.each([false, true])(
+    "each session row's icon follows the device type (mobile=%s)",
+    async (mobile) => {
+      setViewport(mobile);
+      markWebauthnSupported();
+      serveSessions([UA_DESKTOP, UA_MOBILE, UA_ANDROID, UA_IPAD, "curl/8.0"]);
+      renderAccount();
+
+      const rows = (
+        await screen.findAllByRole("button", { expanded: false })
+      ).filter((b) =>
+        b.querySelector(
+          "svg.lucide-monitor, svg.lucide-smartphone, svg.lucide-tablet",
+        ),
+      );
+      expect(rows).toHaveLength(5);
+      expect(iconOf(rows[0])).toContain("lucide-monitor"); // Mac
+      expect(iconOf(rows[1])).toContain("lucide-smartphone"); // iPhone
+      expect(iconOf(rows[2])).toContain("lucide-smartphone"); // Android
+      expect(iconOf(rows[3])).toContain("lucide-tablet"); // iPad
+      expect(iconOf(rows[4])).toContain("lucide-monitor"); // unknown falls back
+    },
+  );
+
+  it("login, last-active and passkey times drop the seconds", async () => {
+    setViewport(false);
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    const row = (await screen.findByText(UA_DESKTOP)).closest(
+      "button",
+    ) as HTMLElement;
+    const text = row.textContent ?? "";
+    expect(text).toMatch(/Signed in/);
+    expect(text).toMatch(/Last active/);
+    // h:mm:ss 的样子一律不许出现；h:mm 可以。
+    expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+    const metaLines = await screen.findAllByText(/Added /);
+    for (const line of metaLines) {
+      expect(line.textContent ?? "").not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+      expect(line.textContent ?? "").toMatch(/\d{1,2}:\d{2}/);
+    }
+  });
+
+  const tall = (el: HTMLElement) => /\bmin-h-11\b/.test(el.className);
+
+  it("phone: add / remove / sign out elsewhere / sign out are 44px; desktop keeps its size", async () => {
+    setViewport(true);
+    markWebauthnSupported();
+    mockDefaultApi();
+    const { unmount } = renderAccount();
+
+    const add = await screen.findByRole("button", { name: "Add a passkey" });
+    expect(tall(add)).toBe(true);
+    const removes = screen.getAllByRole("button", { name: "Remove" });
+    expect(
+      removes.every((b) => tall(b) && /\bmin-w-11\b/.test(b.className)),
+    ).toBe(true);
+    expect(
+      tall(screen.getByRole("button", { name: "Sign out everywhere else" })),
+    ).toBe(true);
+    expect(tall(screen.getByRole("button", { name: "Sign out" }))).toBe(true);
+    unmount();
+
+    setViewport(false);
+    renderAccount();
+    const desktopAdd = await screen.findByRole("button", {
+      name: "Add a passkey",
+    });
+    expect(tall(desktopAdd)).toBe(false);
+    expect(
+      tall(screen.getByRole("button", { name: "Sign out everywhere else" })),
+    ).toBe(false);
+  });
+});

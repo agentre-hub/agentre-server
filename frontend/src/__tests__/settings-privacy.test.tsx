@@ -6,12 +6,13 @@ import {
   within,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { edgeClasses } from "./helpers/edge-classes";
+import { ActivityStatsPanel } from "@/components/settings/ActivityStatsPanel";
 import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -677,5 +678,96 @@ describe("设置 · 隐私：关闭并删除", () => {
 
       expect(toggle()).toBe("false");
     });
+  });
+});
+
+// ── 任务 30：ActivityStatsPanel 的读失败走 CardLoadError，触屏控件 44px ──
+describe("设置 · 隐私：读失败与触屏点按区（任务 30）", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function setViewport(mobile: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: mobile && query.includes("max-width"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  const tall = (el: HTMLElement) => /\bmin-h-11\b/.test(el.className);
+
+  function renderPanel() {
+    return render(
+      <MemoryRouter initialEntries={["/settings?tab=privacy"]}>
+        <ActivityStatsPanel />
+      </MemoryRouter>,
+    );
+  }
+
+  it("401：给「重新登录」链接（带 next），不给重试", async () => {
+    setViewport(true);
+    serve({
+      "/v1/stats/settings": () => {
+        throw new ApiError(30004, "未登录", 401);
+      },
+    });
+    renderPanel();
+
+    const alert = await screen.findByRole("alert");
+    const link = within(alert).getByRole("link", { name: "Sign in again" });
+    expect(link.getAttribute("href")).toBe(
+      `/login?next=${encodeURIComponent("/settings?tab=privacy")}`,
+    );
+    expect(tall(link)).toBe(true);
+    expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("其它失败：手机上「重试」44px，桌面不撑高；读不到不画开关", async () => {
+    setViewport(true);
+    serve({
+      "/v1/stats/settings": () => {
+        throw new Error("stats settings unavailable");
+      },
+    });
+    const { unmount } = renderPanel();
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(tall(retry)).toBe(true);
+    expect(screen.queryByRole("switch")).toBeNull();
+    unmount();
+
+    setViewport(false);
+    renderPanel();
+    expect(tall(await screen.findByRole("button", { name: "Retry" }))).toBe(
+      false,
+    );
+  });
+
+  it("手机：开关有 44px 点按区、危险区按钮 44px；桌面不变", async () => {
+    setViewport(true);
+    serve();
+    const { unmount } = renderPanel();
+    const sw = await screen.findByRole("switch");
+    expect(sw.className).toMatch(/after:h-11/);
+    expect(sw.className).toMatch(/after:w-11/);
+    expect(
+      tall(screen.getByRole("button", { name: "Turn off and delete" })),
+    ).toBe(true);
+    unmount();
+
+    setViewport(false);
+    renderPanel();
+    const desktopSwitch = await screen.findByRole("switch");
+    expect(desktopSwitch.className).not.toMatch(/after:h-11/);
+    expect(
+      tall(screen.getByRole("button", { name: "Turn off and delete" })),
+    ).toBe(false);
   });
 });

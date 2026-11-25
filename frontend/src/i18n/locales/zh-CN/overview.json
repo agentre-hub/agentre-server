@@ -69,11 +69,13 @@
         "wed": "三",
         "fri": "五"
       },
-      "timeZone": "日界按服务端时区 {{zone}} 切"
+      "timeZone": "按服务器时区（{{zone}}）的自然日统计。",
+      "timeZoneUnknown": "按服务器时区的自然日统计。"
     },
     "agents": {
       "title": "Agent 使用排行",
       "all": "全部 Agent →",
+      "deleted": "已删除的 Agent",
       "empty": "这段时间还没有 Agent 跑过对话。"
     },
     "backends": {
@@ -86,6 +88,7 @@
     "projects": {
       "title": "项目分布",
       "unassigned": "未归属项目",
+      "deleted": "已删除的项目",
       "empty": "还没有项目。"
     }
   }

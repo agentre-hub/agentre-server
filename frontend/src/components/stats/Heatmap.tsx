@@ -22,14 +22,47 @@ export const HEATMAP_DESKTOP_WEEKS = 53;
  */
 export const HEATMAP_MOBILE_WEEKS = 18;
 
-/** 格子边长与缝隙。与下面 CELL_CLASS / `gap-[3px]` 是同一组数，改一处要改另一处。 */
-const CELL_PX = 13;
-const CELL_GAP_PX = 3;
 /**
- * 星期栏吃掉的宽：`w-6` (24) + `mr-1.5` (6) + 网格行的一个缝隙 (3)。
+ * 触屏档的列数：20px 格 + 2px 缝隙，390 宽的卡片内容区（324px）放得下 13 列
+ * （守卫见 heatmap-grid.test.ts）。比桌面档的 18 列少，是拿列数换点按区：13px 的
+ * 格子手指按不准，参照对比稿 v13 B 栏。
+ */
+export const HEATMAP_TOUCH_WEEKS = 13;
+
+/**
+ * 格子几何。类名必须是完整的字面量（Tailwind 靠扫源码生成），所以数字与类名
+ * 并排写在一处：改一个要改另一个。`touch` 只在手机（useIsMobile）打开，桌面一字不变。
+ */
+interface HeatGeometry {
+  cellPx: number;
+  gapPx: number;
+  cellClass: string;
+  gapClass: string;
+  weekdayRowClass: string;
+}
+const DESKTOP_GEOMETRY: HeatGeometry = {
+  cellPx: 13,
+  gapPx: 3,
+  cellClass: "size-[13px] shrink-0 rounded-[2px]",
+  gapClass: "gap-[3px]",
+  weekdayRowClass: "h-[13px] w-6 text-3xs leading-[13px] text-muted-foreground",
+};
+const TOUCH_GEOMETRY: HeatGeometry = {
+  cellPx: 20,
+  gapPx: 2,
+  cellClass: "size-[20px] shrink-0 rounded-[3px]",
+  gapClass: "gap-[2px]",
+  weekdayRowClass: "h-[20px] w-6 text-3xs leading-[20px] text-muted-foreground",
+};
+const geometryFor = (touch: boolean) =>
+  touch ? TOUCH_GEOMETRY : DESKTOP_GEOMETRY;
+/** 一列的步距：格 + 缝隙。月份标签按它定位。 */
+const pitchOf = (g: HeatGeometry) => g.cellPx + g.gapPx;
+/**
+ * 星期栏吃掉的宽：`w-6` (24) + `mr-1.5` (6) + 网格行的一个缝隙。
  * 它在网格左边，任何「放不放得下」的账都要算上它。
  */
-const WEEKDAY_GUTTER_PX = 24 + 6 + CELL_GAP_PX;
+const gutterOf = (g: HeatGeometry) => 24 + 6 + g.gapPx;
 
 /**
  * 窄屏的宽度预算：390 的视口 − main 的 `px-4` (32) − 卡片的 `px-4` 与边框 (34)
@@ -38,8 +71,9 @@ const WEEKDAY_GUTTER_PX = 24 + 6 + CELL_GAP_PX;
 export const MOBILE_CARD_CONTENT_PX = 324;
 
 /** 整张网格实际占的宽（含星期栏）。列数按它定。 */
-export function heatmapWidthPx(weeks: number): number {
-  return WEEKDAY_GUTTER_PX + weeks * COLUMN_PITCH - CELL_GAP_PX;
+export function heatmapWidthPx(weeks: number, touch = false): number {
+  const g = geometryFor(touch);
+  return gutterOf(g) + weeks * pitchOf(g) - g.gapPx;
 }
 
 /**
@@ -56,11 +90,10 @@ export function heatmapWidthPx(weeks: number): number {
  * `available <= 0` 是「还没量到」（提交阶段之前、jsdom 里没有布局），不是
  * 「一列都放不下」：退回窄屏那一档，它在最窄的一档上也放得下。
  */
-export function heatmapColumnsFor(available: number): number {
-  if (available <= 0) return HEATMAP_MOBILE_WEEKS;
-  const fit = Math.floor(
-    (available - WEEKDAY_GUTTER_PX + CELL_GAP_PX) / COLUMN_PITCH,
-  );
+export function heatmapColumnsFor(available: number, touch = false): number {
+  const g = geometryFor(touch);
+  if (available <= 0) return touch ? HEATMAP_TOUCH_WEEKS : HEATMAP_MOBILE_WEEKS;
+  const fit = Math.floor((available - gutterOf(g) + g.gapPx) / pitchOf(g));
   return Math.max(1, Math.min(HEATMAP_DESKTOP_WEEKS, fit));
 }
 
@@ -74,23 +107,26 @@ export function heatmapColumnsFor(available: number): number {
  * 兜底宽度的网格再跳成正确的；`ResizeObserver` 接住之后的每一次改宽。收敛是稳的：
  * 列数只会让网格变窄，而容器的宽度由外面的布局给定，不由网格反推。
  */
-export function useHeatmapWeeks(): {
+export function useHeatmapWeeks(touch = false): {
   ref: (node: HTMLElement | null) => void;
   weeks: number;
 } {
-  const [weeks, setWeeks] = useState(HEATMAP_MOBILE_WEEKS);
+  const [weeks, setWeeks] = useState(() => heatmapColumnsFor(0, touch));
   const observerRef = useRef<ResizeObserver | null>(null);
-  const ref = useCallback((node: HTMLElement | null) => {
-    observerRef.current?.disconnect();
-    observerRef.current = null;
-    if (!node) return;
-    setWeeks(heatmapColumnsFor(node.clientWidth));
-    const observer = new ResizeObserver(() => {
-      setWeeks(heatmapColumnsFor(node.clientWidth));
-    });
-    observer.observe(node);
-    observerRef.current = observer;
-  }, []);
+  const ref = useCallback(
+    (node: HTMLElement | null) => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+      if (!node) return;
+      setWeeks(heatmapColumnsFor(node.clientWidth, touch));
+      const observer = new ResizeObserver(() => {
+        setWeeks(heatmapColumnsFor(node.clientWidth, touch));
+      });
+      observer.observe(node);
+      observerRef.current = observer;
+    },
+    [touch],
+  );
   return { ref, weeks };
 }
 
@@ -107,16 +143,12 @@ const LEVEL_CLASS: Record<HeatLevel, string> = {
   4: "bg-heat-4",
 };
 
-const CELL_CLASS = "size-[13px] shrink-0 rounded-[2px]";
-/** 一列的步距：13px 格 + 3px 缝隙。月份标签按它定位。 */
-const COLUMN_PITCH = CELL_PX + CELL_GAP_PX;
-
 /**
  * 月份标签要占的宽：「Sep」「12月」都是三个字，text-2xs (11px) 下每个字不超过
- * 1em，再留一个格缝的余量 = 36px。按列步距折算成列数（向上取整 = 3 列）。
+ * 1em，再留一个格缝的余量。按列步距折算成列数（向上取整：桌面 3 列、触屏 2 列）。
  */
-const MONTH_LABEL_PX = 3 * 11 + CELL_GAP_PX;
-const MONTH_LABEL_MIN_COLUMNS = Math.ceil(MONTH_LABEL_PX / COLUMN_PITCH);
+const monthLabelMinColumns = (g: HeatGeometry) =>
+  Math.ceil((3 * 11 + g.gapPx) / pitchOf(g));
 
 /**
  * 去掉放不下的月份标签：离下一只不到 `MONTH_LABEL_MIN_COLUMNS` 列的那只不画。
@@ -125,10 +157,13 @@ const MONTH_LABEL_MIN_COLUMNS = Math.ceil(MONTH_LABEL_PX / COLUMN_PITCH);
  * 之后就开始了，两只标签叠成一团（2026-10 量到「10月」压着「11月」）。丢前面那只：
  * 它是个残月，只占一两列，后面那个才是完整的月。
  */
-function visibleMonths<T extends { column: number }>(months: T[]): T[] {
+function visibleMonths<T extends { column: number }>(
+  months: T[],
+  minColumns: number,
+): T[] {
   return months.filter((m, i) => {
     const next = months[i + 1];
-    return !next || next.column - m.column >= MONTH_LABEL_MIN_COLUMNS;
+    return !next || next.column - m.column >= minColumns;
   });
 }
 
@@ -163,11 +198,14 @@ function HeatTooltip({
   weeks: number;
   text: string;
 }) {
-  const cellLeft = WEEKDAY_GUTTER_PX + hover.column * COLUMN_PITCH;
+  // 悬停浮层只在桌面出现（触屏走固定读数行），几何固定取桌面档。
+  const g = DESKTOP_GEOMETRY;
+  const columnPitch = pitchOf(g);
+  const cellLeft = gutterOf(g) + hover.column * columnPitch;
   const nearStart = hover.column <= 2;
   const nearEnd = hover.column >= weeks - 3;
   // 往上冒 6px，落在格子上边缘之上。
-  const top = hover.row * COLUMN_PITCH - 6;
+  const top = hover.row * columnPitch - 6;
   return (
     <span
       data-testid="heat-tooltip"
@@ -178,8 +216,8 @@ function HeatTooltip({
       )}
       style={
         nearEnd
-          ? { right: heatmapWidthPx(weeks) - (cellLeft + CELL_PX), top }
-          : { left: nearStart ? cellLeft : cellLeft + CELL_PX / 2, top }
+          ? { right: heatmapWidthPx(weeks) - (cellLeft + g.cellPx), top }
+          : { left: nearStart ? cellLeft : cellLeft + g.cellPx / 2, top }
       }
     >
       {text}
@@ -247,6 +285,8 @@ export function Heatmap({
   }, [i18n.resolvedLanguage]);
 
   const isMobile = useIsMobile();
+  const geo = geometryFor(isMobile);
+  const columnPitch = pitchOf(geo);
   const [hover, setHover] = useState<HoverCell | null>(null);
   /**
    * 鼠标停的那一格，从网格里现读。列数一变（改宽了）旧坐标可能已经不在网格里，
@@ -298,13 +338,13 @@ export function Heatmap({
           会把整行撑开、和下面的网格错位。 */}
       <div
         className="relative h-[15px] shrink-0"
-        style={{ marginLeft: COLUMN_PITCH + 12 }}
+        style={{ marginLeft: isMobile ? gutterOf(geo) : columnPitch + 12 }}
       >
-        {visibleMonths(grid.months).map((m) => (
+        {visibleMonths(grid.months, monthLabelMinColumns(geo)).map((m) => (
           <span
             key={`${m.year}-${m.month}`}
             className="absolute top-0 text-2xs whitespace-nowrap text-muted-foreground"
-            style={{ left: m.column * COLUMN_PITCH }}
+            style={{ left: m.column * columnPitch }}
           >
             {monthName(m.year, m.month)}
           </span>
@@ -315,17 +355,13 @@ export function Heatmap({
         data-testid="heat-cells"
         // relative 是浮层的定位原点：读数按列/行号算位置，不去读任何盒子的
         // getBoundingClientRect（渲染期读布局是不纯的，而且滚动一下就过期）。
-        className="relative flex gap-[3px]"
+        className={cn("relative flex", geo.gapClass)}
         onMouseLeave={() => setHover(null)}
       >
         {/* 星期几只标一 / 三 / 五：七行全标会把这一列撑到比网格还高。 */}
-        <div className="mr-1.5 flex shrink-0 flex-col gap-[3px]">
+        <div className={cn("mr-1.5 flex shrink-0 flex-col", geo.gapClass)}>
           {Array.from({ length: 7 }, (_, row) => (
-            <span
-              key={row}
-              aria-hidden="true"
-              className="h-[13px] w-6 text-3xs leading-[13px] text-muted-foreground"
-            >
+            <span key={row} aria-hidden="true" className={geo.weekdayRowClass}>
               {weekdayRows[row] ?? ""}
             </span>
           ))}
@@ -334,7 +370,7 @@ export function Heatmap({
           <div
             key={index}
             data-testid="heat-week"
-            className="flex shrink-0 flex-col gap-[3px]"
+            className={cn("flex shrink-0 flex-col", geo.gapClass)}
           >
             {column.map((cell, row) =>
               cell.day === null ? (
@@ -345,7 +381,7 @@ export function Heatmap({
                   aria-hidden="true"
                   data-testid="heat-cell"
                   data-level="0"
-                  className={CELL_CLASS}
+                  className={geo.cellClass}
                 />
               ) : (
                 <span
@@ -356,7 +392,7 @@ export function Heatmap({
                   onMouseEnter={() => setHover({ column: index, row })}
                   onClick={isMobile ? () => setTapDay(cell.day) : undefined}
                   className={cn(
-                    CELL_CLASS,
+                    geo.cellClass,
                     LEVEL_CLASS[cell.level],
                     isMobile &&
                       tappedCell?.day === cell.day &&

@@ -1,4 +1,5 @@
-import { KeyRound, Monitor, Trash2 } from "lucide-react";
+import { KeyRound, Monitor, Smartphone, Tablet, Trash2 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -57,7 +58,11 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 function formatDate(ms: number): string {
   if (!ms) return "—";
-  return new Date(ms).toLocaleString();
+  // 到分钟为止：秒对「哪天登录的」没有信息量，还把一行撑长（任务 30 / F21）。
+  return new Date(ms).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 // 下面三个拼行函数都定义在组件与 JSX 之外：eslint-plugin-i18next 的
@@ -94,6 +99,17 @@ function sessionTimesLine(t: Translate, s: SessionRow): string {
 function sessionLabel(s: SessionRow): string {
   const parsed = parseUserAgent(s.user_agent);
   return parsed ? `${parsed.device} · ${parsed.browser}` : s.user_agent;
+}
+
+/** 登录记录的图标：按设备类型认，认不出来（或是桌面系统）退回显示器。 */
+const SESSION_ICONS: Record<string, LucideIcon> = {
+  iPhone: Smartphone,
+  Android: Smartphone,
+  iPad: Tablet,
+};
+function sessionIcon(s: SessionRow): LucideIcon {
+  const device = parseUserAgent(s.user_agent)?.device;
+  return (device && SESSION_ICONS[device]) || Monitor;
 }
 
 /** 同一行里 IP 与相对时间之间的连接符：代码拼的，不是译文的一部分。 */
@@ -452,6 +468,7 @@ export default function Account() {
             action={
               <Button
                 size="sm"
+                className={isMobile ? "min-h-11" : undefined}
                 onClick={openAdd}
                 disabled={!supported || adding}
                 title={
@@ -523,6 +540,7 @@ export default function Account() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        className={isMobile ? "min-h-11 min-w-11" : undefined}
                         onClick={() => {
                           setDeleteError(null);
                           setDeleteTarget(k);
@@ -550,6 +568,7 @@ export default function Account() {
                 <Button
                   variant="outline"
                   size="sm"
+                  className={isMobile ? "min-h-11" : undefined}
                   onClick={() => {
                     setSignOutError(null);
                     setConfirmingSignOutOthers(true);
@@ -577,6 +596,7 @@ export default function Account() {
                 <ul className="flex flex-col gap-1">
                   {sessions.map((s, i) => {
                     const isExpanded = expandedIndex === i;
+                    const SessionIcon = sessionIcon(s);
                     return (
                       <li key={i}>
                         {/* 整行可点展开，展开态只属于这一行自己。
@@ -597,7 +617,8 @@ export default function Account() {
                             isExpanded ? "items-start" : "items-center",
                           )}
                         >
-                          <Monitor
+                          <SessionIcon
+                            aria-hidden="true"
                             className={cn(
                               "size-4 shrink-0 text-decorative-foreground",
                               isExpanded && "mt-0.5",
@@ -684,7 +705,7 @@ export default function Account() {
           {isMobile && (
             <Button
               variant="outline"
-              className="w-full text-destructive"
+              className="min-h-11 w-full text-destructive"
               onClick={() => setSignOutConfirmOpen(true)}
             >
               {t("account.signOut")}
