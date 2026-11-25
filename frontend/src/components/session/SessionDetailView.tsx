@@ -1695,6 +1695,7 @@ export default function SessionDetailView({
       }
       return shown;
     },
+    composerHandleRef,
   });
 
   /**

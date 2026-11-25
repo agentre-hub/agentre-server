@@ -8,7 +8,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { rpcMethods } from "@agentre-hub/agentre-wire";
+
 import { ApiError, ApiTimeoutError } from "@/lib/api";
+import { RelayClient, type UploadProgress } from "@/lib/relayClient";
+import { classifySendFailure } from "@/lib/sessionView";
 import {
   RelayConnection,
   isSignedOutError,
@@ -19,11 +23,15 @@ class FakeSocket {
   readyState = 0;
   binaryType = "blob";
   closed = false;
+  /** 交给 send() 而还没交给网络的字节（与浏览器同一语义：关闭后不清零）。 */
+  bufferedAmount = 0;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  send(): void {}
+  send(data: Uint8Array): void {
+    this.bufferedAmount += data.byteLength;
+  }
   open(): void {
     this.readyState = 1;
     this.onopen?.();
@@ -242,5 +250,127 @@ describe("下一次自动重拨的时刻", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(h.connection.nextRetryAt).toBeNull();
     expect(listener.onNextRetryAt).toHaveBeenLastCalledWith(null);
+  });
+});
+
+/*
+  大图上传（规格 2026-11-25 决策 C4）：进度来自 socket 的 bufferedAmount 排空；中途意外
+  断开、而这一帧还有字节没交给网络 = 对端不可能收到整帧，确定「还没发出去」。
+*/
+describe("socket 上还没发出去的字节", () => {
+  async function connected() {
+    const h = harness();
+    const ready = h.connection.connect();
+    h.sockets[0].open();
+    await ready;
+    return h;
+  }
+
+  it("bufferedAmount 读当前 socket 的；没有 socket 时为 0", async () => {
+    const h = harness();
+    expect(h.connection.bufferedAmount).toBe(0);
+    const ready = h.connection.connect();
+    h.sockets[0].open();
+    await ready;
+    h.sockets[0].bufferedAmount = 1234;
+    expect(h.connection.bufferedAmount).toBe(1234);
+  });
+
+  it("socket 自己断了：仍报那些永远发不出去的字节；换连接（主动顶替）时报 0", async () => {
+    const h = await connected();
+    h.sockets[0].bufferedAmount = 500;
+    h.sockets[0].fail();
+    expect(h.connection.bufferedAmount).toBe(500);
+
+    // 重拨出来的新 socket 接管之后读新的。
+    await vi.advanceTimersByTimeAsync(0);
+    h.sockets[1].open();
+    await flush();
+    expect(h.connection.bufferedAmount).toBe(0);
+
+    // 主动顶替：旧 socket 关闭时浏览器仍会先发完已排队的，说不出「没发出去」。
+    h.sockets[1].bufferedAmount = 700;
+    void h.connection.reconnect();
+    expect(h.connection.bufferedAmount).toBe(0);
+  });
+});
+
+describe("请求的上传进度（RelayClient over RelayConnection）", () => {
+  async function client() {
+    const h = harness();
+    const c = new RelayClient({
+      connection: h.connection,
+      target: "machine:fp",
+      credential: () => "tok",
+    });
+    void c.connect().catch(() => {});
+    h.sockets[0].open();
+    await flush();
+    // 握手那几帧不算这一条的：从干净的缓冲开始。
+    h.sockets[0].bufferedAmount = 0;
+    return { ...h, c, socket: h.sockets[0] };
+  }
+
+  function bigRun(c: RelayClient, onUpload: (p: UploadProgress) => void) {
+    return c.request(
+      rpcMethods.runtimeRun,
+      { conversationId: "c1", userText: "x".repeat(10_000) },
+      { onUpload },
+    );
+  }
+
+  it("进度随缓冲排空推进，排空即报满", async () => {
+    const { c, socket } = await client();
+    const seen: UploadProgress[] = [];
+    void bigRun(c, (p) => seen.push(p)).catch(() => {});
+    const total = socket.bufferedAmount;
+    expect(total).toBeGreaterThan(10_000);
+    expect(seen.at(-1)).toEqual({ sent: 0, total });
+
+    socket.bufferedAmount = total - 4000;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(seen.at(-1)).toEqual({ sent: 4000, total });
+
+    socket.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(seen.at(-1)).toEqual({ sent: total, total });
+  });
+
+  it("中途意外断开：这一帧没发完 → 确定没送到（notSent，重发是干净的）", async () => {
+    const { c, socket } = await client();
+    const result = bigRun(c, () => {}).catch((err: unknown) => err);
+    socket.bufferedAmount -= 100; // 还剩一截没交给网络
+    socket.fail();
+    const err = await result;
+    expect(classifySendFailure(err).kind).toBe("notSent");
+  });
+
+  it("整帧都交给网络之后才断：可能已送达（transport），不说没送到", async () => {
+    const { c, socket } = await client();
+    const result = bigRun(c, () => {}).catch((err: unknown) => err);
+    socket.bufferedAmount = 0;
+    socket.fail();
+    expect(classifySendFailure(await result).kind).toBe("transport");
+  });
+
+  it("这一帧之后又排进别的帧、断开时只剩后来那些：这一帧已经出门，不算没送到", async () => {
+    const { c, socket } = await client();
+    const result = bigRun(c, () => {}).catch((err: unknown) => err);
+    // 之后又有一条小请求排进来；断开时剩下的正好是它那几个字节。
+    const before = socket.bufferedAmount;
+    void c.request(rpcMethods.sessionList, {}).catch(() => {});
+    const laterBytes = socket.bufferedAmount - before;
+    expect(laterBytes).toBeGreaterThan(1);
+    socket.bufferedAmount = laterBytes - 1; // 只剩后来那条里的一部分
+    socket.fail();
+    expect(classifySendFailure(await result).kind).toBe("transport");
+  });
+
+  it("换连接（主动顶替）时这一帧还没发完：说不出没送到，归 transport", async () => {
+    const { c, socket, connection } = await client();
+    const result = bigRun(c, () => {}).catch((err: unknown) => err);
+    socket.bufferedAmount -= 100;
+    void connection.reconnect().catch(() => {});
+    expect(classifySendFailure(await result).kind).toBe("transport");
   });
 });

@@ -69,10 +69,16 @@ export default function SendFailureBubble({
   busy,
   onRetry,
   onDiscard,
+  align,
 }: {
   failure: FailedSend;
   machineName?: string;
   busy?: boolean;
+  /**
+   * 与发送中那一条同一个对齐（规格 2026-11-25 H8：手机 `end`）。发送失败时它就站在
+   * 发送中那一条原来的位置上，不该跳到另一侧。不传 = 起始侧。
+   */
+  align?: "start" | "end";
   onRetry: () => void;
   onDiscard: () => void;
 }) {
@@ -112,6 +118,7 @@ export default function SendFailureBubble({
   return (
     <ChatMessage
       variant="user"
+      align={align}
       // author / avatar 在 user 档上不被使用（包自己画中性的「我」），类型上必填。
       author=""
       avatar={null}

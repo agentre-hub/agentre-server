@@ -177,7 +177,24 @@ export interface RelayRequestOptions {
    * 放宽，免得一次正在进行的上传被判成超时。
    */
   timeoutMs?: number;
+  /**
+   * 这一帧往外传的进度（规格 2026-11-25 决策 C4）。写出那一刻报一次，此后随 socket
+   * 缓冲排空推进，`sent === total` 那一次是最后一次。连接报不出缓冲时写出即报满。
+   *
+   * 传了它，这条请求还多一层判据：帧还没发完时 socket 自己断了，对端不可能收到整帧，
+   * 落定成「还没发出去」（`notSent`），而不是「可能已送达」。
+   */
+  onUpload?: (progress: UploadProgress) => void;
 }
+
+/** 一帧已经交给网络的字节与它的总字节（含信封）。 */
+export interface UploadProgress {
+  sent: number;
+  total: number;
+}
+
+/** 上传进度多久看一次缓冲。 */
+const UploadPollMs = 100;
 
 /**
  * 服务端判死一条虚拟通道时给的码里，**下一秒就可能不成立**的那两个（
@@ -218,13 +235,20 @@ export type RelayConnectionLike = Pick<
   RelayConnection,
   "state" | "connect" | "openChannel"
 > &
-  Partial<Pick<RelayConnection, "nextRetryAt" | "noteRequestTimeout">>;
+  Partial<
+    Pick<
+      RelayConnection,
+      "nextRetryAt" | "noteRequestTimeout" | "bufferedAmount" | "bytesWritten"
+    >
+  >;
 
 interface PendingRequest {
   method: AnyRpcMethod;
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   cleanup?: () => void;
+  /** 这一帧还有多少字节没交给网络（只有带 onUpload 的请求有）。 */
+  unsent?: () => number;
 }
 
 /**
@@ -465,24 +489,80 @@ export class RelayClient {
         // 连着两次等不到应答，连接据此判这条 socket 已死、换一条（E3）。
         this.connection.noteRequestTimeout?.();
       }, options.timeoutMs ?? RequestTimeoutMs);
-      this.pending.set(String(id), {
+      let poll: ReturnType<typeof setInterval> | undefined;
+      const entry: PendingRequest = {
         method,
         resolve: resolve as (value: unknown) => void,
         reject,
         cleanup: () => {
           clearTimeout(expire);
+          clearInterval(poll);
           options.signal?.removeEventListener("abort", abort);
         },
-      });
+      };
+      this.pending.set(String(id), entry);
+      const startedAt = this.connection.bytesWritten ?? 0;
+      let frame: Uint8Array;
       try {
-        this.sendBytes(encodeRpcMethodRequest(id, method, params));
+        frame = encodeRpcMethodRequest(id, method, params);
+        this.sendBytes(frame);
       } catch (err) {
         this.pending.delete(String(id));
         clearTimeout(expire);
         options.signal?.removeEventListener("abort", abort);
         reject(err);
+        return;
+      }
+      if (options.onUpload) {
+        poll = this.trackUpload(
+          entry,
+          startedAt,
+          frame.byteLength,
+          options.onUpload,
+        );
       }
     });
+  }
+
+  /**
+   * 跟着 socket 缓冲看这一帧出门了多少。缓冲先进先出：这一帧之后写进去的字节排在它
+   * 后面，所以「它还剩多少」= 缓冲里扣掉后来那些，再夹在 [0, 总数] 之间。
+   *
+   * 返回轮询的句柄（报满或请求落定时停）。
+   */
+  private trackUpload(
+    entry: PendingRequest,
+    startedAt: number,
+    frameBytes: number,
+    onUpload: (progress: UploadProgress) => void,
+  ): ReturnType<typeof setInterval> | undefined {
+    const conn = this.connection;
+    const endedAt = conn.bytesWritten;
+    if (endedAt === undefined || conn.bufferedAmount === undefined) {
+      // 报不出缓冲：写出即报满，也就说不出「没发完」。
+      onUpload({ sent: frameBytes, total: frameBytes });
+      return undefined;
+    }
+    const total = endedAt - startedAt;
+    const unsent = () => {
+      const after = (conn.bytesWritten ?? endedAt) - endedAt;
+      return Math.min(total, Math.max(0, (conn.bufferedAmount ?? 0) - after));
+    };
+    entry.unsent = unsent;
+    let last = -1;
+    const report = (): boolean => {
+      const sent = total - unsent();
+      if (sent !== last) {
+        last = sent;
+        onUpload({ sent, total });
+      }
+      return sent >= total;
+    };
+    if (report()) return undefined;
+    const poll = setInterval(() => {
+      if (report()) clearInterval(poll);
+    }, UploadPollMs);
+    return poll;
   }
 
   /**
@@ -811,7 +891,7 @@ export class RelayClient {
       st.attached = null;
       st.attaching = null;
     }
-    this.failPending(new RelayError(-1, "relay: 连接已断开", null));
+    this.failPending(new RelayError(-1, "relay: 连接已断开", null), true);
     this.setState(state);
   }
 
@@ -1007,10 +1087,16 @@ export class RelayClient {
     if (frame) this.dispatchNotification(frame, st, n.createtime ?? 0, true);
   }
 
-  private failPending(err: RelayError): void {
+  /**
+   * 让所有在飞的请求落定。`socketLost` = 连接断了：那时还有字节没交给网络的那一帧，
+   * 对端不可能收到整帧，确定「还没发出去」（规格 2026-11-25 决策 C4）。
+   */
+  private failPending(err: RelayError, socketLost = false): void {
     for (const [, entry] of this.pending) {
+      // 先判再收尾：收尾会停掉那只轮询，判据本身不受影响，但顺序与语义一致。
+      const neverLeft = socketLost && (entry.unsent?.() ?? 0) > 0;
       entry.cleanup?.();
-      entry.reject(err);
+      entry.reject(neverLeft ? notSentError(err) : err);
     }
     this.pending.clear();
   }

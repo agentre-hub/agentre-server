@@ -45,6 +45,7 @@ import {
 } from "@/components/session/SessionIndex";
 import { toAgentStatus } from "@/lib/attentionAdapter";
 import { conversationDraftKey, useDraftMap } from "@/lib/drafts";
+import { useOutboxMap } from "@/lib/outbox";
 import type { ProjectNode } from "@/lib/projects";
 import { formatRelativeTime } from "@/lib/sessionView";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
@@ -257,6 +258,7 @@ export function PhoneChatIndex({
   const { t, i18n } = useTranslation();
   const { t: uiT } = useUiTranslation();
   const drafts = useDraftMap();
+  const outbox = useOutboxMap();
   // 搜索词还在（从对话返回）时，回来仍是搜索那一屏。
   const [searchOpen, setSearchOpen] = useState(() => searchQuery !== "");
   const listRef = useRef<HTMLDivElement>(null);
@@ -367,6 +369,7 @@ export function PhoneChatIndex({
     const subline = rowSubline(row, {
       content,
       draft: drafts.get(conversationDraftKey(row.conversationId)),
+      pending: outbox.get(row.conversationId),
     });
     const secondary =
       subline.kind === "content" ? (

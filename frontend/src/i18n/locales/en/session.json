@@ -79,7 +79,9 @@
   "sendPending": {
     "title": "Will send once connected",
     "sending": "Sending…",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "uploaded": "{{sent}} of {{total}} sent",
+    "uploadProgress": "Upload progress"
   },
   "compose": {
     "readonly": "Read-only",

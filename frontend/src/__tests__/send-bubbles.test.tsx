@@ -243,3 +243,59 @@ describe("发送中那一条：与真用户消息同列，虚线边 + 小字", (
     ).toBeNull();
   });
 });
+
+/*
+  规格 2026-11-25 H8：失败的那一条与发送中的那一条同侧——手机上发送中排在尾侧，失败
+  之后不该跳回起始侧。C4：大图发送中那一条显示「已传 / 共」进度环，不给「取消」
+  （浏览器撤不回已经交给 WebSocket 的帧）。
+*/
+describe("失败那一条的对齐与大图进度", () => {
+  it("Given 手机那一档对齐, When 渲染失败那条, Then 与发送中同在尾侧", () => {
+    render(
+      <SendFailureBubble
+        align="end"
+        failure={{ id: "f1", text: "x", kind: "notSent" }}
+        onRetry={() => {}}
+        onDiscard={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("send-failure").getAttribute("data-align")).toBe(
+      "end",
+    );
+  });
+
+  it("Given 不给对齐（桌面）, When 渲染失败那条, Then 照旧在起始侧", () => {
+    render(
+      <SendFailureBubble
+        failure={{ id: "f1", text: "x", kind: "notSent" }}
+        onRetry={() => {}}
+        onDiscard={() => {}}
+      />,
+    );
+    expect(
+      screen.getByTestId("send-failure").getAttribute("data-align"),
+    ).not.toBe("end");
+  });
+
+  it("Given 发送中带上传进度, When 渲染, Then 进度环报百分比并写出已传 / 共，没有任何按钮", () => {
+    render(
+      <PendingSendBubble
+        state="sending"
+        text="大图"
+        progress={{ sent: 1_500_000, total: 6_000_000 }}
+      />,
+    );
+    const bubble = screen.getByTestId("send-sending");
+    const ring = within(bubble).getByTestId("send-upload-progress");
+    expect(ring.getAttribute("role")).toBe("progressbar");
+    expect(ring.getAttribute("aria-valuenow")).toBe("25");
+    expect(ring.textContent).toContain("1.5");
+    expect(ring.textContent).toContain("6");
+    expect(within(bubble).queryByRole("button")).toBeNull();
+  });
+
+  it("Given 发送中不带进度, When 渲染, Then 没有进度环", () => {
+    render(<PendingSendBubble state="sending" text="一句话" />);
+    expect(screen.queryByTestId("send-upload-progress")).toBeNull();
+  });
+});

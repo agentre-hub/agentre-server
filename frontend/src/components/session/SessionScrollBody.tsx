@@ -369,6 +369,7 @@ export default function SessionScrollBody({
                           align={isMobile ? "end" : undefined}
                           text={send.sendingMessage.text}
                           images={send.sendingMessage.images}
+                          progress={send.sendingMessage.upload}
                         />
                       ),
                     }
@@ -400,6 +401,8 @@ export default function SessionScrollBody({
           <SendFailureBubble
             key={failure.id}
             failure={failure}
+            // 与发送中那一条同侧（H8）：手机排在尾侧，桌面不传。
+            align={isMobile ? "end" : undefined}
             machineName={machineName}
             busy={send.sending}
             onRetry={() => void send.retryFailedSend(failure)}

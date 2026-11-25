@@ -79,7 +79,9 @@
   "sendPending": {
     "title": "连上后自动发出",
     "sending": "发送中…",
-    "cancel": "撤销"
+    "cancel": "撤销",
+    "uploaded": "已传 {{sent}} / 共 {{total}}",
+    "uploadProgress": "上传进度"
   },
   "compose": {
     "readonly": "只读",

@@ -11,16 +11,28 @@ import {
 } from "react";
 
 import { isNativeCompactBackend, SLASH_COMPACT } from "@agentre-hub/agentre-ui";
-import type { ChatComposerSubmit } from "@agentre-hub/agentre-ui";
+import type {
+  ChatComposerHandle,
+  ChatComposerSubmit,
+} from "@agentre-hub/agentre-ui";
 import type { ModelTarget } from "@agentre-hub/agentre-ui";
 
 import type { FailedSend } from "@/components/session/SendFailureBubble";
 import type { SteerQueue } from "@/components/session/useSteerQueue";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useTargetGuard } from "@/hooks/use-target-guard";
+import { draftStore, isEmptyDraft, useDraftKey } from "@/lib/drafts";
 import { forgetLiveTurn, noteLiveTurn, seedLiveTurn } from "@/lib/liveSessions";
+import {
+  outboxStore,
+  payloadBytes,
+  requestTimeoutFor,
+  subscribeOutbox,
+  type OutboxMessage,
+} from "@/lib/outbox";
 import { randomId } from "@/lib/randomId";
 import { encodeUserBlocks } from "@/lib/userBlocks";
-import type { RelayClient } from "@/lib/relayClient";
+import type { RelayClient, UploadProgress } from "@/lib/relayClient";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 
 import { classifySendFailure, type SessionViewStatus } from "@/lib/sessionView";
@@ -225,7 +237,17 @@ export interface SessionSendParams {
    * 刻读。缺省 0。
    */
   transcriptSeq?: () => number;
+  /**
+   * 输入框的句柄。排着的那条被「撤销」时，整条消息（字与图，原样）从这里放回输入框
+   * （规格 2026-11-25 C 节）。不给 = 撤销只撤不放回。
+   */
+  composerHandleRef?: RefObject<ChatComposerHandle | null>;
 }
+
+/**
+ * 这么大的消息才显示上传进度：小消息一眨眼就出门，进度环只会闪一下。
+ */
+const UploadProgressMinBytes = 64 * 1024;
 
 /**
  * 自己刚发出去、回声还没到的那一条（弱网规格 2026-11-20 决策 12）。
@@ -238,6 +260,11 @@ export interface SendingMessage extends ChatComposerSubmit {
   afterSeq: number;
   /** runtime.run 已经应答：这一轮被对端接下了。在此之前没有一轮可停。 */
   acknowledged: boolean;
+  /**
+   * 这一帧还在往外传（大图，规格 2026-11-25 C4）：已传 / 共。传完即撤；没有「取消」
+   * ——已经交给 WebSocket 的帧浏览器撤不回。
+   */
+  upload?: UploadProgress;
 }
 
 /** 详情视图从这一族拿到的东西。 */
@@ -253,7 +280,7 @@ export interface SessionSend {
    * 据此先不给：此刻没有一轮可停。
    */
   awaitingRun: boolean;
-  /** 用户自己撤掉排着的那一条。 */
+  /** 用户自己撤掉排着的那一条：整条放回输入框。 */
   cancelPendingSend: () => void;
   /** 没发出去的那些消息（决策 7）。 */
   failedSends: FailedSend[];
@@ -307,6 +334,7 @@ export function useSessionSend({
   steerQueue,
   onOwnTurnStarted,
   transcriptSeq = () => 0,
+  composerHandleRef,
 }: SessionSendParams): SessionSend {
   const {
     turnActiveRef,
@@ -329,9 +357,7 @@ export function useSessionSend({
    * 只排文本的话连上之后发出去的是一条纯文本 —— 图在排队那一瞬间就没了,而屏幕上
    * 那条排队气泡看着一切正常。
    */
-  const [pendingSend, setPendingSend] = useState<ChatComposerSubmit | null>(
-    null,
-  );
+  const [pendingSend, setPendingSend] = useState<OutboxMessage | null>(null);
   /**
    * 发出即见的那一条（弱网决策 12）。只在开新一轮的那条路上挂：插话那条由
    * steerQueue 的 chip 当场承载，再挂一份就是同一句话出两遍。
@@ -342,6 +368,10 @@ export function useSessionSend({
   const [sendingMessage, setSendingMessage] = useState<SendingMessage | null>(
     null,
   );
+
+  const draftKey = useDraftKey();
+  /** 用户在这一屏丢弃过的失败（发件箱的通知晚到时不把它们加回来）。 */
+  const dismissedRef = useRef(new Set<string>());
 
   const targetChanged = useTargetChanged(did, sid, originProp);
   if (targetChanged) {
@@ -365,16 +395,45 @@ export function useSessionSend({
    */
   const guardTarget = useTargetGuard(`${did}|${sid}|${originProp ?? ""}`);
 
+  /*
+    打开（或换到）一条对话：从本机发件箱恢复它排着的那条与失败的那些（C2）。发送方已经
+    不在了的「已交出」由发件箱落成「可能已送达」（C3）。之后本页别处（离开前那一屏还在
+    飞的发送）写进来的失败随通知并进来。
+  */
+  useAliveEffect(
+    (alive) => {
+      const merge = (stored: FailedSend[]) =>
+        setFailedSends((prev) => {
+          const fresh = stored.filter(
+            (f) =>
+              !dismissedRef.current.has(f.id) &&
+              !prev.some((p) => p.id === f.id),
+          );
+          return fresh.length ? [...prev, ...fresh] : prev;
+        });
+      void outboxStore.restore(sid).then(({ queued, failed }) => {
+        if (!alive()) return;
+        if (queued) setPendingSend((prev) => prev ?? queued);
+        merge(failed);
+      });
+      return subscribeOutbox(sid, (entry) => {
+        if (alive()) merge(entry.failed);
+      });
+    },
+    [sid],
+  );
+
   /** 开新一轮（R9）。这一轮要落在**发起端**那条会话上，才续得上它的上下文、也才
    *  扇出给同一条会话的其余订阅者（R6 / R18）。 */
   function startTurn(
     c: import("@/lib/relayClient").RelayClient,
     message: ChatComposerSubmit,
+    onUpload: (progress: UploadProgress) => void,
   ): Promise<unknown> {
     const userBlocks = encodeUserBlocks(message.images);
     const { providerKey: llmProviderKey, modelKey: llmModelKey } =
       effectiveTarget;
-    return c.request(rpcMethods.runtimeRun, {
+    const params = {
       conversationId: sid,
       ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       cwd: summary?.cwd,
@@ -391,6 +450,15 @@ export function useSessionSend({
       sourceDevice: relayTicket?.peerFingerprint,
       sourceDeviceName: browserDisplayName(),
       backend: { type: summary?.backendType },
+    };
+    // 大消息（C4）：等应答的上限按体积放宽，并报上传进度。小消息照旧，请求形状不变。
+    const bytes = payloadBytes(message);
+    if (bytes < UploadProgressMinBytes) {
+      return c.request(rpcMethods.runtimeRun, params);
+    }
+    return c.request(rpcMethods.runtimeRun, params, {
+      timeoutMs: requestTimeoutFor(bytes),
+      onUpload,
     });
   }
 
@@ -498,8 +566,14 @@ export function useSessionSend({
       markOwnTurnStarted();
       setPendingAssistant(true);
     }
+    // 上传进度只挂在「发送中」那一条上；传完即撤。
+    const onUpload = (progress: UploadProgress) => {
+      if (!stillHere()) return;
+      const upload = progress.sent < progress.total ? progress : undefined;
+      setSendingMessage((prev) => prev && { ...prev, upload });
+    };
     try {
-      await (running ? steerTurn(c, body) : startTurn(c, message));
+      await (running ? steerTurn(c, body) : startTurn(c, message, onUpload));
       noteStarted(!running);
       if (!running && stillHere())
         setSendingMessage((prev) => prev && { ...prev, acknowledged: true });
@@ -519,7 +593,7 @@ export function useSessionSend({
       // 图悄悄摘掉再发一次,并把结果报成成功。
       if (hasImages) throw err;
       try {
-        await (running ? startTurn(c, message) : steerTurn(c, body));
+        await (running ? startTurn(c, message, onUpload) : steerTurn(c, body));
         noteStarted(running);
         return;
       } catch {
@@ -554,15 +628,22 @@ export function useSessionSend({
 
   // R9：给会话发新消息（不需要发起端在线；上下文由 agentred 侧的
   // providerSessionID 续上，决策 8）。
+  //
+  // `fromQueue` = 这一条就是排着的那条（下面那只 effect 连上时交进来）：交出时要从
+  // 发件箱里**认领**它，别的实例（标签页）先认领走了就不发（C3，不发两次）。
   async function sendMessage(
     submitted: ChatComposerSubmit | string,
     replacing?: string,
+    fromQueue?: OutboxMessage,
   ) {
     const c = clientRef.current;
-    const message =
+    // 只取消息本身（字与图）：从发件箱交进来的那条还带着它的身份，那一格不是消息。
+    const message: ChatComposerSubmit =
       typeof submitted === "string"
         ? { text: submitted.trim() }
-        : { ...submitted, text: submitted.text.trim() };
+        : submitted.images
+          ? { text: submitted.text.trim(), images: submitted.images }
+          : { text: submitted.text.trim() };
     const body = message.text;
     if (!body && !message.images?.length) return;
     /*
@@ -575,6 +656,8 @@ export function useSessionSend({
       握手完成而清单还在路上（弱网决策 11）走同一条路：输入框此刻已经可用，清单
       到了这一条自动发出；清单失败或里面没有这一条时，下面那只 effect 把它交给
       失败气泡。
+
+      排着的这条同时存进本机发件箱（C2）：离开对话、重载、杀 App 之后回来仍在。
     */
     if (
       status === "reconnecting" ||
@@ -583,10 +666,16 @@ export function useSessionSend({
       // 从一条失败气泡上重发的:它现在排着队了,原来那条气泡就该撤掉。同一条消息
       // 同时以两个身份摆在屏幕上（一个说排着队、一个说没发出去）比哪一个都糟。
       if (replacing) dropFailedSend(replacing);
+      const queued: OutboxMessage = {
+        id: fromQueue?.id ?? randomId(),
+        ...message,
+      };
       setPendingSend((prev) => {
-        if (prev) queueFailedSend(prev, "notSent");
-        return message;
+        if (prev && prev.id !== queued.id)
+          queueFailedSend(prev, "notSent", undefined, prev.id);
+        return queued;
       });
+      void outboxStore.queue(sid, queued, replacing);
       return;
     }
     if (!c || !summary || !relayTicket) {
@@ -603,56 +692,95 @@ export function useSessionSend({
         同一条消息在流里挂两条气泡 —— 与下面那句「重发失败时原地更新那一条」同一
         条规矩，只是这一档此前漏了。
       */
-      queueFailedSend(message, "notSent", undefined, replacing);
+      const failure = queueFailedSend(message, "notSent", undefined, replacing);
+      void outboxStore.putFailure(sid, failure);
       return;
     }
     /*
       从这里往下都要 await。请求发出去那一刻捕获目标，解析时先比对再写状态：
       右栏是同实例换 props，A 的这一次发送很可能是在 B 打开着的时候才回来的。
+      发件箱那几笔写的是**发起它的那条**会话（`conversationId`），与此刻屏幕上是哪条
+      无关：离开了对话，结果照样落进它自己的发件箱。
     */
     const stillHere = guardTarget();
-    setSending(true);
-    try {
-      /*
-        `/compact` 分两路，与桌面端 slash-commands/registry.ts 的注释逐条对上：
-        claudecode 的 CLI 自己认这个前缀，原样当正文送过去就行；codex / piagent 的
-        CLI **不认**，桌面端是在 chat-panel 的 onSubmit 里拦下这段文本转成压缩 RPC。
-        不拦的话，菜单在这两个后端上摆的是一条按下去只会当普通消息发出去、什么也不
-        做的命令。
+    const conversationId = sid;
+    /*
+      `/compact` 分两路，与桌面端 slash-commands/registry.ts 的注释逐条对上：
+      claudecode 的 CLI 自己认这个前缀，原样当正文送过去就行；codex / piagent 的
+      CLI **不认**，桌面端是在 chat-panel 的 onSubmit 里拦下这段文本转成压缩 RPC。
+      不拦的话，菜单在这两个后端上摆的是一条按下去只会当普通消息发出去、什么也不
+      做的命令。
 
-        只拦**正好**是这条命令的那一行：「/compact 之前先把结论记下来」是一句给模型
-        的话，不是一条命令。
-      */
-      if (
-        body === `/${SLASH_COMPACT}` &&
-        !isNativeCompactBackend(summary.backendType)
-      ) {
+      只拦**正好**是这条命令的那一行：「/compact 之前先把结论记下来」是一句给模型
+      的话，不是一条命令。
+    */
+    const compact =
+      body === `/${SLASH_COMPACT}` &&
+      !isNativeCompactBackend(summary.backendType);
+    /*
+      交出（C3）：把这一条记成「已交出」（同时拿住它的发送锁）。App 在拿到结果之前被
+      杀，下次打开时它落「可能已送达」，永不自动再发。
+
+      排着的那条与从失败气泡重发的那条，库里还摆着它的另一个身份（排队 / 失败）：
+      **等这一笔落库之后**才写出请求，否则在两者之间被杀，恢复出来的是一条会被自动再发
+      （排队）或标着「重发是干净的」（失败）的消息。排着的那条还在这里被认领：别的实例
+      先认领走了就不发。一条刚敲出来的新消息库里没有别的身份，不等这一笔——选路要的是
+      此刻的轮次状态，晚几毫秒就可能把插话判成新的一轮。
+    */
+    const outboxId = replacing ?? fromQueue?.id ?? randomId();
+    const handed = outboxStore.handOff(
+      conversationId,
+      { id: outboxId, ...message },
+      { claimQueued: fromQueue?.id, replacing },
+    );
+    if ((fromQueue || replacing) && !(await handed)) return;
+    const settleOutbox = (failure?: FailedSend) =>
+      outboxStore.settle(conversationId, outboxId, failure);
+    if (stillHere()) setSending(true);
+    try {
+      if (compact) {
         await compactTurn(c);
+        await settleOutbox();
         if (!stillHere()) return;
         markTurnActive(true);
         setPinnedAgentredUnavailable(false);
         return;
       }
       await sendRouted(c, message, stillHere);
+      await settleOutbox();
       if (!stillHere()) return;
       setPinnedAgentredUnavailable(false);
       // 重发成功：那条失败气泡的使命完成了，撤掉。
       if (replacing) dropFailedSend(replacing);
     } catch (err) {
-      // 这条消息属于**发起它的那条会话**。目标已经换了就一个字都不写：那条红气泡
-      // 挂到新会话下面，它的「重发」会拿着新的 sid 把 A 的话真的发进 B。
-      if (!stillHere()) return;
       /*
         这一轮还在跑,而这条带着图（见 `ImagesCannotSteer`）:一帧都没发出去,所以
         重发是干净的,但要说清等的是这一轮跑完。判据由 `sendRouted` 在**选路那一处**
         给出 —— 那里读到的 `turnActiveRef` 才是决定走 run 还是 steer 的那一份。
       */
-      if (err instanceof ImagesCannotSteer) {
-        queueFailedSend(message, "imageWhileRunning", undefined, replacing);
-        return;
-      }
-      const failure = classifySendFailure(err);
-      if (failure.kind === "executionUnavailable") {
+      const failure: {
+        kind: FailedSend["kind"] | "executionUnavailable";
+        detail?: string;
+      } =
+        err instanceof ImagesCannotSteer
+          ? { kind: "imageWhileRunning" }
+          : classifySendFailure(err);
+      const failed: FailedSend | undefined =
+        failure.kind === "executionUnavailable"
+          ? undefined
+          : {
+              id: outboxId,
+              text: message.text,
+              images: message.images,
+              kind: failure.kind,
+              detail: failure.detail,
+            };
+      await settleOutbox(failed);
+      // 这条消息属于**发起它的那条会话**。目标已经换了就一个字都不写：那条红气泡
+      // 挂到新会话下面，它的「重发」会拿着新的 sid 把 A 的话真的发进 B。（它已经落进
+      // A 的发件箱，回到 A 时就在。）
+      if (!stillHere()) return;
+      if (!failed) {
         // 对端明说了「执行目标不可用」：历史继续可读，但停用新写入并给专门说明。
         // 只有这个专属码算数——把任何失败都归到这里，会把「会话正忙」报成守护进程
         // 掉线，用户看到的是一个假的故障。
@@ -665,9 +793,11 @@ export function useSessionSend({
         //
         // 重发失败时**原地更新**那一条，不再挂一条新的：同一段字在流里出现两次
         // 只会让人以为自己发了两遍。分类可能变（断线重发被拒），所以整条替换。
-        queueFailedSend(message, failure.kind, failure.detail, replacing);
+        queueFailedSend(message, failed.kind, failed.detail, outboxId);
       }
     } finally {
+      // 结果落库之后才放锁：别的实例看到锁空着，才会把还记着的「已交出」当成被杀。
+      (await handed)?.();
       // 目标换了的话这一格已经由那次重置放下了；这里再写就成了「用 A 的结果去关
       // B 的发送中」——B 自己那次发送正转着的话会被当场关掉。
       if (stillHere()) setSending(false);
@@ -701,12 +831,13 @@ export function useSessionSend({
     void (async () => {
       setPendingSend(null);
       if (ready) {
-        await sendMessage(queued);
+        await sendMessage(queued, undefined, queued);
         return;
       }
       // 剩下的档（lost / 机器不在 / 设备撤销）：这条永远发不出去了，与其一直排着，
       // 不如摆到用户眼前让他决定。它从来没走到对端，所以重发是干净的。
-      queueFailedSend(queued, "notSent");
+      const failure = queueFailedSend(queued, "notSent", undefined, queued.id);
+      void outboxStore.failQueued(sid, failure);
     })();
     // 只跟这几样的变化走。sendMessage / queueFailedSend 每次渲染都是新函数，
     // 列进依赖会让这个 effect 每渲染跑一遍，同一条消息发好几次。
@@ -714,7 +845,9 @@ export function useSessionSend({
   }, [status, pendingSend, summary, summaryPending, relayTicket]);
 
   /**
-   * 往流里挂一条失败气泡。重发失败时原地替换 `replacing` 那一条。
+   * 往流里挂一条失败气泡。重发失败时原地替换 `replacing` 那一条；`replacing` 不在流里
+   * 时以它为身份新挂一条（发件箱里同一条消息始终是同一个身份）。只动这一屏的气泡，
+   * 发件箱由调用方写。
    *
    * 收的是**整条消息**:图与字一起进气泡,那颗「重发」才发得出和用户写的同一条。
    */
@@ -723,7 +856,7 @@ export function useSessionSend({
     kind: FailedSend["kind"],
     detail?: string,
     replacing?: string,
-  ) {
+  ): FailedSend {
     const next: FailedSend = {
       id: replacing ?? randomId(),
       text: message.text,
@@ -736,10 +869,13 @@ export function useSessionSend({
         ? prev.map((f) => (f.id === replacing ? next : f))
         : [...prev, next],
     );
+    return next;
   }
 
   function dropFailedSend(id: string) {
+    dismissedRef.current.add(id);
     setFailedSends((prev) => prev.filter((f) => f.id !== id));
+    void outboxStore.dropFailure(sid, id);
   }
 
   /**
@@ -765,7 +901,41 @@ export function useSessionSend({
     );
   }
 
-  const cancelPendingSend = useCallback(() => setPendingSend(null), []);
+  /*
+    撤销排着的那一条：整条消息（字与图，原样）放回输入框（规格 2026-11-25 C 节）。
+
+    输入框里此刻若已经有别的字（排队之后又写了一段），不盖掉它：纯文字接在后面
+    （appendDraft：空行分隔），带图的把两份并成一份放回——草稿库里就是输入框此刻的
+    那一份。够不着输入框时这一条留着不撤：撤了就没有地方能找回它。
+  */
+  async function putBackIntoComposer(message: ChatComposerSubmit) {
+    const handle = composerHandleRef?.current;
+    if (!handle) return;
+    if (!message.images?.length) {
+      handle.appendDraft(message.text);
+      return;
+    }
+    const current = draftKey ? await draftStore.get(draftKey) : undefined;
+    if (current && !isEmptyDraft(current)) {
+      handle.restoreDraft(
+        current.text.trim()
+          ? `${current.text}\n\n${message.text}`
+          : message.text,
+        [...current.images, ...message.images],
+      );
+      return;
+    }
+    handle.restoreDraft(message.text, message.images);
+  }
+
+  function cancelPendingSend() {
+    const queued = pendingSend;
+    if (!queued) return;
+    if (composerHandleRef && !composerHandleRef.current) return;
+    setPendingSend(null);
+    void outboxStore.unqueue(sid, queued.id);
+    void putBackIntoComposer(queued);
+  }
 
   return {
     sending,

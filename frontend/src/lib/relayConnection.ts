@@ -185,6 +185,15 @@ export class RelayConnection {
   private retryAt: number | null = null;
   /** 页面可见时连着超时了几次，见 noteRequestTimeout。 */
   private timeouts = 0;
+  /**
+   * 自己断掉的上一条 socket（不是被主动顶替的那种）。它的 bufferedAmount 是那些
+   * **永远不会再发出去**的字节，见 bufferedAmount。新 socket 建起来时放下。
+   */
+  private deadSocket: WebSocket | null = null;
+  /** 当前这条 socket 已被判不可信、正在换（reconnect 取票期间），见 bufferedAmount。 */
+  private replacing = false;
+  /** 交给过 socket 的字节累计（含信封），见 bytesWritten。 */
+  private written = 0;
 
   constructor(opts: RelayConnectionOptions) {
     this.opts = { reconnect: true, reconnectDelayMs: 1000, ...opts };
@@ -197,6 +206,27 @@ export class RelayConnection {
   /** 下一次自动重拨排在哪个时刻（Unix 毫秒）；没排着时是 null。 */
   get nextRetryAt(): number | null {
     return this.retryAt;
+  }
+
+  /**
+   * 已经交给 socket、还没交给网络的字节数（规格 2026-11-25 决策 C4：大图上传的进度
+   * 由它排空推出）。
+   *
+   * 当前 socket **自己断了**之后，报的是它断时还剩的那些：浏览器不会再发它们，对端
+   * 因此不可能收到含有这些字节的整帧。被主动顶替（reconnect）的那条不算——关闭时
+   * 浏览器仍会先发完已排队的数据，说不出「没发出去」，所以这时报 0。没有 socket 时 0。
+   */
+  get bufferedAmount(): number {
+    if (this.replacing) return 0;
+    return (this.ws ?? this.deadSocket)?.bufferedAmount ?? 0;
+  }
+
+  /**
+   * 这条连接累计交给 socket 的字节数（含信封）。与 bufferedAmount 合起来认得出「某一帧
+   * 还剩多少没出门」：缓冲按先进先出排空，一帧之后又写进去的字节排在它后面。
+   */
+  get bytesWritten(): number {
+    return this.written;
   }
 
   /**
@@ -238,6 +268,8 @@ export class RelayConnection {
       ]);
       ws.binaryType = "arraybuffer";
       this.ws = ws;
+      this.deadSocket = null;
+      this.replacing = false;
       ws.onopen = () => {
         this.connectedAt = Date.now();
         this.timeouts = 0;
@@ -264,6 +296,8 @@ export class RelayConnection {
         // 新连接建立之后才到，照单全收会把一条刚连上的连接判成断线。
         if (this.ws !== ws) return;
         this.ws = null;
+        // 先记下再收尾：收尾会通知各条通道，它们据此判在飞的那一帧发没发完。
+        this.deadSocket = ws;
         this.connectPromise = null;
         this.handleClose();
       };
@@ -288,6 +322,9 @@ export class RelayConnection {
     const generation = this.closeGeneration;
     // 换连接从这一刻起就是「连接中」（E3）：取票期间旧 socket 还挂着，但它已被判
     // 不可信，发送据此走排队，而不是写进一条可能早已死掉的线。
+    // 它缓冲里那些字节关闭时仍可能发出去：从此刻起报不出「没发出去」。
+    this.replacing = true;
+    this.deadSocket = null;
     this.setState("connecting");
     if (this.opts.refreshCredentials) {
       let credentials: { url: string; jwt: string };
@@ -315,6 +352,7 @@ export class RelayConnection {
     this.cancelRedial();
     this.ws?.close();
     this.ws = null;
+    this.deadSocket = null;
     this.connectPromise = null;
     this.setState("disconnected");
   }
@@ -376,7 +414,9 @@ export class RelayConnection {
     if (!this.ws || this.ws.readyState !== OPEN) {
       throw new Error("relay: 连接未就绪");
     }
-    this.ws.send(wrapEnvelope(channelId, frame));
+    const envelope = wrapEnvelope(channelId, frame);
+    this.ws.send(envelope);
+    this.written += envelope.byteLength;
   }
 
   private handleMessage(data: unknown): void {
@@ -483,6 +523,8 @@ export class RelayConnection {
   private supersede(): void {
     const superseded = this.ws;
     this.ws = null;
+    // 被顶替的那条关闭时仍会先发完已排队的：它剩下的不是「永远发不出去」。
+    this.deadSocket = null;
     this.connectPromise = null;
     // 「连上过」说的是被顶替的那条：新这条拨不通时不能被当成「连上后意外断开」。
     this.connectedAt = null;
