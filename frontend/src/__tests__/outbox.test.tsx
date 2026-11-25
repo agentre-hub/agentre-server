@@ -396,14 +396,31 @@ describe("已交出（C3）：不发两次", () => {
     const first = mount();
     await send("这条可能已经到了");
     await waitFor(() => expect(runCalls()).toHaveLength(1));
-    await settle();
+    // 等「已交出」真的落库再杀。新消息的交出不等它落库就写出请求，而发送锁是在同一笔
+    // 读-改-写里拿的：在它落库之前杀，测试里那段 JS 并没有真的停下，会在 crash() 之后
+    // 才拿锁、才写库，新实例于是看到一把「还活着」的锁。真被杀时那段 JS 不会再跑。
+    await waitFor(
+      async () =>
+        expect((await outboxStore.get(CID))?.handedOff).toHaveLength(1),
+      { timeout: 5000 },
+    );
 
     // 被杀：页面没了，在飞的请求永远不回来，它持有的锁被浏览器放掉。
     first.unmount();
     locks.crash();
 
     mount();
-    const bubble = await screen.findByTestId("send-failure");
+    // 新实例打开时的恢复把它落成「可能已送达」；落库之后气泡必定紧跟着画出来。
+    await waitFor(
+      async () =>
+        expect((await outboxStore.get(CID))?.failed.map((f) => f.kind)).toEqual(
+          ["transport"],
+        ),
+      { timeout: 5000 },
+    );
+    const bubble = await screen.findByTestId("send-failure", undefined, {
+      timeout: 5000,
+    });
     expect(bubble.getAttribute("data-failure-kind")).toBe("transport");
     expect(bubble.textContent).toContain("这条可能已经到了");
     await settle();
