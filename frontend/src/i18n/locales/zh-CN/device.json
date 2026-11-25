@@ -31,7 +31,8 @@
   "kind": {
     "desktop": "桌面端",
     "agentred": "计算节点",
-    "mobile": "移动端"
+    "mobile": "移动端",
+    "cli": "agrctl"
   },
   "success": {
     "title": "设备已授权",
@@ -102,6 +103,7 @@
     "loadError": "无法加载你的设备列表，请重试",
     "loadFailedWhat": "无法加载你的设备列表",
     "statusOnline": "在线",
+    "statusLastUsed": "最近使用 {{time}}",
     "statusOffline": "离线",
     "statusRevoked": "已撤销",
     "revokeConfirmBody": "确认后该设备将无法再刷新凭据。若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受——撤销并非即时生效。",

@@ -1611,3 +1611,36 @@ func TestListUserDevices_CarriesTheAccountLevelDisplayName(t *testing.T) {
 	assert.Equal(t, "wangyizhideMacBook-Pro.local", items[0].Name, "自报名不被备注名顶掉")
 	assert.Equal(t, "", items[1].DisplayName, "没设过备注名就是空串，消费端据此回落到 name")
 }
+
+// cli 设备（agrctl）不连中继，列表不给它在线态——即便 Redis 里恰有同指纹的登记也一样
+// （在线是 daemon 的概念；cli 的活动信号是 last_seen_at，即最近一次令牌签发/刷新）。
+func TestListUserDevices_CLIDeviceIsNeverOnlineAndKeepsLastUsed(t *testing.T) {
+	convey.Convey("cli 设备 Online 恒为 false，LastSeenAt 原样给出", t, func() {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+
+		mini := miniredis.RunT(t)
+		redisClient := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+		t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+		relay := relay_svc.New(
+			relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second},
+			nil, nil, redisClient, stubForwarder{},
+		)
+		relay_svc.SetDefault(relay)
+		t.Cleanup(func() { relay_svc.SetDefault(nil) })
+
+		mD.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
+			{ID: 50, UserID: 7, Name: "agrctl@laptop", Kind: device_entity.KindCLI, Fingerprint: "fp-cli", LastSeenAt: 1234, Status: 1},
+			{ID: 43, UserID: 7, Name: "agentred-1", Kind: "agentred", Fingerprint: "fp-b", LastSeenAt: 999, Status: 1},
+		}, nil)
+		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: 7, Fingerprint: "fp-cli", InstanceID: "server-a"}))
+		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: 7, Fingerprint: "fp-b", InstanceID: "server-a"}))
+
+		items, err := svc.ListUserDevices(ctx, 7, 0)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(items, convey.ShouldHaveLength, 2)
+		convey.So(items[0].Kind, convey.ShouldEqual, "cli")
+		convey.So(items[0].Online, convey.ShouldBeFalse)
+		convey.So(items[0].LastSeenAt, convey.ShouldEqual, int64(1234))
+		convey.So(items[1].Online, convey.ShouldBeTrue)
+	})
+}

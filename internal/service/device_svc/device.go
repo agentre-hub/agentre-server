@@ -691,16 +691,17 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 	out := make([]DeviceView, 0, len(rows))
 	for i, d := range rows {
 		out = append(out, DeviceView{
-			ID:               d.ID,
-			Name:             d.Name,
-			DisplayName:      d.DisplayName,
-			Kind:             d.Kind,
-			Platform:         d.Platform,
-			Version:          d.Version,
-			Fingerprint:      d.Fingerprint,
-			LastSeenAt:       d.LastSeenAt,
-			Status:           d.Status,
-			Online:           online[i],
+			ID:          d.ID,
+			Name:        d.Name,
+			DisplayName: d.DisplayName,
+			Kind:        d.Kind,
+			Platform:    d.Platform,
+			Version:     d.Version,
+			Fingerprint: d.Fingerprint,
+			LastSeenAt:  d.LastSeenAt,
+			Status:      d.Status,
+			// cli 设备不连中继，没有「在线」这个概念，只有最近使用时间（LastSeenAt）。
+			Online:           online[i] && d.Kind != device_entity.KindCLI,
 			IsThisDevice:     d.ID == callerDeviceID,
 			ProtocolMismatch: states[i].ProtocolMismatch,
 			DaemonCommit:     states[i].DaemonCommit,

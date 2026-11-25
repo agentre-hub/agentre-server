@@ -11,6 +11,9 @@ const (
 	KindDesktop  = "desktop"
 	KindAgentred = "agentred"
 	KindWeb      = "web"
+	// KindCLI 是账号下的 agrctl 对端（`agrctl login` 走 Device Flow 得到）：它是调用方，
+	// 不是执行机——不连中继、不是派发目标、拿不到 engine snapshot 与 sync。
+	KindCLI = "cli"
 )
 
 type Device struct {

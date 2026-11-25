@@ -193,6 +193,48 @@ describe("device page design alignment", () => {
     expect(within(nuc).getByText(/0\.4\.0/)).toBeTruthy(); // Meta version
   });
 
+  it("cli 设备（agrctl）：类型 chip 叫 agrctl，状态位写最近使用时间而不是在线/离线，没有展开", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 9,
+              name: "agrctl@laptop",
+              kind: "cli",
+              platform: "darwin",
+              version: "0.8.0",
+              fingerprint: "fp-cli",
+              last_seen_at: Date.now() - 3 * 3600 * 1000,
+              status: 1,
+              online: false,
+              is_this_device: false,
+            },
+          ],
+        };
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    await screen.findByText("agrctl@laptop");
+
+    const row = screen.getByTestId("device-row-9");
+    expect(within(row).getByText("agrctl")).toBeTruthy(); // 类型 chip
+    expect(within(row).getByTestId("device-status-9").textContent).toMatch(
+      /Last used/,
+    );
+    expect(within(row).queryByText(/Offline/)).toBeNull();
+    expect(within(row).queryByText(/Online/)).toBeNull();
+    expect(within(row).queryByTestId("device-expand-9")).toBeNull();
+    // 可改名、可吊销
+    fireEvent.pointerDown(
+      within(row).getByRole("button", { name: /^Actions for / }),
+      { button: 0, ctrlKey: false },
+    );
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Revoke" })).toBeTruthy();
+  });
+
   it("已撤销设备（status≠ACTIVE）不渲染任何撤销动作", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices")

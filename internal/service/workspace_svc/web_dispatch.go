@@ -117,6 +117,11 @@ func (r *dispatchResolver) evaluateTier(
 			tier.Availability = AvailabilityUnpaired
 			break
 		}
+		if dev.Kind == device_entity.KindCLI {
+			// agrctl 的 cli 设备是调用方不是执行机：不暴露它的身份，也永远不被选中。
+			tier.Availability = AvailabilityUnpaired
+			break
+		}
 		tier.DeviceID = dev.ID
 		tier.DeviceName = dev.Name
 		tier.Kind = dev.Kind

@@ -5,9 +5,12 @@ package sync_ctr
 import (
 	"encoding/json"
 
+	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/sync"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
 )
@@ -22,7 +25,18 @@ func caller(c *gin.Context) (userID, deviceID int64) {
 	return ginctx.UserID(c), ginctx.DeviceID(c)
 }
 
+// denyCLI 拒绝 agrctl 的 cli 设备：它是账号下的调用方，不是工作区同步的参与者。
+func denyCLI(c *gin.Context) error {
+	if ginctx.DeviceKind(c) == device_entity.KindCLI {
+		return i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
+	}
+	return nil
+}
+
 func (s *Sync) Push(c *gin.Context, req *api.PushRequest) (*api.PushResponse, error) {
+	if err := denyCLI(c); err != nil {
+		return nil, err
+	}
 	userID, deviceID := caller(c)
 	items := make([]sync_svc.PushItem, 0, len(req.Items))
 	for _, it := range req.Items {
@@ -62,6 +76,9 @@ func (s *Sync) Push(c *gin.Context, req *api.PushRequest) (*api.PushResponse, er
 }
 
 func (s *Sync) Pull(c *gin.Context, req *api.PullRequest) (*api.PullResponse, error) {
+	if err := denyCLI(c); err != nil {
+		return nil, err
+	}
 	userID, deviceID := caller(c)
 	out, err := sync_svc.Default().Pull(c.Request.Context(), sync_svc.PullInput{
 		UserID: userID, DeviceID: deviceID, Cursor: req.Cursor, Limit: req.Limit,
@@ -91,6 +108,9 @@ func (s *Sync) Pull(c *gin.Context, req *api.PullRequest) (*api.PullResponse, er
 }
 
 func (s *Sync) ReportLocalPaths(c *gin.Context, req *api.ReportLocalPathsRequest) (*api.ReportLocalPathsResponse, error) {
+	if err := denyCLI(c); err != nil {
+		return nil, err
+	}
 	userID, deviceID := caller(c)
 	items := make([]sync_svc.LocalPathItem, 0, len(req.Items))
 	for _, it := range req.Items {
@@ -104,6 +124,9 @@ func (s *Sync) ReportLocalPaths(c *gin.Context, req *api.ReportLocalPathsRequest
 }
 
 func (s *Sync) PutAvatar(c *gin.Context, req *api.PutAvatarRequest) (*api.PutAvatarResponse, error) {
+	if err := denyCLI(c); err != nil {
+		return nil, err
+	}
 	userID, _ := caller(c)
 	if err := sync_svc.Default().PutAvatar(c.Request.Context(), sync_svc.AvatarInput{
 		UserID: userID, ContentHash: req.ContentHash, ContentType: req.ContentType, Content: req.Content,
@@ -114,6 +137,9 @@ func (s *Sync) PutAvatar(c *gin.Context, req *api.PutAvatarRequest) (*api.PutAva
 }
 
 func (s *Sync) GetAvatar(c *gin.Context, req *api.GetAvatarRequest) (*api.GetAvatarResponse, error) {
+	if err := denyCLI(c); err != nil {
+		return nil, err
+	}
 	userID, _ := caller(c)
 	out, err := sync_svc.Default().GetAvatar(c.Request.Context(), userID, req.ContentHash)
 	if err != nil {

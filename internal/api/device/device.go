@@ -4,7 +4,7 @@ import "github.com/cago-frame/cago/server/mux"
 
 type DeviceAuthorizeRequest struct {
 	mux.Meta    `path:"/v1/oauth/device/authorize" method:"POST"`
-	DeviceKind  string `json:"device_kind"  binding:"required,oneof=desktop agentred mobile"`
+	DeviceKind  string `json:"device_kind"  binding:"required,oneof=desktop agentred mobile cli"`
 	Fingerprint string `json:"fingerprint"  binding:"required,min=8,max=128"`
 	Platform    string `json:"platform"     binding:"max=64"`
 	Version     string `json:"version"`
