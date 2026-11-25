@@ -2225,7 +2225,10 @@ describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
     );
   }
 
-  function renderControl(target = { providerKey: "", modelKey: "" }) {
+  function renderControl(
+    target = { providerKey: "", modelKey: "" },
+    cliModels?: React.ComponentProps<typeof SessionModelControl>["cliModels"],
+  ) {
     return render(
       <MemoryRouter initialEntries={["/prev", "/chat/x"]} initialIndex={1}>
         <ThemeProvider>
@@ -2237,6 +2240,7 @@ describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
             boundModelKey="mk-1"
             target={target}
             onChange={() => {}}
+            cliModels={cliModels}
           />
         </ThemeProvider>
       </MemoryRouter>,
@@ -2264,6 +2268,28 @@ describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
       expect(screen.queryByTestId("model-target-sheet")).toBeNull(),
     );
     expect(screen.getByTestId("probe-path").textContent).toBe("/chat/x");
+  });
+
+  it("手机：搜索框里有字时系统返回也一步关掉 sheet，停在原页；再返回才离开页面", async () => {
+    mockMobileViewport();
+    renderControl(undefined, {
+      models: [{ value: "sonnet", label: "Sonnet", modelId: "claude-sonnet" }],
+      onChange: () => {},
+      onRefresh: () => {},
+    });
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    const sheet = await screen.findByTestId("model-target-sheet");
+    fireEvent.change(
+      within(sheet).getByPlaceholderText("Search providers or models…"),
+      { target: { value: "son" } },
+    );
+    fireEvent.click(screen.getByText("system-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("model-target-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("probe-path").textContent).toBe("/chat/x");
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.getByTestId("probe-path").textContent).toBe("/prev");
   });
 
   it("桌面：仍是浮层，不是 sheet", async () => {

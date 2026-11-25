@@ -77,11 +77,15 @@ function useTriggerExpanded(root: HTMLElement | null): boolean {
   );
 }
 
-/** 合成一次 Esc 让包里的 sheet 走它自己的关闭路径（焦点回触发器、选择器状态复位）。 */
-function dismissSheetViaEscape() {
-  document.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-  );
+/**
+ * 系统返回关 sheet：点一下触发器（Radix 对话框的触发器就是开关），走选择器自己的
+ * 关闭路径。不用合成 Esc——选择器在搜索框有字时把 Esc 当「先清空」吃掉，sheet 不关，
+ * 而历史上那一条记号已经退掉了，下一次返回就会直接离开页面。
+ */
+function closeSheetViaTrigger(root: HTMLElement | null) {
+  root
+    ?.querySelector<HTMLElement>(`[data-testid="${TRIGGER_TESTID}"]`)
+    ?.click();
 }
 
 /**
@@ -139,7 +143,7 @@ export default function SessionModelControl({
   const isMobile = useIsMobile();
   const [root, setRoot] = useState<HTMLElement | null>(null);
   const expanded = useTriggerExpanded(root);
-  useBackDismiss(isMobile && expanded, dismissSheetViaEscape);
+  useBackDismiss(isMobile && expanded, () => closeSheetViaTrigger(root));
   const wasExpandedRef = useRef(false);
   useEffect(() => {
     if (wasExpandedRef.current && !expanded) onSheetClosed?.();
