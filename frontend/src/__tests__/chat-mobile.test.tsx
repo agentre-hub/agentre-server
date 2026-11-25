@@ -1756,6 +1756,30 @@ describe("手机对话页：返回、焦点与滚动记忆（D3、D5）", () => 
     await waitFor(() => expect(path()).toBe("/start"));
   });
 
+  it("删除确认 sheet 开着时系统返回只关 sheet：留在这条对话，什么都没删", async () => {
+    stubApi([waitingMirrored]);
+    stubDelete();
+    renderChat("/chat?axis=agent", "/start");
+
+    fireEvent.click(await screen.findByRole("link", { name: /等你批/ }));
+    const detail = await screen.findByTestId("mobile-session-detail");
+    const opened = path();
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "stub delete" }),
+    );
+    await screen.findByTestId("delete-session-confirm");
+
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("delete-session-confirm")).toBeNull(),
+    );
+    expect(path()).toBe(opened);
+    expect(mockedApi).not.toHaveBeenCalledWith(
+      "/v1/saved-sessions/delete",
+      expect.anything(),
+    );
+  });
+
   it("深链打开的对话（它就是唯一一项）删除后以替换回列表，系统返回回到进来之前", async () => {
     stubApi([waitingMirrored]);
     stubDelete();

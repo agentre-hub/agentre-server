@@ -6,9 +6,11 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { useLocation } from "react-router-dom";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { backDismissLayerOf } from "@/hooks/use-back-dismiss";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
 import { attentionReasonOf } from "@/lib/attentionAdapter";
@@ -334,6 +336,13 @@ export function useSessionIndex({
     null,
   );
   const [deleting, setDeleting] = useState(false);
+  /**
+   * 删成了、等确认层的历史记号退干净再通知宿主的那一条。手机上确认 sheet 开着时在历史里
+   * 压了一条同地址的记号；宿主的删后导航（退回列表 / replace，D3）必须在记号退掉之后
+   * 才跑，否则它们会和记号抢退格，落到错的一页。见下面的 effect。
+   */
+  const deletedRef = useRef<MirrorIndexRow | null>(null);
+  const overlayLayer = backDismissLayerOf(useLocation().state);
   // 搜索词：真实过滤索引里的行，不是假交互。
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -975,7 +984,8 @@ export function useSessionIndex({
       setRangeCache(new Map());
       void forgetStored(row.conversationId);
       shiftTotals(row, -1);
-      onDeleted(row);
+      // 先收确认层（它的历史记号随之退掉），宿主的删后导航等层数回 0 再跑。
+      deletedRef.current = row;
       setPendingDelete(null);
     } catch (err) {
       // 删除没成功：确认层留在原地、按钮重新可按，那条对话也还在列表里——
@@ -984,7 +994,14 @@ export function useSessionIndex({
     } finally {
       setDeleting(false);
     }
-  }, [pendingDelete, shiftTotals, onDeleted]);
+  }, [pendingDelete, shiftTotals]);
+
+  useEffect(() => {
+    const row = deletedRef.current;
+    if (!row || pendingDelete !== null || overlayLayer > 0) return;
+    deletedRef.current = null;
+    onDeleted(row);
+  }, [pendingDelete, overlayLayer, onDeleted]);
 
   const stale = cached?.savedAt !== undefined;
 

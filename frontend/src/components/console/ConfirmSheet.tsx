@@ -30,7 +30,6 @@ export function ConfirmSheet({
   error,
   actions,
   onCancel,
-  backDismiss = true,
 }: {
   open: boolean;
   title: string;
@@ -40,13 +39,8 @@ export function ConfirmSheet({
   actions: readonly ConfirmSheetAction[];
   /** 系统返回 / 点遮罩 / Esc：等于没做决定，留在原处。 */
   onCancel: () => void;
-  /**
-   * 默认开着的浮层进历史。确认之后宿主自己会换地址（删除对话后退回列表，D3）的那类
-   * 确认关掉：压的那条记号会与宿主的 replace 抢退格，历史落到错的一页。
-   */
-  backDismiss?: boolean;
 }) {
-  useBackDismiss(open && backDismiss, onCancel);
+  useBackDismiss(open, onCancel);
   return (
     <DialogShell
       open={open}

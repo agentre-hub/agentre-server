@@ -90,8 +90,6 @@ export default function DeleteSessionDialog({
         title={t("sessionIndex.delete.title")}
         description={body}
         error={error}
-        // 删除成功后宿主会 replace 回列表（D3）；浮层的历史记号会和它抢退格。
-        backDismiss={false}
         onCancel={() => onOpenChange(false)}
         actions={[
           {
