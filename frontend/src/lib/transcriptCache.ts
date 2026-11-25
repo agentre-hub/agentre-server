@@ -1,6 +1,6 @@
 /**
  * 对话内容的本地缓存（规格 2026-11-25 决策 A1 的对话部分）：最近打开的 30 条对话，
- * 各存最近一页内容（首屏向镜像要的那一页，加上看着它时实时到的帧）以及认得出这条
+ * 各存最近一页内容（首屏向镜像要的那么多帧；看着它时实时到的帧把最老的挤出去）以及认得出这条
  * 对话的那一行与它的 Agent。点进来先画这一页，新的到了再按序号合并（SessionDetailView）。
  *
  * 存在本机（`accountStore`，kind = `transcript`）：按账号隔离，登出 / 401 / 换账号时随
@@ -49,6 +49,36 @@ export interface CachedTranscript extends CachedTranscriptPage {
   openedAt: number;
 }
 
+/**
+ * 只留最近一页：超出 `limit` 帧时从最老那头裁掉（A1「最近一页内容」）。
+ *
+ * 起点前移到**被裁掉的最后一帧之后**，而不是留下的第一帧：往前续读按「严格早于
+ * 起点」问镜像 / 中继，而镜像会把连续的 delta 合成一帧、记的是那一段最后一行的 seq ——
+ * 拿留下的第一帧的 seq 当起点，它合掉的那几行会被当成「更早的」再读一遍。
+ * 不给 `limit`、或没超出：原样。
+ */
+export function latestPage(
+  page: CachedTranscriptPage,
+  limit?: number,
+): CachedTranscriptPage {
+  if (limit === undefined || page.events.length <= limit) return page;
+  const cut = page.events.length - Math.max(limit, 1);
+  const kept = page.events.slice(cut);
+  let lastDropped: number | undefined;
+  for (const f of page.events.slice(0, cut)) {
+    if (f.seq !== undefined) lastDropped = f.seq;
+  }
+  return {
+    ...page,
+    events: kept,
+    oldestSeq:
+      lastDropped !== undefined
+        ? lastDropped + 1
+        : (kept.find((f) => f.seq !== undefined)?.seq ?? page.oldestSeq),
+    hasBefore: true,
+  };
+}
+
 /** 对话内容缓存。所有方法都不会拒绝。 */
 export const transcriptCache = {
   get(conversationId: string): Promise<CachedTranscript | undefined> {
@@ -58,16 +88,20 @@ export const transcriptCache = {
     );
   },
 
-  /** 打开了这条对话：存这一页、记打开时刻，并淘汰超出上限的最久没打开的那几条。 */
+  /**
+   * 打开了这条对话：存这一页（超出 `limit` 帧按 latestPage 裁）、记打开时刻，并淘汰
+   * 超出上限的最久没打开的那几条。
+   */
   async open(
     conversationId: string,
     page: CachedTranscriptPage,
     now = Date.now(),
+    limit?: number,
   ): Promise<void> {
     await accountStore.put<CachedTranscript>(
       TRANSCRIPT_CACHE_KIND,
       conversationId,
-      { ...page, openedAt: now },
+      { ...latestPage(page, limit), openedAt: now },
     );
     const all = await accountStore.list<CachedTranscript>(
       TRANSCRIPT_CACHE_KIND,
@@ -88,13 +122,14 @@ export const transcriptCache = {
   async update(
     conversationId: string,
     page: CachedTranscriptPage,
+    limit?: number,
   ): Promise<void> {
     const prev = await transcriptCache.get(conversationId);
     if (!prev) return;
     await accountStore.put<CachedTranscript>(
       TRANSCRIPT_CACHE_KIND,
       conversationId,
-      { ...page, openedAt: prev.openedAt },
+      { ...latestPage(page, limit), openedAt: prev.openedAt },
     );
   },
 

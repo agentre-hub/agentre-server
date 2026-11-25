@@ -456,6 +456,11 @@ export default function SessionDetailView({
     oldestSeq: number;
     hasBefore: boolean;
     lastSeq: number;
+    /**
+     * 存回本机最多几帧：首屏那一页投影出来的帧数（一页多大由服务端的预算定，这里
+     * 不另设常数）。实时帧把它撑大时从最老那头裁（transcriptCache 的 latestPage）。
+     */
+    pageSize: number;
   } | null>(null);
   /** 从这台机器补齐失败（此前是 catch {} 静默吞掉的）。 */
   const [catchUpFailed, setCatchUpFailed] = useState(false);
@@ -1072,6 +1077,7 @@ export default function SessionDetailView({
               oldestSeq: tail.oldestSeq,
               hasBefore: tail.hasBefore,
               lastSeq: tail.lastSeq,
+              pageSize: tail.events.length,
             });
           }
         } catch {
@@ -2183,8 +2189,8 @@ export default function SessionDetailView({
   const agent = resolvedAgent ?? seededAgent;
 
   /**
-   * 存回本机（A1）：镜像首屏那一页，加上看着它时实时到的帧。更早的（往上翻读回来的）
-   * 不存 —— 存的是「最近一页」。停手 LOCAL_SAVE_DEBOUNCE_MS 才写；离开时（换对话、
+   * 存回本机（A1）：最近一页 —— 首屏那一页的帧数，实时到的帧把最老的挤出去（见
+   * savePage.pageSize）。更早的（往上翻读回来的）不存。停手 LOCAL_SAVE_DEBOUNCE_MS 才写；离开时（换对话、
    * 卸载）把还没写的那一次补上。
    *
    * 每次打开第一次写走 `open`（记打开时刻、按最近打开淘汰到 30 条），之后走 `update`。
@@ -2222,10 +2228,10 @@ export default function SessionDetailView({
         agent: localAgentRef.current,
       };
       if (openedLocalRef.current === page.sid) {
-        void transcriptCache.update(page.sid, entry);
+        void transcriptCache.update(page.sid, entry, page.pageSize);
       } else {
         openedLocalRef.current = page.sid;
-        void transcriptCache.open(page.sid, entry);
+        void transcriptCache.open(page.sid, entry, undefined, page.pageSize);
       }
     };
     pendingSaveRef.current = save;

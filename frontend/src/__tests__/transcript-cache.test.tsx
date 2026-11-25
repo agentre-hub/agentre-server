@@ -89,6 +89,44 @@ describe("transcriptCache", () => {
     expect(got?.lastSeq).toBe(9);
   });
 
+  it("只存最近一页：每次写都按给的页长从最老那头裁掉，起点前移、标记前面还有", async () => {
+    const frames = (seqs: number[]): CachedTranscriptPage => ({
+      events: seqs.map(
+        (seq) =>
+          ({
+            conversationId: "c",
+            seq,
+            event: { kind: "user_message", text: `第 ${seq} 句` },
+            sessionId: 1,
+            createtime: 0,
+          }) as never,
+      ),
+      lastSeq: seqs.at(-1)!,
+      oldestSeq: seqs[0],
+      hasBefore: false,
+    });
+    await transcriptCache.open("a", frames([2, 4, 6, 8, 10]), 1000, 2);
+    let got = await transcriptCache.get("a");
+    expect(got?.events.map((f) => f.seq)).toEqual([8, 10]);
+    // 往前续读按「严格早于」问：起点落在被裁掉的最后一帧之后，合并帧覆盖的那几行
+    // 原始记录不会被读成两份。
+    expect(got?.oldestSeq).toBe(7);
+    expect(got?.hasBefore).toBe(true);
+    expect(got?.lastSeq).toBe(10);
+
+    await transcriptCache.update("a", frames([8, 10, 12, 14]), 2);
+    got = await transcriptCache.get("a");
+    expect(got?.events.map((f) => f.seq)).toEqual([12, 14]);
+    expect(got?.oldestSeq).toBe(11);
+    expect(got?.lastSeq).toBe(14);
+
+    // 没超出页长：原样，不碰起点与「前面还有」。
+    await transcriptCache.update("a", frames([12, 14]), 2);
+    got = await transcriptCache.get("a");
+    expect(got?.oldestSeq).toBe(12);
+    expect(got?.hasBefore).toBe(false);
+  });
+
   it("forget 删掉那一条；清空业务数据后什么都读不到", async () => {
     await transcriptCache.open("a", page(1), 1000);
     await transcriptCache.open("b", page(2), 1001);

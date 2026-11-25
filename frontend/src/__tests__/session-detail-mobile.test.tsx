@@ -1994,6 +1994,44 @@ describe("移动端会话详情：本地先画（A1、A5、d9）", () => {
     });
   });
 
+  it("存回本机的只有最近一页：看着它时实时到的帧把最老的挤出去，页长同首屏那一页", async () => {
+    mockMobileViewport();
+    stubLocal({
+      transcript: async () =>
+        mirrorPage([
+          [1, said("一")],
+          [2, said("二")],
+        ]),
+      latestSeq: 2,
+    });
+    renderPage();
+    expect(await screen.findByText("二")).toBeTruthy();
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+
+    act(() => {
+      for (const [seq, text] of [
+        [3, "三"],
+        [4, "四"],
+        [5, "五"],
+      ] as const) {
+        pageOpts.onEvent?.({
+          conversationId: CID,
+          event: said(text),
+          seq,
+        } as never);
+      }
+    });
+    expect(await screen.findByText("五")).toBeTruthy();
+
+    await waitFor(async () => {
+      const got = await transcriptCache.get(CID);
+      expect(got?.events.map((f) => f.seq)).toEqual([4, 5]);
+      expect(got?.oldestSeq).toBe(4);
+      expect(got?.hasBefore).toBe(true);
+      expect(got?.lastSeq).toBe(5);
+    });
+  });
+
   it("别处删掉了这条对话：本地那一页撤掉，缓存一并丢掉", async () => {
     mockMobileViewport();
     await seedCache([[1, said("已经删掉的那句")]]);
