@@ -9,6 +9,11 @@ import {
   DialogShellSubmit,
 } from "@agentre-hub/agentre-ui";
 
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
+import { useIsMobile } from "@/components/use-is-mobile";
+import { describeFailure } from "@/lib/describeFailure";
+import { useDeleteFailure } from "@/pages/chat/useSessionIndex";
+
 /**
  * 删除一条已保存的对话的确认（规格 2026-08-18 决策 6 / 16）。
  *
@@ -64,6 +69,47 @@ export default function DeleteSessionDialog({
   pending = false,
 }: DeleteSessionDialogProps) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  const failure = useDeleteFailure();
+  // 上一次删除没成：原因写在确认层里一行，按钮恢复可点（F2）。
+  const error =
+    failure === null
+      ? null
+      : describeFailure(failure, {
+          t,
+          what: t("chat.deleteFailedWhat"),
+        }).message;
+  const body = t(bodyKey({ machineName, machineOnline, machineKind }), {
+    machine: machineName,
+  });
+  if (isMobile) {
+    // 手机：底部确认 sheet，危险键在上、44px 满宽堆叠（F3）。
+    return (
+      <ConfirmSheet
+        open={open}
+        title={t("sessionIndex.delete.title")}
+        description={body}
+        error={error}
+        // 删除成功后宿主会 replace 回列表（D3）；浮层的历史记号会和它抢退格。
+        backDismiss={false}
+        onCancel={() => onOpenChange(false)}
+        actions={[
+          {
+            label: t("sessionIndex.delete.confirm"),
+            variant: "destructive",
+            testId: "delete-session-confirm",
+            disabled: pending,
+            onSelect: onConfirm,
+          },
+          {
+            label: t("chat.cancel"),
+            variant: "secondary",
+            onSelect: () => onOpenChange(false),
+          },
+        ]}
+      />
+    );
+  }
   return (
     <DialogShell
       open={open}
@@ -82,12 +128,10 @@ export default function DeleteSessionDialog({
           data-testid="delete-session-body"
           className="text-aux leading-relaxed text-muted-foreground"
         >
-          {t(bodyKey({ machineName, machineOnline, machineKind }), {
-            machine: machineName,
-          })}
+          {body}
         </p>
       </DialogShellBody>
-      <DialogShellFooter>
+      <DialogShellFooter error={error}>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
           {t("chat.cancel")}
         </Button>

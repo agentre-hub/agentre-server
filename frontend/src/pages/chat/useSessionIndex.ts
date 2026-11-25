@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
@@ -225,6 +232,40 @@ export interface SessionIndexData {
   cancelDelete: () => void;
   deleting: boolean;
   confirmDelete: () => Promise<void>;
+}
+
+/**
+ * 上一次删除没成功的原因（规格 2026-11-25 F2）。确认层（`DeleteSessionDialog`）在页面里
+ * 与这只 hook 隔着一层，原因经这一格流过去：同一时刻只有一个删除确认挡着，不会串。
+ * 开始删除 / 取消 / 成功都清空；确认层留在原地、按钮恢复可点，原因写在层内一行。
+ */
+let deleteFailure: unknown = null;
+const deleteFailureListeners = new Set<() => void>();
+
+function emitDeleteFailure(next: unknown) {
+  deleteFailure = next;
+  deleteFailureListeners.forEach((l) => l());
+}
+
+export function setDeleteFailure(err: unknown): void {
+  emitDeleteFailure(err ?? new Error("delete failed"));
+}
+
+export function clearDeleteFailure(): void {
+  if (deleteFailure !== null) emitDeleteFailure(null);
+}
+
+export function useDeleteFailure(): unknown {
+  return useSyncExternalStore(
+    (l) => {
+      deleteFailureListeners.add(l);
+      return () => {
+        deleteFailureListeners.delete(l);
+      };
+    },
+    () => deleteFailure,
+    () => deleteFailure,
+  );
 }
 
 /**
@@ -905,11 +946,14 @@ export function useSessionIndex({
     if (row) void doSave(row);
   }, [pendingSave, doSave]);
 
-  const askDelete = useCallback(
-    (row: MirrorIndexRow) => setPendingDelete(row),
-    [],
-  );
-  const cancelDelete = useCallback(() => setPendingDelete(null), []);
+  const askDelete = useCallback((row: MirrorIndexRow) => {
+    clearDeleteFailure();
+    setPendingDelete(row);
+  }, []);
+  const cancelDelete = useCallback(() => {
+    clearDeleteFailure();
+    setPendingDelete(null);
+  }, []);
 
   /**
    * 删除（决策 6）：账号那份当场清掉，执行端那份由服务端负责（在线即删、离线记
@@ -919,6 +963,7 @@ export function useSessionIndex({
     const row = pendingDelete;
     if (!row) return;
     setDeleting(true);
+    clearDeleteFailure();
     try {
       await api("/v1/saved-sessions/delete", {
         method: "POST",
@@ -932,9 +977,10 @@ export function useSessionIndex({
       shiftTotals(row, -1);
       onDeleted(row);
       setPendingDelete(null);
-    } catch {
+    } catch (err) {
       // 删除没成功：确认层留在原地、按钮重新可按，那条对话也还在列表里——
-      // 界面不装作它没了。
+      // 界面不装作它没了；原因写进确认层（见 deleteFailure）。
+      setDeleteFailure(err);
     } finally {
       setDeleting(false);
     }

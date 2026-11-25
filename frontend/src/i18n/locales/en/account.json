@@ -53,5 +53,10 @@
     "signOutError": "Could not sign out the other sessions. Try again.",
     "onlyCurrent": "This is your only session."
   },
-  "signOut": "Sign out"
+  "signOut": "Sign out",
+  "signOutConfirm": {
+    "title": "Sign out?",
+    "body": "You'll need to sign in again to keep using it.",
+    "cancel": "Cancel"
+  }
 }

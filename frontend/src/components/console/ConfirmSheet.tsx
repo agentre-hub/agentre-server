@@ -19,23 +19,34 @@ export interface ConfirmSheetAction {
   /** 默认 `default`（主按钮）；危险动作用 `destructive`，次要的用 `secondary`。 */
   variant?: "default" | "destructive" | "secondary";
   testId?: string;
+  /** 动作在路上时置灰（防连点）；失败后放开即可再按。 */
+  disabled?: boolean;
 }
 
 export function ConfirmSheet({
   open,
   title,
   description,
+  error,
   actions,
   onCancel,
+  backDismiss = true,
 }: {
   open: boolean;
   title: string;
   description?: string;
+  /** 上一次动作失败的原因：就地一行，按钮不挪位。 */
+  error?: string | null;
   actions: readonly ConfirmSheetAction[];
   /** 系统返回 / 点遮罩 / Esc：等于没做决定，留在原处。 */
   onCancel: () => void;
+  /**
+   * 默认开着的浮层进历史。确认之后宿主自己会换地址（删除对话后退回列表，D3）的那类
+   * 确认关掉：压的那条记号会与宿主的 replace 抢退格，历史落到错的一页。
+   */
+  backDismiss?: boolean;
 }) {
-  useBackDismiss(open, onCancel);
+  useBackDismiss(open && backDismiss, onCancel);
   return (
     <DialogShell
       open={open}
@@ -44,6 +55,14 @@ export function ConfirmSheet({
     >
       <div data-testid="confirm-sheet" className="flex flex-col">
         <DialogShellHeader title={title} subtitle={description} />
+        {error ? (
+          <p
+            role="alert"
+            className="px-5 pb-1 text-aux leading-relaxed text-destructive-text"
+          >
+            {error}
+          </p>
+        ) : null}
         <div className="flex flex-col gap-2 px-5 pt-1 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))]">
           {actions.map((action) => (
             <Button
@@ -52,6 +71,7 @@ export function ConfirmSheet({
               data-testid={action.testId}
               variant={action.variant ?? "default"}
               className="h-11 w-full"
+              disabled={action.disabled}
               onClick={action.onSelect}
             >
               {action.label}

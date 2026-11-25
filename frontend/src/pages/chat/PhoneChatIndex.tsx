@@ -3,6 +3,7 @@ import {
   SearchInput,
   SessionFilterChips,
   SessionIndexEmpty,
+  SessionLifecycle,
   SessionRow,
   SessionRowSkeleton,
   StatusDot,
@@ -48,6 +49,7 @@ import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { toAgentStatus } from "@/lib/attentionAdapter";
 import { conversationDraftKey, useDraftMap } from "@/lib/drafts";
 import { useOutboxMap } from "@/lib/outbox";
+import { useStoppingRows } from "@/pages/chat/stopRowTurn";
 import type { ProjectNode } from "@/lib/projects";
 import { formatRelativeTime } from "@/lib/sessionView";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
@@ -268,6 +270,7 @@ export function PhoneChatIndex({
   const { t: uiT } = useUiTranslation();
   const drafts = useDraftMap();
   const outbox = useOutboxMap();
+  const stoppingRows = useStoppingRows();
   // 搜索词还在（从对话返回）时，回来仍是搜索那一屏。
   const [searchOpen, setSearchOpen] = useState(() => searchQuery !== "");
   const listRef = useRef<HTMLDivElement>(null);
@@ -405,21 +408,28 @@ export function PhoneChatIndex({
       draft: drafts.get(conversationDraftKey(row.conversationId)),
       pending: outbox.get(row.conversationId),
     });
-    const secondary =
-      subline.kind === "content" ? (
-        content
-      ) : (
-        <>
-          {subline.kind === "draft" ? (
-            <span className="font-medium text-destructive-text">
-              {t("chat.phone.draftPrefix")}
-            </span>
-          ) : (
-            <span>{t("chat.phone.pendingPrefix")}</span>
-          )}{" "}
-          <span>{subline.text || t("chat.phone.draftImageOnly")}</span>
-        </>
-      );
+    // 长按「停止这一轮」后这一行立即写「正在停止…」，直到它不再是运行中（F2）。
+    const stopping =
+      stoppingRows.has(row.conversationId) &&
+      row.lifecycleState === SessionLifecycle.running;
+    const secondary = stopping ? (
+      <span data-testid={`row-stopping-${row.key}`}>
+        {t("chat.phone.stopping")}
+      </span>
+    ) : subline.kind === "content" ? (
+      content
+    ) : (
+      <>
+        {subline.kind === "draft" ? (
+          <span className="font-medium text-destructive-text">
+            {t("chat.phone.draftPrefix")}
+          </span>
+        ) : (
+          <span>{t("chat.phone.pendingPrefix")}</span>
+        )}{" "}
+        <span>{subline.text || t("chat.phone.draftImageOnly")}</span>
+      </>
+    );
     const href =
       row.deviceId === undefined
         ? undefined

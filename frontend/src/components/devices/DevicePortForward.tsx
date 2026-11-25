@@ -34,6 +34,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { FailureNotice } from "@/components/console";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { describeFailure, type Failure } from "@/lib/describeFailure";
 import {
   allocatePortForwardLink,
@@ -90,6 +91,16 @@ export function DevicePortForward({
   // 存一份译文（此前 `device.portForward.add.invalidTarget` 的重复已删）。
   const { t: tUi } = useUiTranslation();
   const alive = useRef(true);
+  const isMobile = useIsMobile();
+  /**
+   * 手机上「打开」拿到地址后就地给的一个链接（点它才开新页）。iOS 主屏幕 App 里
+   * `await` 之后的 `window.open` 不算用户手势，提前开的空白页也可能留成空白——
+   * 所以不开页，只把地址摆出来，由用户这一下点击来开（F7）。
+   */
+  const [openLink, setOpenLink] = useState<{
+    name: string;
+    url: string;
+  } | null>(null);
 
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [loadFailure, setLoadFailure] = useState<Failure | null>(null);
@@ -263,6 +274,21 @@ export function DevicePortForward({
    */
   function handleOpen(mapping: PortForwardMappingView) {
     setActionFailure(null);
+    if (isMobile) {
+      setOpenLink(null);
+      void (async () => {
+        try {
+          const url = await ensureAddress(mapping);
+          if (!alive.current) return;
+          setOpenLink({ name: mapping.name || mapping.target, url });
+        } catch (err) {
+          if (!alive.current) return;
+          // 拿不到地址就在原处报错，不留一个空白页。
+          handleLinkFailure(err);
+        }
+      })();
+      return;
+    }
     const pending = window.open("", "_blank");
     if (pending) pending.opener = null;
     void (async () => {
@@ -441,6 +467,19 @@ export function DevicePortForward({
           onToggleEnabled={handleToggle}
           onRemove={handleRemove}
         />
+      ) : null}
+
+      {openLink ? (
+        <a
+          data-testid="port-forward-open-link"
+          href={openLink.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => setOpenLink(null)}
+          className="flex min-h-11 items-center rounded-md bg-button-fill px-3 text-sm font-medium text-primary-text"
+        >
+          {t("device.portForward.openLink", { name: openLink.name })}
+        </a>
       ) : null}
 
       {actionFailure ? <PortForwardFailure failure={actionFailure} /> : null}

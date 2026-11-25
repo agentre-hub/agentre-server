@@ -3,6 +3,7 @@ import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import AppShell from "@/components/AppShell";
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
 import { CardLoadError, EmptyState, StatusMark } from "@/components/console";
 import {
   Button,
@@ -244,6 +245,8 @@ export default function Account() {
 
   const [confirmingSignOutOthers, setConfirmingSignOutOthers] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  /** 手机页底「退出登录」先过一道底部确认 sheet（F3）。 */
+  const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -682,7 +685,7 @@ export default function Account() {
             <Button
               variant="outline"
               className="w-full text-destructive"
-              onClick={() => signOut()}
+              onClick={() => setSignOutConfirmOpen(true)}
             >
               {t("account.signOut")}
             </Button>
@@ -691,6 +694,28 @@ export default function Account() {
       ) : (
         <p className="text-muted-foreground">{t("common.loading")}</p>
       )}
+
+      <ConfirmSheet
+        open={signOutConfirmOpen}
+        title={t("account.signOutConfirm.title")}
+        description={t("account.signOutConfirm.body")}
+        onCancel={() => setSignOutConfirmOpen(false)}
+        actions={[
+          {
+            label: t("account.signOut"),
+            variant: "destructive",
+            onSelect: () => {
+              setSignOutConfirmOpen(false);
+              signOut();
+            },
+          },
+          {
+            label: t("account.signOutConfirm.cancel"),
+            variant: "secondary",
+            onSelect: () => setSignOutConfirmOpen(false),
+          },
+        ]}
+      />
 
       {/* 添加通行密钥：先起名字，再触发认证器（decision 10：注册要求 residentKey）。 */}
       <DialogShell

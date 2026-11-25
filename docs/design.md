@@ -1393,6 +1393,15 @@ went out.
 header, `variant="destructive"` on the submit. The consequences go in the body; the
 title stays one line.
 
+**On a phone the dangerous confirm is a bottom sheet (`ConfirmSheet`).** Sign out and
+delete conversation open `components/console/ConfirmSheet` below `md`: title, one line of
+consequence, then full-width 44px buttons stacked, the destructive one on top and the
+cancel below it. A failed action writes its reason as one `role="alert"` line inside the
+sheet and the buttons come back enabled. Desktop keeps the centred `DialogShell` (and
+one-tap sign out in the user menu). A confirm whose success makes the host replace the
+route (delete, back to the list) passes `backDismiss={false}`: the history marker the
+sheet pushes would fight that replace for the back step.
+
 **A dialog that saves as you go has no Save button.** Its footer holds only Done, and
 the save state (`saving` / `saved` / `error`) sits at the top right of the header via
 `saveState` — the same shape the org detail header already uses.

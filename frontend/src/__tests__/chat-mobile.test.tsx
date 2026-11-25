@@ -39,6 +39,7 @@ import { api } from "@/lib/api";
 import { draftStore, useDraftKey } from "@/lib/drafts";
 import { bindAccount } from "@/lib/localStore";
 import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
+import { toast } from "sonner";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
@@ -1181,6 +1182,29 @@ describe("手机首页：对话列表", () => {
     expect(head.contains(compose[0])).toBe(true);
     fireEvent.click(compose[0]);
     expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
+  });
+
+  it("长按「停止这一轮」：该行立即写「正在停止…」，请求成功后仍写着；失败则放下并在顶部提示重试", async () => {
+    stubApi(all);
+    const toastError = vi.spyOn(toast, "error").mockReturnValue("t");
+    renderChat();
+
+    fireEvent.contextMenu((await screen.findByText("跑着呢")).closest("a")!);
+    let release!: () => void;
+    abortRequest.mockImplementationOnce(
+      () => new Promise((r) => (release = () => r({}))),
+    );
+    fireEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Stop this turn",
+      }),
+    );
+    expect(await screen.findByText("Stopping…")).toBeTruthy();
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText("Stopping…")).toBeTruthy();
+    expect(toastError).not.toHaveBeenCalled();
+    toastError.mockRestore();
   });
 
   it("「只看这个 Agent」换整页范围：地址、标题与取数都收到这个 Agent", async () => {

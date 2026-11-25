@@ -1014,7 +1014,7 @@ describe("Account page: sign-out sits at the bottom on mobile only", () => {
     vi.restoreAllMocks();
   });
 
-  it("on mobile, signs out from the bottom button", async () => {
+  it("on mobile, the bottom button asks first (bottom sheet) and signs out only on confirm", async () => {
     setViewport(true);
     markWebauthnSupported();
     mockDefaultApi();
@@ -1022,6 +1022,9 @@ describe("Account page: sign-out sits at the bottom on mobile only", () => {
 
     await screen.findByTestId("account-page");
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(mockedSignOut).not.toHaveBeenCalled();
+    const sheet = await screen.findByTestId("confirm-sheet");
+    fireEvent.click(within(sheet).getByRole("button", { name: "Sign out" }));
     expect(mockedSignOut).toHaveBeenCalledTimes(1);
   });
 

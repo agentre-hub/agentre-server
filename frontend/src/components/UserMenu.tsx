@@ -5,6 +5,7 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
 } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -18,6 +19,8 @@ import {
   cn,
   statusConfig,
 } from "@agentre-hub/agentre-ui";
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { ConnectionPip, connectionCopy } from "@/components/ConnectionStatus";
 import {
   retryAccountChannel,
@@ -60,7 +63,10 @@ export function UserMenu({
   const connectionLabel = t(copy.labelKey);
   const connectionTone = statusConfig[copy.tone];
 
-  const handleLogout = () => signOut();
+  // 手机上退出登录先过一道底部确认 sheet（F3）；桌面仍是一下直登出，下拉菜单不变。
+  const isMobile = useIsMobile();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const handleLogout = () => (isMobile ? setConfirmOpen(true) : signOut());
 
   const avatar = (
     <div className="relative shrink-0">
@@ -200,6 +206,27 @@ export function UserMenu({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <ConfirmSheet
+        open={confirmOpen}
+        title={t("account.signOutConfirm.title")}
+        description={t("account.signOutConfirm.body")}
+        onCancel={() => setConfirmOpen(false)}
+        actions={[
+          {
+            label: t("appShell.userMenu.signOut"),
+            variant: "destructive",
+            onSelect: () => {
+              setConfirmOpen(false);
+              signOut();
+            },
+          },
+          {
+            label: t("account.signOutConfirm.cancel"),
+            variant: "secondary",
+            onSelect: () => setConfirmOpen(false),
+          },
+        ]}
+      />
     </>
   );
 }

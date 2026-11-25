@@ -153,5 +153,10 @@
       "body": "It may have been deleted, or it isn't in this account."
     },
     "loadError": "Couldn't load this conversation. Try again."
+  },
+  "stop": {
+    "failed": "Couldn't stop it",
+    "failedWhat": "The stop didn't go through",
+    "retry": "Retry"
   }
 }

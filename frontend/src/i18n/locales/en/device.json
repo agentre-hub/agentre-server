@@ -196,7 +196,8 @@
     "loadFailedWhat": "Couldn't read this device's port mappings",
     "actionFailedWhat": "That didn't go through",
     "openFailedWhat": "Couldn't open the forwarded address",
-    "linkUnavailable": "This deployment can't offer port forwarding right now."
+    "linkUnavailable": "This deployment can't offer port forwarding right now.",
+    "openLink": "Open {{name}}"
   },
   "eyebrowWithCode": "Device authorization · {{code}}"
 }
