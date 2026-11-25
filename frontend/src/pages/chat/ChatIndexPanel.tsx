@@ -2,9 +2,11 @@ import { Button, SearchInput } from "@agentre-hub/agentre-ui";
 import { RotateCw, TriangleAlert } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 
 import SessionIndex from "@/components/session/SessionIndex";
-import { loadErrorText } from "@/lib/loadError";
+import { useIsMobile } from "@/components/use-is-mobile";
+import { describeFailure } from "@/lib/describeFailure";
 import type { IndexAxis, ProjectNode } from "@/lib/sessionAxes";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 import type { SessionFilter } from "@/lib/sessionView";
@@ -141,9 +143,14 @@ export function IndexBanners({
 }) {
   const { t } = useTranslation();
   /** 索引取数失败给用户看的那一句：经分类说原因，原文不上屏（规格 W5）。 */
-  const indexErrorMessage = sessionIndex.loadError
-    ? loadErrorText(sessionIndex.loadError, t, "sessionIndex.loadFailedWhat")
+  const indexFailure = sessionIndex.loadError
+    ? describeFailure(sessionIndex.loadError, {
+        t,
+        what: t("sessionIndex.loadFailedWhat"),
+      })
     : null;
+  const isMobile = useIsMobile();
+  const { pathname, search } = useLocation();
 
   /**
    * 索引这一次没取回来（规格 2026-08-21 决策 14）。
@@ -160,19 +167,33 @@ export function IndexBanners({
         className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
       >
         <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1">{indexErrorMessage}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            // 清掉再重取：横幅留着的话，这一次成功了它也还挂在那儿。
-            sessionIndex.setLoadError(null);
-            sessionIndex.refetch();
-          }}
-        >
-          <RotateCw aria-hidden="true" className="size-3.5" />
-          {t("sessionIndex.loadMore.retry")}
-        </Button>
+        <span className="min-w-0 flex-1">{indexFailure?.message}</span>
+        {indexFailure?.exit === "signIn" ? (
+          // 登录失效：重试只会再得一个 401，出口是重新登录（W23，规格 G1）。
+          <Button
+            asChild
+            variant="outline"
+            size="sm"
+            className={isMobile ? "min-h-11 px-4" : undefined}
+          >
+            <a href={`/login?next=${encodeURIComponent(pathname + search)}`}>
+              {t("common.failure.signIn")}
+            </a>
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // 清掉再重取：横幅留着的话，这一次成功了它也还挂在那儿。
+              sessionIndex.setLoadError(null);
+              sessionIndex.refetch();
+            }}
+          >
+            <RotateCw aria-hidden="true" className="size-3.5" />
+            {t("sessionIndex.loadMore.retry")}
+          </Button>
+        )}
       </div>
     ) : null;
 

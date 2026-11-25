@@ -29,7 +29,7 @@ import {
 } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import * as accountChannel from "@/lib/accountChannel";
@@ -3478,6 +3478,24 @@ describe("对话页：索引取数失败", () => {
     expect(rows.getAttribute("aria-busy")).toBeNull();
     expect(rows.className).not.toContain("opacity-55");
     expect(screen.queryByTestId("index-refresh-bar")).toBeNull();
+  });
+
+  // W23：登录失效时横幅说「请重新登录」，出口就得是重新登录，而不是一颗按了也没用的重试。
+  it("401：给「重新登录」链接（带 next），不给重试", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/workspace/projects")) return { projects: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        throw new ApiError(30004, "未登录", 401);
+      throw new Error("unexpected: " + path);
+    });
+    renderChat();
+
+    const banner = await screen.findByTestId("index-load-error");
+    const link = within(banner).getByRole("link", { name: "Sign in again" });
+    expect(link.getAttribute("href")).toMatch(/^\/login\?next=%2F/);
+    expect(within(banner).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("带一个重试,按下去真的重新取一次", async () => {
