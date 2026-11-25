@@ -18,6 +18,7 @@ import {
   cn,
 } from "@agentre-hub/agentre-ui";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { useMe } from "@/hooks/use-me";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { api, ApiError } from "@/lib/api";
@@ -269,6 +270,8 @@ export default function Account() {
   const [addName, setAddName] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  // 起名框在手机上是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(addOpen, () => setAddOpen(false));
 
   const passkeySupportState = passkeySupport();
   const supported = passkeySupportState === "available";
@@ -784,93 +787,153 @@ export default function Account() {
         </form>
       </DialogShell>
 
-      {/* 删除通行密钥：二次确认。 */}
-      <DialogShell
-        open={!!deleteTarget}
-        onOpenChange={(o) => {
-          if (!o && !deleting) {
-            setDeleteError(null);
-            setDeleteTarget(null);
-          }
-        }}
-        size="sm"
-        danger
-        busy={deleting}
-      >
-        <DialogShellHeader
+      {/* 删除通行密钥：二次确认。手机上是底部确认 sheet（F3），返回即取消。 */}
+      {isMobile ? (
+        <ConfirmSheet
+          open={!!deleteTarget}
           title={t("account.passkeys.removeTitle", {
             name: deleteTarget?.name ?? "",
           })}
+          description={t("account.passkeys.removeBody")}
+          error={deleteError}
+          onCancel={() => {
+            if (deleting) return;
+            setDeleteError(null);
+            setDeleteTarget(null);
+          }}
+          actions={[
+            {
+              label: t("account.passkeys.removeConfirm"),
+              variant: "destructive",
+              disabled: deleting,
+              onSelect: () => void onConfirmDelete(),
+            },
+            {
+              label: t("account.passkeys.cancel"),
+              variant: "secondary",
+              disabled: deleting,
+              onSelect: () => setDeleteTarget(null),
+            },
+          ]}
+        />
+      ) : (
+        <DialogShell
+          open={!!deleteTarget}
+          onOpenChange={(o) => {
+            if (!o && !deleting) {
+              setDeleteError(null);
+              setDeleteTarget(null);
+            }
+          }}
+          size="sm"
           danger
           busy={deleting}
-          onClose={() => setDeleteTarget(null)}
-        />
-        <DialogShellBody>
-          <p className="text-aux leading-relaxed text-muted-foreground">
-            {t("account.passkeys.removeBody")}
-          </p>
-        </DialogShellBody>
-        <DialogShellFooter error={deleteError}>
-          <Button
-            variant="outline"
-            disabled={deleting}
-            onClick={() => setDeleteTarget(null)}
-          >
-            {t("account.passkeys.cancel")}
-          </Button>
-          <DialogShellSubmit
-            variant="destructive"
+        >
+          <DialogShellHeader
+            title={t("account.passkeys.removeTitle", {
+              name: deleteTarget?.name ?? "",
+            })}
+            danger
             busy={deleting}
-            onClick={onConfirmDelete}
-          >
-            {t("account.passkeys.removeConfirm")}
-          </DialogShellSubmit>
-        </DialogShellFooter>
-      </DialogShell>
+            onClose={() => setDeleteTarget(null)}
+          />
+          <DialogShellBody>
+            <p className="text-aux leading-relaxed text-muted-foreground">
+              {t("account.passkeys.removeBody")}
+            </p>
+          </DialogShellBody>
+          <DialogShellFooter error={deleteError}>
+            <Button
+              variant="outline"
+              disabled={deleting}
+              onClick={() => setDeleteTarget(null)}
+            >
+              {t("account.passkeys.cancel")}
+            </Button>
+            <DialogShellSubmit
+              variant="destructive"
+              busy={deleting}
+              onClick={onConfirmDelete}
+            >
+              {t("account.passkeys.removeConfirm")}
+            </DialogShellSubmit>
+          </DialogShellFooter>
+        </DialogShell>
+      )}
 
-      {/* 登出其它全部：二次确认。 */}
-      <DialogShell
-        open={confirmingSignOutOthers}
-        onOpenChange={(o) => {
-          if (!o && !signingOut) {
-            setSignOutError(null);
-            setConfirmingSignOutOthers(false);
-          }
-        }}
-        size="sm"
-        danger
-        busy={signingOut}
-      >
-        <DialogShellHeader
+      {/* 登出其它全部：二次确认。手机上是底部确认 sheet（F3），返回即取消。 */}
+      {isMobile ? (
+        <ConfirmSheet
+          open={confirmingSignOutOthers}
           title={t("account.signins.signOutOthersTitle", {
             count: otherCount,
           })}
+          description={t("account.signins.signOutOthersBody")}
+          error={signOutError}
+          onCancel={() => {
+            if (signingOut) return;
+            setSignOutError(null);
+            setConfirmingSignOutOthers(false);
+          }}
+          actions={[
+            {
+              label: t("account.signins.signOutOthersConfirm"),
+              variant: "destructive",
+              disabled: signingOut,
+              onSelect: () => void onConfirmSignOutOthers(),
+            },
+            {
+              label: t("account.passkeys.cancel"),
+              variant: "secondary",
+              disabled: signingOut,
+              onSelect: () => setConfirmingSignOutOthers(false),
+            },
+          ]}
+        />
+      ) : (
+        <DialogShell
+          open={confirmingSignOutOthers}
+          onOpenChange={(o) => {
+            if (!o && !signingOut) {
+              setSignOutError(null);
+              setConfirmingSignOutOthers(false);
+            }
+          }}
+          size="sm"
           danger
           busy={signingOut}
-          onClose={() => setConfirmingSignOutOthers(false)}
-        />
-        <DialogShellBody>
-          <p className="text-aux leading-relaxed text-muted-foreground">
-            {t("account.signins.signOutOthersBody")}
-          </p>
-        </DialogShellBody>
-        <DialogShellFooter error={signOutError}>
-          <Button
-            variant="outline"
-            disabled={signingOut}
-            onClick={() => setConfirmingSignOutOthers(false)}
-          >
-            {t("account.passkeys.cancel")}
-          </Button>
-          <DialogShellSubmit
-            variant="destructive"
+        >
+          <DialogShellHeader
+            title={t("account.signins.signOutOthersTitle", {
+              count: otherCount,
+            })}
+            danger
             busy={signingOut}
-            onClick={onConfirmSignOutOthers}
-          >
-            {t("account.signins.signOutOthersConfirm")}
-          </DialogShellSubmit>
-        </DialogShellFooter>
-      </DialogShell>
+            onClose={() => setConfirmingSignOutOthers(false)}
+          />
+          <DialogShellBody>
+            <p className="text-aux leading-relaxed text-muted-foreground">
+              {t("account.signins.signOutOthersBody")}
+            </p>
+          </DialogShellBody>
+          <DialogShellFooter error={signOutError}>
+            <Button
+              variant="outline"
+              disabled={signingOut}
+              onClick={() => setConfirmingSignOutOthers(false)}
+            >
+              {t("account.passkeys.cancel")}
+            </Button>
+            <DialogShellSubmit
+              variant="destructive"
+              busy={signingOut}
+              onClick={onConfirmSignOutOthers}
+            >
+              {t("account.signins.signOutOthersConfirm")}
+            </DialogShellSubmit>
+          </DialogShellFooter>
+        </DialogShell>
+      )}
     </AppShell>
   );
 }

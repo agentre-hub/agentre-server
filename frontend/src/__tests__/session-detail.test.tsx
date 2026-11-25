@@ -8384,6 +8384,35 @@ describe("会话详情：重连期间的发送", () => {
     expect(bubble.textContent).not.toMatch(/may already have arrived/i);
   });
 
+  // 规格 E3「换连接取票期间状态即为「连接中」，此时发送走排队」：连上过之后又落回
+  // connecting（换连接 / 立即重试）时同样可以打字、发送即排队，连上只发一次。
+  it("连上过之后换连接（连接中）：输入框可用，发送排队，连上只发一次", async () => {
+    mountReconnecting();
+    await moveRelayTo("connected");
+    await screen.findByTestId("session-detail-send");
+    await moveRelayTo("connecting");
+    expect(composerDisabled()).toBe(false);
+
+    await sendInComposer("换连接时说的这句");
+    const queued = await screen.findByTestId("send-pending");
+    expect(queued.textContent).toContain("换连接时说的这句");
+    expect(runCalls().length).toBe(0);
+
+    await moveRelayTo("connected");
+    await waitFor(() => {
+      expect(runCalls().length).toBe(1);
+    });
+    await act(async () => {});
+    expect(runCalls().length).toBe(1);
+  });
+
+  it("从没连上过的首拨（连接中）：输入框仍禁用，不许一个不知道会不会到的承诺", async () => {
+    mountReconnecting();
+    await moveRelayTo("connecting");
+    await screen.findByTestId("session-detail-send");
+    expect(composerDisabled()).toBe(true);
+  });
+
   it("排着的那条可以撤销:撤了就什么都不发", async () => {
     mountReconnecting();
     await screen.findByTestId("session-detail-send");

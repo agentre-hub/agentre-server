@@ -12,14 +12,25 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { vi } from "vitest";
-import { ThemeProvider, TouchProvider } from "@agentre-hub/agentre-ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  ThemeProvider,
+  TouchProvider,
+} from "@agentre-hub/agentre-ui";
 
 import i18n from "@/i18n";
 import SessionDetailHeader from "@/components/session/SessionDetailHeader";
+import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 import { PhoneChatIndex } from "@/pages/chat/PhoneChatIndex";
 import { PhoneScopeSheet } from "@/pages/chat/PhoneScopeSheet";
+import { FirstSaveDialog } from "@/pages/Chat";
+import { ProjectDialogs } from "@/pages/chat/ProjectDialogs";
 import {
+  BrowserRouter,
   MemoryRouter,
   useLocation,
   useNavigate,
@@ -27,6 +38,7 @@ import {
 } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
 import { useBackDismiss } from "@/hooks/use-back-dismiss";
 
 const originalMatchMedia = window.matchMedia;
@@ -247,6 +259,103 @@ describe("各处浮层接上了返回键", () => {
     expect(path()).toBe("/chat");
   });
 
+  it("新建项目弹层：系统返回关掉它，停在原页", () => {
+    setViewport(true);
+    function Host() {
+      const [open, setOpen] = useState(false);
+      const close = () => setOpen(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>show-create</button>
+          <ProjectDialogs
+            create={{
+              parent: open ? null : false,
+              parentOptions: [],
+              ports: { create: vi.fn() } as never,
+              close,
+              onCreated: close,
+            }}
+            settings={{
+              project: null,
+              parentOptions: [],
+              ports: {} as never,
+              close: () => {},
+              onChanged: () => {},
+            }}
+            deletion={{
+              project: null,
+              childCount: 0,
+              offlineMachines: [],
+              ports: {} as never,
+              close: () => {},
+              onDeleted: () => {},
+            }}
+          />
+        </>
+      );
+    }
+    render(
+      <Shell>
+        <Host />
+      </Shell>,
+    );
+    fireEvent.click(screen.getByText("show-create"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    back();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(path()).toBe("/chat");
+  });
+
+  it("第一次保存的说明框：系统返回关掉它，停在原页", () => {
+    setViewport(true);
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>show-save</button>
+          <FirstSaveDialog
+            open={open}
+            onOpenChange={setOpen}
+            onConfirm={() => {}}
+          />
+        </>
+      );
+    }
+    render(
+      <Shell>
+        <Host />
+      </Shell>,
+    );
+    fireEvent.click(screen.getByText("show-save"));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    back();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(path()).toBe("/chat");
+  });
+
+  it("思考力度选择：系统返回关掉弹层，停在原页", async () => {
+    setViewport(true);
+    render(
+      <Shell>
+        <SessionReasoningEffortControl
+          value=""
+          backendValue=""
+          onChange={() => {}}
+        />
+      </Shell>,
+    );
+    const trigger = screen.getByTestId("composer-reasoning-effort");
+    fireEvent.click(trigger);
+    await waitFor(() =>
+      expect(trigger.getAttribute("aria-expanded")).toBe("true"),
+    );
+    back();
+    await waitFor(() =>
+      expect(trigger.getAttribute("aria-expanded")).toBe("false"),
+    );
+    expect(path()).toBe("/chat");
+  });
+
   function renderIndex(rows: MirrorIndexRow[] = []) {
     const noop = vi.fn();
     function Host() {
@@ -401,5 +510,135 @@ describe("各处浮层接上了返回键", () => {
     expect(["below", "above"]).toContain(menu.dataset.anchorSide);
     for (const item of screen.getAllByRole("menuitem"))
       expect(item.className).toContain("min-h-11");
+  });
+});
+
+/**
+ * 浏览器里 history.go 是异步的（jsdom 同样排进任务队列）：一层关、一层开落在同一次
+ * 提交里时，关的那层退记号与开的那层压记号会交错。这里用 BrowserRouter 跑真实的
+ * 异步返回，而不是 MemoryRouter 的同步 go。
+ */
+describe("浏览器异步返回下：从一层浮层里开另一层", () => {
+  const winPath = () => window.location.pathname;
+  const browserBack = () => act(() => window.history.back());
+  const layerOf = () =>
+    (window.history.state?.usr as Record<string, unknown> | undefined)
+      ?.agentreBackDismiss;
+
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/prev");
+    window.history.pushState(null, "", "/chat");
+  });
+
+  it("对话信息 → 删除：确认 sheet 开着，系统返回只关 sheet、停在原页", async () => {
+    setViewport(true);
+    function Host() {
+      const [confirm, setConfirm] = useState(false);
+      return (
+        <>
+          <SessionDetailHeader
+            isPage
+            immersive
+            sid="s1"
+            identity={null}
+            agent={null}
+            agentPending={false}
+            project={null}
+            displayTitle="标题"
+            machineName="box"
+            machineOnline
+            status="connected"
+            running={false}
+            decisionPending={false}
+            stopping={false}
+            onDelete={() => setConfirm(true)}
+          />
+          <ConfirmSheet
+            open={confirm}
+            title="delete?"
+            actions={[{ label: "do-delete", onSelect: () => {} }]}
+            onCancel={() => setConfirm(false)}
+          />
+        </>
+      );
+    }
+    render(
+      <BrowserRouter>
+        <ThemeProvider>
+          <TouchProvider touch>
+            <Host />
+          </TouchProvider>
+        </ThemeProvider>
+      </BrowserRouter>,
+    );
+    fireEvent.click(screen.getByTestId("session-detail-menu-trigger"));
+    await waitFor(() => expect(layerOf()).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByTestId("confirm-sheet");
+    // 等两层的记号都安定下来：信息层退掉、sheet 那一层压上。
+    await waitFor(() => expect(layerOf()).toBeGreaterThanOrEqual(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByTestId("confirm-sheet")).toBeTruthy();
+
+    browserBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(winPath()).toBe("/chat");
+    browserBack();
+    await waitFor(() => expect(winPath()).toBe("/prev"));
+  });
+
+  it("••• 菜单项开确认层（菜单项先单独提交、菜单后关）：返回只关确认层，历史不多一格", async () => {
+    setViewport(true);
+    function Host() {
+      const [menu, setMenu] = useState(false);
+      const [confirm, setConfirm] = useState(false);
+      useBackDismiss(menu, () => setMenu(false));
+      return (
+        <>
+          <DropdownMenu open={menu} onOpenChange={setMenu}>
+            <DropdownMenuTrigger>more</DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onSelect={() => setConfirm(true)}>
+                ask
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <ConfirmSheet
+            open={confirm}
+            title="sure?"
+            actions={[{ label: "yes", onSelect: () => {} }]}
+            onCancel={() => setConfirm(false)}
+          />
+        </>
+      );
+    }
+    render(
+      <BrowserRouter>
+        <ThemeProvider>
+          <Host />
+        </ThemeProvider>
+      </BrowserRouter>,
+    );
+    fireEvent.pointerDown(screen.getByText("more"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    await screen.findByRole("menu");
+    await waitFor(() => expect(layerOf()).toBe(1));
+    fireEvent.click(screen.getByText("ask"));
+    await screen.findByTestId("confirm-sheet");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByTestId("confirm-sheet")).toBeTruthy();
+    expect(layerOf()).toBe(1);
+
+    browserBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(winPath()).toBe("/chat");
+    browserBack();
+    await waitFor(() => expect(winPath()).toBe("/prev"));
   });
 });

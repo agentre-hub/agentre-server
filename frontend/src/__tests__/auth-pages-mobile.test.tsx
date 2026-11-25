@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ComingSoon from "@/pages/ComingSoon";
@@ -93,6 +93,62 @@ describe("条款 / 隐私 / 状态页（J4）", () => {
     renderAt(<ComingSoon page="terms" />);
     expect(screen.queryByTestId("auth-mobile-header")).toBeNull();
     expect(screen.queryByRole("link", { name: /back to sign in/i })).toBeNull();
+  });
+});
+
+/**
+ * ‹ 走 D3「回到上一处」：从登录页点进来的就退一步（登录页的 next / user_code 原样还在，
+ * 历史不多一格）；直接打开的以替换回登录页。
+ */
+describe("条款页 ‹ 回到上一处（J4、D3）", () => {
+  function Probe() {
+    const { pathname, search } = useLocation();
+    const navigate = useNavigate();
+    return (
+      <>
+        <span data-testid="where">{pathname + search}</span>
+        <button data-testid="system-back" onClick={() => void navigate(-1)}>
+          system-back
+        </button>
+      </>
+    );
+  }
+  function renderTerms(entries: string[]) {
+    return render(
+      <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+        <Probe />
+        <ComingSoon page="terms" />
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+  }
+  const where = () => screen.getByTestId("where").textContent;
+  const tapBack = () =>
+    fireEvent.click(
+      within(screen.getByTestId("auth-mobile-header")).getByRole("link", {
+        name: /back to sign in/i,
+      }),
+    );
+  afterEach(() => window.history.replaceState(null, ""));
+
+  it("从登录页进来：‹ 退回登录页，next 与 user_code 都还在", async () => {
+    setMobile(true);
+    window.history.replaceState({ idx: 1 }, "");
+    renderTerms(["/login?next=%2Fdevice&user_code=ABCD-EFGH", "/terms"]);
+    tapBack();
+    await waitFor(() =>
+      expect(where()).toBe("/login?next=%2Fdevice&user_code=ABCD-EFGH"),
+    );
+  });
+
+  it("直接打开：‹ 以替换回登录页，系统返回回到进来之前", async () => {
+    setMobile(true);
+    window.history.replaceState(null, "");
+    renderTerms(["/elsewhere", "/terms"]);
+    tapBack();
+    await waitFor(() => expect(where()).toBe("/login"));
+    fireEvent.click(screen.getByTestId("system-back"));
+    await waitFor(() => expect(where()).toBe("/elsewhere"));
   });
 });
 
@@ -194,9 +250,14 @@ describe("设备授权 · 同一手机版式（J6）", () => {
     expect(document.activeElement).toBe(boxes[1]);
   });
 
-  it("过期页：照拒绝页，页头 + 居中说明，重新输入钉底、无页脚", () => {
+  it("过期页：与输码 / 批准页同一版式——✕ 授权设备页头、内容靠上，重新输入钉底、无页脚", () => {
     setMobile(true);
     renderAt(<DeviceExpired />);
+    // 规格 J6「输码页、过期页与批准 / 拒绝页同一手机版式（内容靠上、主按钮钉底）」。
+    const header = screen.getByTestId("auth-mobile-header");
+    expect(within(header).getByText("Authorize device")).toBeTruthy();
+    const title = screen.getByRole("heading", { name: /expired/i });
+    expect(title.closest(".justify-center")).toBeNull();
     const pinned = screen.getByTestId("auth-pinned");
     const retry = within(pinned).getByRole("link", {
       name: /enter a new code|re-?enter/i,

@@ -10,6 +10,9 @@ import {
   DialogShellSubmit,
 } from "@agentre-hub/agentre-ui";
 
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
+import { useIsMobile } from "@/components/use-is-mobile";
+
 /**
  * 组织面的删除确认（部门 / Agent 共用）。
  *
@@ -35,6 +38,33 @@ export default function OrgDeleteConfirm({
   onConfirm: () => void;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  if (isMobile) {
+    // 手机：底部确认 sheet，危险键在上、44px 满宽堆叠（F3）；系统返回即取消（D1）。
+    return (
+      <ConfirmSheet
+        open={open}
+        title={t(titleKey, { name })}
+        description={t("org.detail.delete.description")}
+        onCancel={() => onOpenChange(false)}
+        actions={[
+          {
+            label: t("org.detail.delete.confirm"),
+            variant: "destructive",
+            onSelect: () => {
+              onConfirm();
+              onOpenChange(false);
+            },
+          },
+          {
+            label: t("org.detail.delete.cancel"),
+            variant: "secondary",
+            onSelect: () => onOpenChange(false),
+          },
+        ]}
+      />
+    );
+  }
   return (
     <DialogShell open={open} onOpenChange={onOpenChange} size="sm" danger>
       <DialogShellHeader

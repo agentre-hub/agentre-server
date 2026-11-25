@@ -24,6 +24,7 @@ import {
   SelectTrigger,
 } from "@agentre-hub/agentre-ui";
 
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import type { OrgDepartmentItem } from "./types";
 
 export interface CreateIdentityDraft {
@@ -110,6 +111,8 @@ export function CreateDepartmentDialog(props: {
   onCreate: (draft: CreateIdentityDraft) => void;
 }) {
   const { t } = useTranslation();
+  // 手机上是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(props.open, () => props.onOpenChange(false));
   return (
     <DialogShell open={props.open} onOpenChange={props.onOpenChange} size="sm">
       {props.open && (
@@ -136,6 +139,7 @@ export function CreateAgentDialog(props: {
   defaultDepartmentSyncId?: string;
   onCreate: (draft: CreateIdentityDraft, departmentSyncId: string) => void;
 }) {
+  useBackDismiss(props.open, () => props.onOpenChange(false));
   return (
     <DialogShell open={props.open} onOpenChange={props.onOpenChange} size="sm">
       {props.open && (

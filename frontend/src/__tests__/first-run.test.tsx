@@ -62,6 +62,24 @@ describe("没有 Agent 的空态（F18）", () => {
     expect(link.className).toContain("h-11");
   });
 
+  it("手机上搜不到 Agent 时「清除搜索」也是 44px", () => {
+    mockViewport(true);
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AgentPickList
+            agents={[]}
+            recentIds={[]}
+            onPick={() => {}}
+            search={{ query: "zzz", onClear: () => {} }}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    const empty = screen.getByTestId("agent-pick-empty");
+    expect(within(empty).getByRole("button").className).toContain("h-11");
+  });
+
   it("桌面上按钮仍是小号，不变", () => {
     mockViewport(false);
     const empty = renderEmptyList();

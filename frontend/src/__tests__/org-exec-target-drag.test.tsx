@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router-dom";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -59,6 +60,8 @@ function renderSection(
       onChangeSkills={vi.fn()}
       onReordered={onReordered}
     />,
+    // 产品里它总在路由内：「添加执行目标」菜单接系统返回（D1）要读路由。
+    { wrapper: MemoryRouter },
   );
 }
 

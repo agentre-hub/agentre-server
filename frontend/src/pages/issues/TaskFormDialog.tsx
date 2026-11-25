@@ -27,6 +27,8 @@ import {
 
 import { ConfirmSheet } from "@/components/console/ConfirmSheet";
 import { backDismissLayerOf, useBackDismiss } from "@/hooks/use-back-dismiss";
+import { ApiTimeoutError } from "@/lib/api";
+import { localizeTransportFailure } from "@/lib/writeFailure";
 import type { SyncIdRegistry } from "@/lib/boardWire";
 import type { EngineBackend } from "@/lib/engineCatalog";
 import type { OrgBackendItem } from "@/pages/org/types";
@@ -60,12 +62,16 @@ export interface TaskFormDialogProps {
   onSave: (value: TaskFormValue) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   /**
-   * 新建超时后的「刷新看看」：宿主重读看板，认出刚提交的那条就直接打开它并返回 `true`；
-   * 认不出返回 `false`（表单留着、可再提交）；刷新失败由宿主自己说出口并返回 `false`。
+   * 新建超时后的「刷新看看」：宿主重读看板，认出刚提交的那条就直接打开它并返回
+   * `"found"`；认不出返回 `"notFound"`（表单留着、可再提交）；刷新失败由宿主自己说出口
+   * 并返回 `"failed"`（还不知道建没建，不算「找不到」）。
    * 只对新建生效——编辑超时不走这条，保持共享壳的原样。
    */
-  onRefreshCreated?: () => Promise<boolean>;
+  onRefreshCreated?: () => Promise<RefreshCreatedResult>;
 }
+
+/** 「刷新看看」的结论：认出来了 / 确定没有 / 刷新本身失败（仍不知道）。 */
+export type RefreshCreatedResult = "found" | "notFound" | "failed";
 
 /**
  * 每次打开都从这条任务已有的值起步：上一条任务选的机器与它无关。这件事由 `key`
@@ -220,21 +226,47 @@ function TaskForm({
     「刷新看看」在途的那一次。刷新期间用户若又按了提交：不能再发第二个 POST（上一个
     可能已经建好了），先等这次刷新——认出来了宿主已经把表单换成那条任务，这次提交
     就此作罢；认不出才照常提交。
+
+    上一次新建超时、还没核实过（`unverifiedRef`）时，用户不点「刷新看看」直接再按提交
+    也一样：先刷新，只有确定没有（notFound）才发 POST（规格 F5「找不到才允许再提交」）。
+    刷新本身失败仍是「不知道」：不发 POST，把那次超时原样再抛回去，表单留着那一行。
   */
-  const refreshRef = React.useRef<Promise<boolean> | null>(null);
+  const refreshRef = React.useRef<Promise<RefreshCreatedResult> | null>(null);
+  const unverifiedRef = React.useRef<unknown>(null);
   const refreshCreated = React.useCallback(() => {
-    if (!onRefreshCreated) return Promise.resolve(false);
+    if (!onRefreshCreated)
+      return Promise.resolve<RefreshCreatedResult>("notFound");
     if (!refreshRef.current) {
-      const run = onRefreshCreated().finally(() => {
-        refreshRef.current = null;
-      });
+      const run = onRefreshCreated()
+        .then((result) => {
+          if (result !== "failed") unverifiedRef.current = null;
+          return result;
+        })
+        .finally(() => {
+          refreshRef.current = null;
+        });
       refreshRef.current = run;
     }
     return refreshRef.current;
   }, [onRefreshCreated]);
   const saveUnlessFound = async (next: TaskFormValue) => {
-    if (refreshRef.current && (await refreshRef.current)) return;
-    await onSave(next);
+    if (!next.id && (refreshRef.current || unverifiedRef.current)) {
+      const timeout = unverifiedRef.current;
+      const result = await refreshCreated();
+      if (result === "found") return;
+      if (result === "failed") throw timeout ?? new ApiTimeoutError("", 0);
+    }
+    try {
+      await onSave(next);
+    } catch (err) {
+      // 新建超时原样抛：共享壳据它画「可能已经建好了 + 刷新看看」。其余传输层失败
+      // （编辑超时、非 JSON、断网）的原文是英文诊断，换成当前语言的一句话（F5、G2）。
+      if (!next.id && err instanceof ApiTimeoutError) {
+        unverifiedRef.current = err;
+        throw err;
+      }
+      throw localizeTransportFailure(err);
+    }
   };
 
   const selectedBackend = backends.find(

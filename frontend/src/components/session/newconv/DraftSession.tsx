@@ -49,6 +49,7 @@ import { pendingUserMessage } from "@/components/session/transcriptFrame";
 import { useSessionCLIModel } from "@/components/session/useSessionCLIModel";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
@@ -1070,6 +1071,8 @@ function ExecTargetPopover({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // 手机草稿页上是浮层：系统返回先关它、停在草稿页（D1）。
+  useBackDismiss(open, () => setOpen(false));
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
@@ -1231,6 +1234,8 @@ function ProjectChip({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // 手机草稿页上是浮层：系统返回先关它、停在草稿页（D1）。
+  useBackDismiss(open, () => setOpen(false));
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>

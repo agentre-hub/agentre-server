@@ -55,8 +55,8 @@
   "relogin": "重新登录",
   "sendFailure": {
     "transport": {
-      "title": "没送到 {{machine}}",
-      "titleUnknown": "没送到那台机器",
+      "title": "可能已送达 {{machine}}",
+      "titleUnknown": "可能已送达那台机器",
       "body": "网络中断在半路。它可能已经送到了——再发一次可能变成两条。"
     },
     "rejected": {

@@ -254,6 +254,40 @@ describe("下一次自动重拨的时刻", () => {
 });
 
 /*
+  lie-fi：拨号既不 open 也不 close。不能永远停在「连接中」、也不给下一次重试的时刻
+  （E1「持续退避重试」「下次自动重试 N 秒后」）：拨号等满上限即按一次拨号失败退避。
+*/
+describe("拨号悬着不回", () => {
+  it("等满上限判这次拨号失败：报重连中与下一次时刻，到点再拨", async () => {
+    const h = harness();
+    const listener: RelayChannelListener = { onNextRetryAt: vi.fn() };
+    h.connection.openChannel("machine:fp", listener);
+    h.connection.connect().catch(() => {});
+    await flush();
+    expect(h.connection.state).toBe("connecting");
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(h.sockets[0].closed).toBe(true);
+    expect(h.connection.state).toBe("reconnecting");
+    expect(h.connection.nextRetryAt).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await flush();
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it("上限内连上了：不误判", async () => {
+    const h = harness();
+    h.connection.connect().catch(() => {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    h.sockets[0].open();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.connection.state).toBe("connected");
+    expect(h.sockets).toHaveLength(1);
+  });
+});
+
+/*
   大图上传（规格 2026-11-25 决策 C4）：进度来自 socket 的 bufferedAmount 排空；中途意外
   断开、而这一帧还有字节没交给网络 = 对端不可能收到整帧，确定「还没发出去」。
 */

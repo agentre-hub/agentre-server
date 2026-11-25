@@ -24,6 +24,8 @@
   "searchAgents": "Search agents",
   "fromProject": "Pick an agent from a project",
   "projects": "Projects",
+  "agentsLoadFailedWhat": "Couldn't load your agents",
+  "projectsLoadFailedWhat": "Couldn't load your projects",
   "noProjects": "No projects yet.",
   "noProjectsYetHint": "Create a project and add an agent to it — then you can start a project conversation here.",
   "noAgentsInProject": "No agents in this project",

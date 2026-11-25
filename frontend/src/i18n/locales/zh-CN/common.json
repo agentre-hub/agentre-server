@@ -13,6 +13,12 @@
     "signedOut": "登录已过期，请重新登录。",
     "denied": "你没有权限做这件事。"
   },
+  "writeFailure": {
+    "createTimeout": "网络超时，可能已经建好了，先刷新列表看看再重试。",
+    "timeout": "网络超时，没收到确认，可能已经生效，刷新看看。",
+    "unavailable": "服务暂时不可用（{{status}}），请稍后再试。",
+    "network": "网络好像断了，请稍后再试。"
+  },
   "projectError": {
     "fallback": "操作没有完成，请重试。"
   },

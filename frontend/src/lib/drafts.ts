@@ -86,6 +86,20 @@ export function useDraftMap(): Map<string, Draft> {
 }
 
 /**
+ * 每只挂着的输入框此刻的草稿（输入框最近一次报告的那份，不等防抖落库）。键是输入框
+ * 的句柄：句柄随输入框挂载而生、卸载而弃，这里因此不留任何已经不在屏幕上的内容。
+ */
+const liveDrafts = new WeakMap<ChatComposerHandle, Draft>();
+
+/**
+ * 这只输入框里此刻是什么（排队消息「撤销」要接在它后面，不能盖掉它）。输入框挂上后
+ * 还没报告过（用户没动过）时是 undefined：那时它的内容就是库里恢复出来的那份。
+ */
+export function liveDraftOf(handle: ChatComposerHandle): Draft | undefined {
+  return liveDrafts.get(handle);
+}
+
+/**
  * 把一个输入框接到草稿库：挂载后恢复（`seed` 优先，其次库里的），随后输入框每次报告
  * 草稿就防抖保存；空了立即删；卸载、页面被藏起来（pagehide / 切后台）时冲刷未落库的。
  *
@@ -129,6 +143,8 @@ export function useComposerDraft({
   const report = useCallback(
     (draft: Draft) => {
       touched.current = true;
+      const handle = handleRef.current;
+      if (handle) liveDrafts.set(handle, draft);
       onChangeRef.current?.(draft);
       const key = keyRef.current;
       if (!key) return;
@@ -144,7 +160,7 @@ export function useComposerDraft({
       if (timer.current !== null) clearTimeout(timer.current);
       timer.current = setTimeout(flush, DRAFT_SAVE_DEBOUNCE_MS);
     },
-    [flush],
+    [flush, handleRef],
   );
 
   // 恢复：只做一次（输入框随 key 重挂，换一条对话就是新的一次）。

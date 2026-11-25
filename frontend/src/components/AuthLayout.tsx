@@ -16,12 +16,18 @@ export function AuthMobileHeader({
   icon,
   label,
   title,
+  onBack,
 }: {
   to: string;
   icon: "back" | "close";
   /** 图标键的无障碍名称。 */
   label: string;
   title: string;
+  /**
+   * 给了就由它决定去哪（如「回到上一处」，D3）：链接仍指向 `to`（长按 / 新开页照旧），
+   * 点按交给它。
+   */
+  onBack?: () => void;
 }) {
   const Icon = icon === "back" ? ChevronLeft : X;
   return (
@@ -31,6 +37,14 @@ export function AuthMobileHeader({
     >
       <Link
         to={to}
+        onClick={
+          onBack
+            ? (e) => {
+                e.preventDefault();
+                onBack();
+              }
+            : undefined
+        }
         aria-label={label}
         className="flex size-11 items-center justify-center rounded-full text-foreground"
       >

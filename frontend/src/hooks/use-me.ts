@@ -97,16 +97,47 @@ function start(): void {
  * 提交里整棵子树一起挂上来，子树里「一挂上就发写请求」的（账号通道的取票 POST）会
  * 跑在任何 effect 前面。所以 token 一律先于 `me` 发布——本地身份带着上次的 token，
  * 冷启动时 sessionStorage 里没有副本，就先用它；核对回来再换成服务端给的。
+ *
+ * 核对与读本地**同时**起跑：本地存储可能一直不应答（旧版 iOS，见 localStore 的打开
+ * 超时），没有本地身份可等时不该为它多等那几秒（决策 A6）。两边谁先到都要对：
+ *
+ *  - 本地先到：照旧先用它进入，核对回来再替换；
+ *  - 核对先成功：直接进入；本地随后到了、却是另一个账号——上一个账号的东西照样清掉；
+ *  - 核对先失败：等本地落定再决定是「网络不稳定」还是「连不上服务器」，不然离线
+ *    打开时会先闪一下整屏连不上。
  */
+let localPending: Promise<void> | null = null;
+
 async function restore(mine: number): Promise<void> {
-  const local = await readLocalIdentity<Me>();
+  const read = readLocalIdentity<Me>();
+  localPending = read.then(() => {});
+  // 晚一拍再发：restore 由 useSyncExternalStore 的订阅（提交期）触发，同步 publish
+  // 会让挂载的那一遍所有订阅者再渲染一次。
+  void Promise.resolve().then(() => {
+    if (mine === round) check(mine);
+  });
+  const local = await read;
   if (mine !== round) return;
-  if (local?.user_id) {
+  localPending = null;
+  if (!local?.user_id || signingOut || state.status === "signedOut") return;
+  if (state.status === "loading") {
     if (!hasCsrfToken()) setCsrfToken(local.csrf_token);
     bindAccount(local.user_id);
     publish({ me: local, status: "verifying" });
+    return;
   }
-  check(mine);
+  const current = state.me;
+  if (
+    state.status === "ready" &&
+    current &&
+    current.user_id !== local.user_id
+  ) {
+    await wipeBusinessData();
+    if (mine !== round) return;
+    setCsrfToken(current.csrf_token);
+    bindAccount(current.user_id);
+    void writeLocalIdentity(current);
+  }
 }
 
 function check(mine: number): void {
@@ -114,7 +145,7 @@ function check(mine: number): void {
   publish({ inFlight: true });
   api<Me>("/v1/auth/me").then(
     (got) => void accept(mine, got),
-    (err: unknown) => fail(mine, err),
+    (err: unknown) => void fail(mine, err),
   );
 }
 
@@ -131,13 +162,17 @@ async function accept(mine: number, got: Me): Promise<void> {
   publish({ me: got, status: "ready", attempt: 0, inFlight: false });
 }
 
-function fail(mine: number, err: unknown): void {
+async function fail(mine: number, err: unknown): Promise<void> {
   if (mine !== round) return;
   // 只有 401 才算登出（决策 A3）；api() 那一层已经喊过 onUnauthorized，这里只是
   // 不把它当成网络问题去重试。
   if (err instanceof ApiError && err.status === 401) {
     void signOutLocally();
     return;
+  }
+  if (localPending) {
+    await localPending;
+    if (mine !== round) return;
   }
   const attempt = state.attempt + 1;
   publish({
@@ -170,6 +205,17 @@ function onUnauthorized(): void {
   void signOutLocally();
 }
 
+/**
+ * 主动登出（`@/lib/signOut`）：这一轮作废、重试停掉。之后晚到的核对结果一律丢掉——
+ * 不然一次在飞的 /auth/me 在清空之后回来，会把身份与 CSRF 副本又写回本机（决策 A2）。
+ * 不发布新状态：登出由整页跳转收尾，这里不抢在它前面把路由带去登录页。
+ */
+export function abandonMe(): void {
+  round += 1;
+  localPending = null;
+  clearRetry();
+}
+
 /** 在失败重试的间隙里立即再核对一次（「立即重试」、联网、回到前台）。 */
 export function retryMe(): void {
   if (!started || state.inFlight) return;
@@ -185,6 +231,7 @@ export function retryMe(): void {
 export function invalidateMe(): void {
   round += 1;
   signingOut = false;
+  localPending = null;
   clearRetry();
   if (started) {
     started = false;

@@ -15,6 +15,7 @@ import { useIsMobile } from "@/components/use-is-mobile";
 
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
 import { useFlushOnLeave, useOrgIdentityText } from "./useOrgIdentityText";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
   IdentityFields,
@@ -87,6 +88,8 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
     parsePromptJSON(agent.prompt_json),
   );
   const [promptOpen, setPromptOpen] = React.useState(false);
+  // 展开编辑框在手机上是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(promptOpen, () => setPromptOpen(false));
   const [promptDraft, setPromptDraft] = React.useState("");
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 

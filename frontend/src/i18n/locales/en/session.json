@@ -55,8 +55,8 @@
   "relogin": "Sign in again",
   "sendFailure": {
     "transport": {
-      "title": "Did not reach {{machine}}",
-      "titleUnknown": "Did not reach that machine",
+      "title": "May have reached {{machine}}",
+      "titleUnknown": "May have reached that machine",
       "body": "The connection dropped on the way. It may already have arrived — sending again could produce two copies."
     },
     "rejected": {

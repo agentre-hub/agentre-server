@@ -240,6 +240,43 @@ describe("useRelayChannel 的连接状态", () => {
       expect(result.current.nextRetryAt).toBeNull();
       expect(result.current.relayState).toBe("connecting");
     });
+
+    // 规格 E「网络恢复（online）、回到前台时立即重试」：连接还没建出来（票没换到）时
+    // 池子的前台监听还没装上，得由这里自己听。
+    it.each([
+      ["联网", () => window.dispatchEvent(new Event("online"))],
+      ["回到前台", () => document.dispatchEvent(new Event("visibilitychange"))],
+      ["bfcache 返回", () => window.dispatchEvent(new Event("pageshow"))],
+    ])("退避中%s：马上再取一次票，不等倒计时", async (_n, fire) => {
+      mockedEnsureRelayTicket
+        .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+        .mockReturnValue(pending<typeof TICKET>().promise);
+      const { result } = renderHook(() => useRelayChannel("fp-1"));
+      await flush();
+      expect(result.current.nextRetryAt).not.toBeNull();
+      expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(1);
+
+      act(() => fire());
+      await flush();
+
+      expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(2);
+      expect(result.current.nextRetryAt).toBeNull();
+      expect(result.current.relayState).toBe("connecting");
+      // 原来那次排期已撤：到点不会再多取一次。
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(2);
+    });
+
+    it("没在退避（取票途中）时联网不多取一次", async () => {
+      mockedEnsureRelayTicket.mockReturnValue(pending<typeof TICKET>().promise);
+      renderHook(() => useRelayChannel("fp-1"));
+      await flush();
+      act(() => window.dispatchEvent(new Event("online")));
+      await flush();
+      expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("通道交出的下一次自动重试时刻原样交给页面", async () => {

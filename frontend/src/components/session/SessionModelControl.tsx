@@ -10,17 +10,11 @@ import {
   type PickerProvider,
   type ProviderPillState,
 } from "@agentre-hub/agentre-ui";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useIsMobile } from "@/components/use-is-mobile";
-import { useBackDismiss } from "@/hooks/use-back-dismiss";
+import { useTriggerBackDismiss } from "@/hooks/use-trigger-back-dismiss";
 
 /** 两格皆空 = 跟随 Agent 绑定。写成常量而不是就地字面量：它是一个有名字的态。 */
 const FOLLOW_AGENT: ModelTarget = { providerKey: "", modelKey: "" };
@@ -46,46 +40,6 @@ function modelShortName(modelId: string): string | undefined {
     return `${head.toUpperCase()}-${parts[1]}`;
   }
   return head.charAt(0).toUpperCase() + head.slice(1);
-}
-
-/**
- * 这颗选择器的弹层此刻开着没有。共享包的选择器把开关收在自己里面、不对外报，
- * 而系统返回要关它得先知道它开着：触发器的 aria-expanded 就是它对外的事实，
- * 订阅它（MutationObserver）比往包里加一个只为本站用的受控入参便宜。
- */
-function useTriggerExpanded(root: HTMLElement | null): boolean {
-  const subscribe = useCallback(
-    (onChange: () => void) => {
-      if (!root) return () => {};
-      const observer = new MutationObserver(onChange);
-      observer.observe(root, {
-        attributes: true,
-        attributeFilter: ["aria-expanded"],
-        subtree: true,
-      });
-      return () => observer.disconnect();
-    },
-    [root],
-  );
-  return useSyncExternalStore(
-    subscribe,
-    () =>
-      root
-        ?.querySelector(`[data-testid="${TRIGGER_TESTID}"]`)
-        ?.getAttribute("aria-expanded") === "true",
-    () => false,
-  );
-}
-
-/**
- * 系统返回关 sheet：点一下触发器（Radix 对话框的触发器就是开关），走选择器自己的
- * 关闭路径。不用合成 Esc——选择器在搜索框有字时把 Esc 当「先清空」吃掉，sheet 不关，
- * 而历史上那一条记号已经退掉了，下一次返回就会直接离开页面。
- */
-function closeSheetViaTrigger(root: HTMLElement | null) {
-  root
-    ?.querySelector<HTMLElement>(`[data-testid="${TRIGGER_TESTID}"]`)
-    ?.click();
 }
 
 /**
@@ -142,8 +96,7 @@ export default function SessionModelControl({
   // 手机：底部 sheet，打开不聚焦搜索框（键盘不自动弹起）；系统返回先关它。
   const isMobile = useIsMobile();
   const [root, setRoot] = useState<HTMLElement | null>(null);
-  const expanded = useTriggerExpanded(root);
-  useBackDismiss(isMobile && expanded, () => closeSheetViaTrigger(root));
+  const expanded = useTriggerBackDismiss(root, TRIGGER_TESTID, isMobile);
   const wasExpandedRef = useRef(false);
   useEffect(() => {
     if (wasExpandedRef.current && !expanded) onSheetClosed?.();

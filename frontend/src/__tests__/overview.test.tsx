@@ -629,13 +629,12 @@ describe("overview: 只覆盖已保存的对话", () => {
     renderOverview();
 
     const note = await screen.findByTestId("heatmap-timezone");
-    expect(note.textContent).toBe(
-      "Days are counted as calendar days in the server's timezone (Asia/Shanghai).",
-    );
-    expect(note.textContent).not.toMatch(/cut|boundary/i);
+    // 规格 J5「按北京时间统计」类说人话的说法：写时区的人话名字，不露 IANA 标识。
+    expect(note.textContent).toBe("Days are counted in China Standard Time.");
+    expect(note.textContent).not.toMatch(/cut|boundary|Asia\/Shanghai/i);
   });
 
-  it("中文文案：「按服务器时区（…）的自然日统计」", async () => {
+  it("中文文案：「按中国标准时间统计」，不露「服务器时区」与 IANA 标识", async () => {
     await i18n.changeLanguage("zh-CN");
     serve({
       "/v1/stats/overview": statsResponse({ time_zone: "Asia/Shanghai" }),
@@ -643,10 +642,19 @@ describe("overview: 只覆盖已保存的对话", () => {
     renderOverview();
 
     const note = await screen.findByTestId("heatmap-timezone");
-    expect(note.textContent).toBe(
-      "按服务器时区（Asia/Shanghai）的自然日统计。",
-    );
+    expect(note.textContent).toBe("按中国标准时间统计。");
     expect(note.textContent).not.toContain("日界");
+    expect(note.textContent).not.toContain("Asia/Shanghai");
+  });
+
+  it("Intl 叫不出名字的标识：原样写出它，不吞掉", async () => {
+    serve({
+      "/v1/stats/overview": statsResponse({ time_zone: "Not/AZone" }),
+    });
+    renderOverview();
+
+    const note = await screen.findByTestId("heatmap-timezone");
+    expect(note.textContent).toBe("Days are counted in Not/AZone.");
   });
 
   it("服务端没给时区：仍说是按服务器时区的自然日，不编一个名字", async () => {

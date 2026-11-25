@@ -17,6 +17,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { MemoryRouter } from "react-router-dom";
@@ -171,6 +172,23 @@ describe("有本地身份", () => {
     expect(sessionStorage.getItem("csrf")).toBe(ME.csrf_token);
   });
 
+  it("「需要你」角标先用本机存的那一份，不等网络（A1）", async () => {
+    await seedLocal(ME);
+    bindAccount(ME.user_id);
+    await accountStore.put("roster-attention", "latest", {
+      needsAttention: 2,
+      unread: 1,
+    });
+    bindAccount(null);
+    answerMe(never);
+
+    renderApp();
+
+    await screen.findByText("page body");
+    const chat = screen.getByRole("link", { name: /^Chat/ });
+    expect(await within(chat).findByText("3")).toBeTruthy();
+  });
+
   it.each([
     ["断网", new TypeError("Failed to fetch")],
     ["超时", new ApiTimeoutError("/v1/auth/me", 15_000)],
@@ -300,6 +318,9 @@ describe("没有本地身份", () => {
     answerMe(() => first.promise, ...later);
     renderApp();
     await waitFor(() => expect(meCalls()).toBe(1));
+    // 核对与读本地同时起跑，失败要等本地落定才发布：先在真时钟下让本地读走完
+    // （同一个库上的读按先后完成，这一次落定时 App 的那一次已经落定）。
+    await readLocalIdentity();
     fakeClock();
     first.reject(new TypeError("Failed to fetch"));
     await advance(0);
@@ -395,6 +416,61 @@ describe("没有本地身份", () => {
   });
 });
 
+describe("本地存储一直不应答（旧版 iOS 首次打开）", () => {
+  it("没有本地身份可等：不为本地读等满 3 秒，/auth/me 立即发出", async () => {
+    // open 永远不回调：本地读要等 localStore 的 3 秒超时才落定。
+    g.indexedDB = { open: () => ({}) };
+    fakeClock();
+    answerMe(never);
+
+    renderApp();
+    await advance(0);
+
+    expect(meCalls()).toBe(1);
+  });
+
+  it("网络先到、本地后到且是另一个账号：上一个账号的数据仍被清掉", async () => {
+    await seedLocal(ME);
+    const local = deferred<void>();
+    const realFactory = g.indexedDB as IDBFactory;
+    // 本地读被拖住：网络那一份先回来。
+    g.indexedDB = {
+      open: (...args: Parameters<IDBFactory["open"]>) => {
+        const req = realFactory.open(...args);
+        const out = {} as Record<string, unknown>;
+        req.onupgradeneeded = (e) =>
+          (out.onupgradeneeded as ((e: unknown) => void) | undefined)?.(e);
+        req.onerror = (e) =>
+          (out.onerror as ((e: unknown) => void) | undefined)?.(e);
+        req.onsuccess = () => {
+          out.result = req.result;
+          void local.promise.then(() =>
+            (out.onsuccess as (() => void) | undefined)?.(),
+          );
+        };
+        return out;
+      },
+      deleteDatabase: (name: string) => realFactory.deleteDatabase(name),
+    };
+    answerMe(resolves(OTHER));
+
+    renderApp();
+    await waitFor(() => expect(meCalls()).toBe(1));
+    expect(await screen.findByText("page body")).toBeTruthy();
+    local.resolve();
+
+    await waitFor(async () =>
+      expect(await readLocalIdentity()).toMatchObject({ user_id: 2 }),
+    );
+    bindAccount(ME.user_id);
+    await waitFor(async () =>
+      expect(await accountStore.get("list", "all")).toBeUndefined(),
+    );
+    bindAccount(null);
+    expect(sessionStorage.getItem("csrf")).toBe(OTHER.csrf_token);
+  });
+});
+
 describe("身份全局只取一次", () => {
   function Probe({ name }: { name: string }) {
     const { me } = useMe();
@@ -454,6 +530,26 @@ describe("登出", () => {
     bindAccount(ME.user_id);
     expect(await accountStore.get("list", "all")).toBeUndefined();
     bindAccount(null);
+    expect(sessionStorage.getItem("csrf")).toBeNull();
+  });
+
+  it("登出时一次核对还在飞：它晚到也不再把身份与 CSRF 写回本机", async () => {
+    await seedLocal(ME);
+    const late = deferred<Me>();
+    answerMe(() => late.promise);
+    renderApp();
+    await screen.findByText("page body");
+    await waitFor(() => expect(meCalls()).toBe(1));
+
+    signOut();
+    await waitFor(() =>
+      expect(window.location.assign).toHaveBeenCalledWith("/login"),
+    );
+    late.resolve(ME);
+    // 给晚到的 accept 足够的机会跑完（它写身份是异步的）。
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(await readLocalIdentity()).toBeUndefined();
     expect(sessionStorage.getItem("csrf")).toBeNull();
   });
 });

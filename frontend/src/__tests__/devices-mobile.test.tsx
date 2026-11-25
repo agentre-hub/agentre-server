@@ -6,7 +6,13 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ErrCodeInternal } from "@agentre-hub/agentre-wire";
@@ -605,5 +611,91 @@ describe("设备页头下的「网络不稳定」细条（任务 10 遗留）", 
     renderAt("/devices");
     await screen.findByRole("region", { name: "Online" });
     expect(screen.queryByTestId("identity-unstable")).toBeNull();
+  });
+});
+
+/**
+ * 详情页上的浮层（规格 2026-11-25 D1、F3）：••• 菜单、改名框、解除授权确认在手机上
+ * 都是浮层，系统返回先关它、停在原页；解除授权是危险确认，走底部 sheet。
+ */
+describe("手机设备详情页：浮层与返回（D1、F3）", () => {
+  function SystemBack() {
+    const navigate = useNavigate();
+    return (
+      <button data-testid="system-back" onClick={() => void navigate(-1)}>
+        system-back
+      </button>
+    );
+  }
+  function renderDetail() {
+    return render(
+      <MemoryRouter
+        initialEntries={["/devices", "/devices/1"]}
+        initialIndex={1}
+      >
+        <SystemBack />
+        <Routes>
+          <Route
+            path="/devices/:deviceId?"
+            element={
+              <>
+                <Devices />
+                <Where />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+  }
+  const where = () => screen.getByTestId("where").textContent;
+  const back = () => fireEvent.click(screen.getByTestId("system-back"));
+  async function openMenu() {
+    const trigger = await screen.findByTestId("device-menu-1-trigger");
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    return screen.findByRole("menu");
+  }
+
+  it("••• 菜单开着时系统返回只关菜单", async () => {
+    mockConsole();
+    renderDetail();
+    await openMenu();
+    back();
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(where()).toBe("/devices/1");
+  });
+
+  it("改名框开着时系统返回只关它，再返回才回列表", async () => {
+    mockConsole();
+    renderDetail();
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByText("Rename"));
+    await screen.findByRole("dialog");
+    back();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(where()).toBe("/devices/1");
+    back();
+    await waitFor(() => expect(where()).toBe("/devices"));
+  });
+
+  it("解除授权：底部确认 sheet，危险键在上、44px 满宽；系统返回即取消", async () => {
+    mockConsole();
+    renderDetail();
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByText("Revoke"));
+    const sheet = await screen.findByTestId("confirm-sheet");
+    const buttons = within(sheet).getAllByRole("button");
+    expect(buttons[0].dataset.testid).toBe("revoke-device-confirm");
+    for (const b of buttons) expect(b.className).toContain("h-11");
+    back();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(where()).toBe("/devices/1");
+    expect(mockedApi).not.toHaveBeenCalledWith(
+      "/v1/devices/revoke",
+      expect.anything(),
+    );
   });
 });

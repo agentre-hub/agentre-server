@@ -608,7 +608,10 @@ export default function Overview() {
                   >
                     {stats.time_zone
                       ? t("overview.stats.heatmap.timeZone", {
-                          zone: stats.time_zone,
+                          zone: timeZoneDisplayName(
+                            stats.time_zone,
+                            i18n.language,
+                          ),
                         })
                       : t("overview.stats.heatmap.timeZoneUnknown")}
                   </p>
@@ -781,6 +784,25 @@ export default function Overview() {
 }
 
 /** 今天（UTC）的 `YYYY-MM-DD`：还没取到数时用它把骨架网格的右端钉住。 */
+/**
+ * 时区标识（`Asia/Shanghai`）的人话名字（「中国标准时间」/ "China Standard Time"），
+ * 规格 J5「按北京时间统计」类的说法。Intl 认不得或叫不出名字时原样交回标识——
+ * 宁可露一个标识，也不替它编一个名字。
+ */
+function timeZoneDisplayName(zone: string, locale: string): string {
+  try {
+    const part = new Intl.DateTimeFormat(locale, {
+      timeZone: zone,
+      timeZoneName: "long",
+    })
+      .formatToParts(new Date())
+      .find((p) => p.type === "timeZoneName");
+    return part?.value || zone;
+  } catch {
+    return zone;
+  }
+}
+
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
 }

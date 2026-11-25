@@ -54,6 +54,7 @@ import {
   deviceVersionText,
 } from "@/components/devices/DeviceUpgrade";
 import AppShell, { IdentityUnstableStrip } from "@/components/AppShell";
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
 import {
   PhoneHeaderButton,
   PhonePage,
@@ -62,6 +63,7 @@ import {
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss, useBackDismissOpen } from "@/hooks/use-back-dismiss";
 import { useLatestRelease } from "@/hooks/use-latest-release";
 import { useMe } from "@/hooks/use-me";
 import { useRelayChannel } from "@/hooks/use-relay";
@@ -219,8 +221,10 @@ function DeviceRowMenu({
   touch?: boolean;
 }) {
   const { t } = useTranslation();
+  // 手机上它是浮层：系统返回先关菜单、停在原页（D1）。
+  const menu = useBackDismissOpen();
   return (
-    <DropdownMenu>
+    <DropdownMenu {...menu}>
       <DropdownMenuTrigger asChild>
         {touch ? (
           <PhoneHeaderButton
@@ -1083,6 +1087,11 @@ export default function Devices() {
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameSubmitting, setRenameSubmitting] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // 两个确认框在手机上都是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(renaming !== null, () => {
+    setRenameError(null);
+    setRenaming(null);
+  });
   // Radix 打开时把焦点给第一个可聚焦元素（页头的 ✕），autoFocus 抢不过它；
   // 等它落定后再把焦点拿回输入框（I23）。
   useEffect(() => {
@@ -1336,61 +1345,93 @@ export default function Devices() {
       </DialogShell>
 
       {/* 撤销确认：由行级菜单进入；失败保留上下文显示真实错误，成功刷新真实状态 */}
-      <DialogShell
-        open={!!revoking}
-        onOpenChange={(o) => {
-          if (!o && !submitting) {
+      {isMobile ? (
+        // 手机：底部确认 sheet，危险键在上、44px 满宽堆叠（F3）；返回即取消。
+        <ConfirmSheet
+          open={!!revoking}
+          title={t("device.manage.revokeConfirmTitleNamed", {
+            name: revoking ? deviceDisplayName(revoking) : "",
+          })}
+          description={t("device.manage.revokeConfirmBody")}
+          error={revokeError}
+          onCancel={() => {
+            if (submitting) return;
             setRevokeError(null);
             setRevoking(null);
-          }
-        }}
-        size="sm"
-        danger
-        busy={submitting}
-      >
-        {/*
+          }}
+          actions={[
+            {
+              label: t("device.manage.revokeConfirm"),
+              variant: "destructive",
+              testId: "revoke-device-confirm",
+              disabled: submitting,
+              onSelect: () => void onRevoke(),
+            },
+            {
+              label: t("device.manage.revokeCancel"),
+              variant: "secondary",
+              disabled: submitting,
+              onSelect: () => setRevoking(null),
+            },
+          ]}
+        />
+      ) : (
+        <DialogShell
+          open={!!revoking}
+          onOpenChange={(o) => {
+            if (!o && !submitting) {
+              setRevokeError(null);
+              setRevoking(null);
+            }
+          }}
+          size="sm"
+          danger
+          busy={submitting}
+        >
+          {/*
           标题点名是哪一台：入口是行菜单里的浮层，确认框是模态、盖住整页——
           按下去那一刻用户已经看不见自己点的是哪一行了，而这一页上四台机器
           名字相近是常态。
         */}
-        <DialogShellHeader
-          title={t("device.manage.revokeConfirmTitleNamed", {
-            name: revoking ? deviceDisplayName(revoking) : "",
-          })}
-          danger
-          busy={submitting}
-        />
-        <DialogShellBody>
-          {revoking && (
-            <p
-              data-testid="revoke-device-facts"
-              className="mb-2 text-xs text-muted-foreground"
-            >
-              {revokingFacts}
-            </p>
-          )}
-          <p className="text-aux leading-relaxed text-muted-foreground">
-            {t("device.manage.revokeConfirmBody")}
-          </p>
-        </DialogShellBody>
-        {/* 整窗级错误落在脚部左侧、与按钮同一行：点了按钮的人视线就在那（规范 4）。 */}
-        <DialogShellFooter error={revokeError}>
-          <Button
-            variant="outline"
-            disabled={submitting}
-            onClick={() => setRevoking(null)}
-          >
-            {t("device.manage.revokeCancel")}
-          </Button>
-          <DialogShellSubmit
-            variant="destructive"
+          <DialogShellHeader
+            title={t("device.manage.revokeConfirmTitleNamed", {
+              name: revoking ? deviceDisplayName(revoking) : "",
+            })}
+            danger
             busy={submitting}
-            onClick={onRevoke}
-          >
-            {t("device.manage.revokeConfirm")}
-          </DialogShellSubmit>
-        </DialogShellFooter>
-      </DialogShell>
+          />
+          <DialogShellBody>
+            {revoking && (
+              <p
+                data-testid="revoke-device-facts"
+                className="mb-2 text-xs text-muted-foreground"
+              >
+                {revokingFacts}
+              </p>
+            )}
+            <p className="text-aux leading-relaxed text-muted-foreground">
+              {t("device.manage.revokeConfirmBody")}
+            </p>
+          </DialogShellBody>
+          {/* 整窗级错误落在脚部左侧、与按钮同一行：点了按钮的人视线就在那（规范 4）。 */}
+          <DialogShellFooter error={revokeError}>
+            <Button
+              variant="outline"
+              disabled={submitting}
+              onClick={() => setRevoking(null)}
+            >
+              {t("device.manage.revokeCancel")}
+            </Button>
+            <DialogShellSubmit
+              variant="destructive"
+              busy={submitting}
+              onClick={onRevoke}
+            >
+              {t("device.manage.revokeConfirm")}
+            </DialogShellSubmit>
+          </DialogShellFooter>
+        </DialogShell>
+      )}
     </>
   );
 

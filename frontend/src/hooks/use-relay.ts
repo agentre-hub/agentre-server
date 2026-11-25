@@ -215,8 +215,28 @@ export function useRelayChannel(
             });
           });
       };
+      /*
+        联网、回到前台时立即重试（规格 E「网络恢复（online）、回到前台时立即重试」）。
+        连接建出来之后这件事归池子的前台监听（RelayClientPool.watchForeground）；票都
+        没换到时还没有连接，那份监听也还没装上，所以退避中的这一段由这里自己听。
+        只在排着重取时才动：取票途中再取一次只是多发一个请求。
+      */
+      const retryNow = () => {
+        if (!alive() || !retry.pending) return;
+        if (document.visibilityState === "hidden") return;
+        retry.cancel();
+        setNextRetryAt(null);
+        setRelayState("connecting");
+        tryAcquire();
+      };
+      window.addEventListener("online", retryNow);
+      window.addEventListener("pageshow", retryNow);
+      document.addEventListener("visibilitychange", retryNow);
       tryAcquire();
       return () => {
+        window.removeEventListener("online", retryNow);
+        window.removeEventListener("pageshow", retryNow);
+        document.removeEventListener("visibilitychange", retryNow);
         retry.cancel();
         // 还回去，不是关掉：同一台机器上目录选择器 / 派发可能正搭着这一条。
         lease?.release();

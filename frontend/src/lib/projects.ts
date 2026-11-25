@@ -124,7 +124,11 @@ export const projectRoster = createRoster(
  * 为真 = 重读了、没找到，可以再提交。文案由 `projectFailureText` 按它说。
  */
 export class ProjectCreateTimeoutError extends Error {
-  constructor(public checked: boolean) {
+  constructor(
+    public checked: boolean,
+    /** 提交前的基线（有才能事后核实）；重读失败时带上，再提交前据此先核实一次。 */
+    public knownBefore: ReadonlySet<string> | null = null,
+  ) {
     super("project create timed out");
     this.name = "ProjectCreateTimeoutError";
   }
@@ -165,14 +169,28 @@ export async function createProject(
     if (!(err instanceof ApiTimeoutError)) throw err;
     const known = await baseline;
     if (!known) throw new ProjectCreateTimeoutError(false);
-    try {
-      const found = findCreatedProject(await fetchProjects(), fields, known);
-      if (found) return { sync_id: found.syncId, version: 0 };
-    } catch {
-      throw new ProjectCreateTimeoutError(false);
-    }
+    const found = await verifyProjectCreate(fields, known);
+    if (found) return found;
     throw new ProjectCreateTimeoutError(true);
   }
+}
+
+/**
+ * 上一次新建超时后核实：重读整份名单，认出「提交前没见过 + 同名同上级」的那个就返回它；
+ * 确定没有返回 null；重读失败抛 `ProjectCreateTimeoutError(false)`（仍不知道建没建）。
+ */
+export async function verifyProjectCreate(
+  fields: ProjectFields,
+  known: ReadonlySet<string>,
+): Promise<OrgWriteResponse | null> {
+  let rows: ProjectNode[];
+  try {
+    rows = await fetchProjects();
+  } catch {
+    throw new ProjectCreateTimeoutError(false, known);
+  }
+  const found = findCreatedProject(rows, fields, known);
+  return found ? { sync_id: found.syncId, version: 0 } : null;
 }
 
 export function updateProject(

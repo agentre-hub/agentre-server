@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useLocation,
   useNavigate,
@@ -9,6 +9,31 @@ import {
 import { useIsMobile } from "@/components/use-is-mobile";
 
 const BACK_DISMISS_STATE_KEY = "agentreBackDismiss";
+
+/**
+ * 某一层从界面关掉、正在退它的记号：浏览器的 history.go 是异步的，退完之前地址还停在
+ * 那条记号上。记着发起时那一条的 key；同一次提交里另一层要开（信息层 → 删除确认、
+ * ••• 菜单 → 改名框），得等这一退落地再压，否则新压的记号会被这一退带走、多留一格。
+ */
+let pendingPop: { key: string } | null = null;
+
+interface Entry {
+  level: number;
+  landed: boolean;
+  pathname: string;
+  // 另一层的退记号还没落地：等地址换了再压。
+  deferred?: boolean;
+  // 下面那一层关掉、把它的记号让给这一层：退到那一格（层数 = adopt）后认作自己的。
+  adopt?: number;
+  // 页面 replace 了地址、正在把多出来的那一格收回去：记着要落到的地址。
+  collapse?: { to: Location; key: string };
+}
+
+/**
+ * 眼下各层的记号。反过来的次序也会发生：新的一层先压（Radix 菜单项的 onSelect 先单独
+ * 提交），菜单在下一次提交才关——这时菜单的记号已被压在下面，直接退会把新的一层退掉。
+ */
+const liveEntries = new Set<{ current: Entry | null }>();
 
 /** 当前这一条历史上记着的浮层层数；没有记号按 0 算。 */
 export function backDismissLayerOf(state: unknown): number {
@@ -47,13 +72,13 @@ export function useBackDismiss(open: boolean, close: () => void): void {
     closeRef.current = close;
   });
   // 这一层的记号：level 是压进去的层数，landed 是已经在 location 上看到它落地。
-  const entryRef = useRef<{
-    level: number;
-    landed: boolean;
-    pathname: string;
-    // 页面 replace 了地址、正在把多出来的那一格收回去：记着要落到的地址。
-    collapse?: { to: Location; key: string };
-  } | null>(null);
+  const entryRef = useRef<Entry | null>(null);
+  useEffect(() => {
+    liveEntries.add(entryRef);
+    return () => {
+      liveEntries.delete(entryRef);
+    };
+  }, []);
 
   // 在当前地址上压一条带记号的历史，并记下这一层。
   const push = useCallback(
@@ -77,7 +102,15 @@ export function useBackDismiss(open: boolean, close: () => void): void {
   const active = open && enabled;
   useEffect(() => {
     if (active) {
-      if (!entryRef.current) push();
+      if (entryRef.current) return;
+      if (pendingPop?.key === locationRef.current.key) {
+        entryRef.current = {
+          level: 0,
+          landed: false,
+          pathname: locationRef.current.pathname,
+          deferred: true,
+        };
+      } else push();
       return;
     }
     const entry = entryRef.current;
@@ -88,6 +121,12 @@ export function useBackDismiss(open: boolean, close: () => void): void {
       entry.landed &&
       backDismissLayerOf(locationRef.current.state) >= entry.level
     ) {
+      // 上面已经压了别的层：退一格后那一层接过这条记号，历史与只开它时一样长。
+      const above = [...liveEntries]
+        .map((r) => r.current)
+        .find((e) => e !== null && !e.deferred && e.level > entry.level);
+      if (above) above.adopt = entry.level;
+      else pendingPop = { key: locationRef.current.key };
       void navigate(-1);
     }
   }, [active, navigate, push]);
@@ -99,8 +138,21 @@ export function useBackDismiss(open: boolean, close: () => void): void {
   //     把新地址 replace 上去，再压回记号——历史与没开浮层时一样长。
   const layer = backDismissLayerOf(location.state);
   useEffect(() => {
+    if (pendingPop && pendingPop.key !== location.key) pendingPop = null;
     const entry = entryRef.current;
     if (!entry) return;
+    if (entry.deferred) {
+      if (!pendingPop) push(location);
+      return;
+    }
+    if (entry.adopt !== undefined) {
+      if (layer === entry.adopt) {
+        entry.level = entry.adopt;
+        entry.adopt = undefined;
+        entry.landed = true;
+      }
+      return;
+    }
     if (entry.collapse) {
       if (layer === 0 && location.key !== entry.collapse.key) {
         const to = entry.collapse.to;
@@ -129,4 +181,17 @@ export function useBackDismiss(open: boolean, close: () => void): void {
       }
     }
   }, [layer, location, navigationType, navigate, push]);
+}
+
+/**
+ * 自己管开关的浮层（••• 菜单、下拉选择）在手机上接返回键：给 Radix 根的
+ * `open` / `onOpenChange` 直接展开用。
+ */
+export function useBackDismissOpen(): {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+} {
+  const [open, setOpen] = useState(false);
+  useBackDismiss(open, () => setOpen(false));
+  return { open, onOpenChange: setOpen };
 }

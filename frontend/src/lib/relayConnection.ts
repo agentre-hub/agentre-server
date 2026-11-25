@@ -62,6 +62,12 @@ export function isSignedOutError(err: unknown): boolean {
  */
 const DEAD_AFTER_TIMEOUTS = 2;
 
+/**
+ * 一次拨号最多等多久（默认）。lie-fi 下 socket 可能既不 open 也不 close：不设上限就永远
+ * 停在「连接中」、也排不出下一次重试（E1「持续退避重试」）。等满即按一次拨号失败退避。
+ */
+const DIAL_TIMEOUT_MS = 15_000;
+
 /** 账号信号那条保留通道，与服务端 relay_svc.SignalChannelID 同一个值。 */
 export const SignalChannelID = "~signal";
 
@@ -136,6 +142,8 @@ export interface RelayConnectionOptions {
    * 「连上 → 立刻断 → 等 1 秒」上打转，等于对着一个已经不健康的依赖每秒一次。
    */
   stableConnectionMs?: number;
+  /** 一次拨号最多等多久才判失败（默认 DIAL_TIMEOUT_MS）。 */
+  dialTimeoutMs?: number;
   /** [0,1) 的抖动源，测试注入定值。 */
   random?: () => number;
   /** WebSocket 工厂接缝，测试注入假实现。 */
@@ -270,7 +278,27 @@ export class RelayConnection {
       this.ws = ws;
       this.deadSocket = null;
       this.replacing = false;
+      // 拨号悬着不回（既不 open 也不 close）：等满上限把它摘下来，按一次拨号失败收尾。
+      // 先摘掉回调再关，不指望悬着的那条还会按时报 close。
+      const dialTimer = setTimeout(() => {
+        if (this.ws !== ws || ws.readyState === OPEN) return;
+        ws.onopen = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        this.ws = null;
+        this.deadSocket = ws;
+        this.connectPromise = null;
+        try {
+          ws.close();
+        } catch {
+          // 关不掉也无妨：它已经不是当前这条了。
+        }
+        this.handleClose();
+        reject(new Error("relay: WebSocket 拨号超时"));
+      }, this.opts.dialTimeoutMs ?? DIAL_TIMEOUT_MS);
       ws.onopen = () => {
+        clearTimeout(dialTimer);
         this.connectedAt = Date.now();
         this.timeouts = 0;
         this.setState("connected");
@@ -292,6 +320,7 @@ export class RelayConnection {
       };
       ws.onmessage = (ev: MessageEvent) => this.handleMessage(ev.data);
       ws.onclose = () => {
+        clearTimeout(dialTimer);
         // 只有**当前**这条 socket 的收尾才作数：被换掉的旧 socket 的 close 总在
         // 新连接建立之后才到，照单全收会把一条刚连上的连接判成断线。
         if (this.ws !== ws) return;

@@ -35,7 +35,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { IdentityUnstableStrip } from "@/components/AppShell";
 import { EmptyState, MobileNavButton } from "@/components/console";
@@ -48,6 +48,7 @@ import {
 } from "@/components/session/SessionIndex";
 import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { toAgentStatus } from "@/lib/attentionAdapter";
+import { describeFailure } from "@/lib/describeFailure";
 import { conversationDraftKey, useDraftMap } from "@/lib/drafts";
 import { useOutboxMap } from "@/lib/outbox";
 import { useStoppingRows } from "@/pages/chat/stopRowTurn";
@@ -194,6 +195,8 @@ export interface PhoneChatIndexProps {
    * 错误态（宿主那时也不该再递取数失败的横幅）；已有行时由横幅说。
    */
   loadFailed?: boolean;
+  /** 那次失败的原值：错误态的正文与出口经 describeFailure 分类（401 给「重新登录」）。 */
+  loadError?: unknown;
   onRetry?: () => void;
 }
 
@@ -271,9 +274,11 @@ export function PhoneChatIndex({
   onLoadMore,
   banners,
   loadFailed = false,
+  loadError,
   onRetry,
 }: PhoneChatIndexProps) {
   const { t, i18n } = useTranslation();
+  const location = useLocation();
   const { t: uiT } = useUiTranslation();
   const drafts = useDraftMap();
   const outbox = useOutboxMap();
@@ -536,19 +541,38 @@ export function PhoneChatIndex({
       </div>
     );
   } else if (rows.length === 0 && loadFailed) {
+    // 原因与出口经分类（规格 G1、G2）：502 / 门户页说「服务暂时不可用（状态码）」，
+    // 401 的出口是重新登录——重试只会再得一个 401。原文不上屏。
+    const failure =
+      loadError === undefined
+        ? null
+        : describeFailure(loadError, {
+            t,
+            what: t("sessionIndex.loadFailedWhat"),
+          });
     body = (
       <div className="px-6 py-8">
         <EmptyState
           icon={TriangleAlert}
           tone="danger"
           title={t("chat.phone.loadFailed.title")}
-          body={t("chat.phone.loadFailed.body")}
+          body={failure?.message ?? t("chat.phone.loadFailed.body")}
           testId="chat-load-failed"
           action={
-            <Button size="lg" className="h-11 w-full" onClick={onRetry}>
-              <RotateCw aria-hidden="true" />
-              {t("sessionIndex.loadMore.retry")}
-            </Button>
+            failure?.exit === "signIn" ? (
+              <Button asChild size="lg" className="h-11 w-full">
+                <a
+                  href={`/login?next=${encodeURIComponent(location.pathname + location.search)}`}
+                >
+                  {t("common.failure.signIn")}
+                </a>
+              </Button>
+            ) : (
+              <Button size="lg" className="h-11 w-full" onClick={onRetry}>
+                <RotateCw aria-hidden="true" />
+                {t("sessionIndex.loadMore.retry")}
+              </Button>
+            )
           }
         />
       </div>

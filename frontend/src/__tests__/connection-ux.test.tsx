@@ -486,6 +486,53 @@ describe("E5：机器「不可达」去抖约 3 秒", () => {
     await advance(10);
     expect(probe.states()[7]).not.toBe("unreachable");
   });
+
+  it("去抖按机器各算各的：一台已确认不可达，另一台刚抖一下不跟着报", async () => {
+    stubClient();
+    const other = { ...machine, id: 8, fingerprint: "fp-8", name: "pi" };
+    const perMachine: Record<string, RelayState> = {
+      "fp-7": "connected",
+      "fp-8": "connected",
+    };
+    mockUseRelay.mockImplementation((target: unknown) => {
+      const fp = String(target).replace(/^machine:/, "");
+      return {
+        client: fakeClient as never,
+        relayState: perMachine[fp] ?? "connected",
+        relayTicket: null,
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect,
+      };
+    });
+    let latest: Record<number, string> = {};
+    function TwoProbe() {
+      const reach = useMachineReachability({
+        devices: [machine, other],
+        axis: "machine",
+        keyword: "",
+        filter: "all",
+      });
+      latest = reach.machineStates;
+      return <>{reach.resolvers}</>;
+    }
+    const view = render(<TwoProbe />);
+    await advance(10);
+
+    perMachine["fp-7"] = "reconnecting";
+    await act(async () => view.rerender(<TwoProbe />));
+    await advance(3_100);
+    expect(latest[7]).toBe("unreachable");
+
+    perMachine["fp-8"] = "reconnecting";
+    await act(async () => view.rerender(<TwoProbe />));
+    await advance(1_000);
+    expect(latest[7]).toBe("unreachable");
+    expect(latest[8]).not.toBe("unreachable");
+
+    await advance(2_500);
+    expect(latest[8]).toBe("unreachable");
+  });
 });
 
 describe("E1：首页页头副行", () => {
@@ -642,9 +689,12 @@ describe("H5：离线时只留底部只读带（手机）", () => {
     ]);
     stubClient();
     mountDetail();
-    await screen.findByTestId("session-compose-readonly");
+    const band = await screen.findByTestId("session-compose-readonly");
     expect(
       document.querySelector('[data-session-status="desktopAppNotRunning"]'),
     ).not.toBeNull();
+    // 桌面宽度布局不变：「最后在线」仍只由顶部横幅说，只读带不复述。
+    expect(screen.queryByTestId("session-compose-last-seen")).toBeNull();
+    expect(band.textContent).not.toMatch(/last seen/i);
   });
 });

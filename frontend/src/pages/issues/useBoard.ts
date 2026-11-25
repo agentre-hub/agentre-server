@@ -20,6 +20,7 @@ import type {
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import i18n from "@/i18n";
 import { ApiTimeoutError } from "@/lib/api";
+import { localizeTransportFailure } from "@/lib/writeFailure";
 import {
   findSubmittedIssue,
   isFiltering,
@@ -114,6 +115,11 @@ export function useBoard(
     fields: IssueFields;
     /** 提交前**不带筛选**的全量标识（读不到则退回当前板上那份）。 */
     knownBefore: Promise<ReadonlySet<string>>;
+  } | null>(null);
+  /** 新建标签超时且重读失败：那次提交的名字与基线，再提交前据此先核实。 */
+  const unverifiedLabelRef = React.useRef<{
+    name: string;
+    known: ReadonlySet<string>;
   } | null>(null);
 
   /**
@@ -269,6 +275,30 @@ export function useBoard(
     async (mutation: LabelMutation) => {
       switch (mutation.kind) {
         case "create": {
+          // 认「新的 + 同名」：提交前没见过、名字（去空白）一致。
+          const createdIn = (
+            all: IssueBoardResponse | null,
+            known: ReadonlySet<string>,
+          ) =>
+            (all?.labels ?? []).some(
+              (l) =>
+                !known.has(l.sync_id) && l.name.trim() === mutation.name.trim(),
+            );
+          // 上一次超时连重读都失败了：那次可能已经建好。先拿它的基线核实——认出就当作
+          // 建成，读仍失败就不发第二个 POST，确定没有才照常提交（规格 F5）。
+          const pending = unverifiedLabelRef.current;
+          if (pending && pending.name.trim() === mutation.name.trim()) {
+            let all: IssueBoardResponse | null;
+            try {
+              all = await fetchBoard("");
+            } catch (cause) {
+              throw new Error(i18n.t("issues.labelTimeoutUnchecked"), {
+                cause,
+              });
+            }
+            unverifiedLabelRef.current = null;
+            if (createdIn(all, pending.known)) break;
+          }
           // 提交前的基线取内存里这份名单（不另发读，POST 不等任何东西）；板子还没读回来
           // 时没有基线，超时后不敢认。
           const knownBefore =
@@ -281,13 +311,19 @@ export function useBoard(
               tone: mutation.tone,
             });
           } catch (err) {
-            if (!(err instanceof ApiTimeoutError)) throw err;
+            if (!(err instanceof ApiTimeoutError))
+              throw localizeTransportFailure(err);
             // 超时：请求可能已经写进去了。重读全量名单（不带板子当前的筛选）认「新的 +
             // 同名」，认出就当作建成，认不出才让用户再提交。文案不露英文原文。
             let all: IssueBoardResponse | null;
             try {
               all = await fetchBoard("");
             } catch (cause) {
+              if (knownBefore !== null)
+                unverifiedLabelRef.current = {
+                  name: mutation.name,
+                  known: knownBefore,
+                };
               throw new Error(i18n.t("issues.labelTimeoutUnchecked"), {
                 cause,
               });
@@ -297,11 +333,7 @@ export function useBoard(
                 cause: err,
               });
             }
-            const found = (all?.labels ?? []).some(
-              (l) =>
-                !knownBefore.has(l.sync_id) &&
-                l.name.trim() === mutation.name.trim(),
-            );
+            const found = createdIn(all, knownBefore);
             if (!found) {
               throw new Error(i18n.t("issues.labelTimeoutNotFound"), {
                 cause: err,
@@ -310,14 +342,21 @@ export function useBoard(
           }
           break;
         }
+        // 传输层失败的原文是英文诊断：换成当前语言的一句话（F5、G2）。
         case "update":
           await updateIssueLabel(ids.syncIdOf(mutation.id), {
             name: mutation.name,
             tone: mutation.tone,
+          }).catch((err: unknown) => {
+            throw localizeTransportFailure(err);
           });
           break;
         case "delete":
-          await deleteIssueLabel(ids.syncIdOf(mutation.id));
+          await deleteIssueLabel(ids.syncIdOf(mutation.id)).catch(
+            (err: unknown) => {
+              throw localizeTransportFailure(err);
+            },
+          );
           break;
       }
       await reload();

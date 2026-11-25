@@ -63,6 +63,7 @@ import {
   type SkillPack as SkillPackSummary,
   type SkillTriState,
 } from "@/lib/skillCatalog";
+import { useBackDismissOpen } from "@/hooks/use-back-dismiss";
 import type { OrgBackendItem, OrgExecTargetItem } from "./types";
 
 function toBackendModel(
@@ -211,6 +212,8 @@ function dragTier(
 export function OrgExecTargetSection(props: OrgExecTargetSectionProps) {
   const { t } = useTranslation();
   const [announcement, setAnnouncement] = React.useState("");
+  // 「添加执行目标」菜单在手机上是浮层：系统返回先关它（D1）。
+  const addMenu = useBackDismissOpen();
   const usedBackendIds = new Set(
     props.targets.map((tg) => tg.backend_sync_id).filter(Boolean),
   );
@@ -308,7 +311,7 @@ export function OrgExecTargetSection(props: OrgExecTargetSectionProps) {
         <h3 className="font-mono text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
           {t("org.detail.execTargets.title")}
         </h3>
-        <DropdownMenu>
+        <DropdownMenu {...addMenu}>
           <DropdownMenuTrigger asChild>
             <Button
               type="button"

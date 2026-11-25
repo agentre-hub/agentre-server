@@ -36,7 +36,7 @@ import {
   vi,
 } from "vitest";
 
-import { ApiError, api } from "@/lib/api";
+import { ApiError, ApiTimeoutError, api } from "@/lib/api";
 import { listCLIModelsOn } from "@/lib/cliModels";
 import {
   DispatchRunError,
@@ -3184,6 +3184,43 @@ describe("手机上的新对话", () => {
       ),
     );
   });
+
+  /** 规格 G1：名单读失败时不说「还没有 Agent / 项目」，原位一行说明 + 44px 重试。 */
+  it("Agent 名单读失败：不出「还没有 Agent」，原位说明 + 44px 重试，重试后列出来", async () => {
+    stubReads();
+    const succeed = mockedApi.getMockImplementation()!;
+    let failing = true;
+    mockedApi.mockImplementation(async (path: string, ...rest) => {
+      if (failing && path.startsWith("/v1/workspace/agents"))
+        throw new ApiTimeoutError("/v1/workspace/agents", 15000);
+      return succeed(path, ...rest);
+    });
+    const sheet = await openPhoneSheet();
+    const failed = await within(sheet).findByTestId("agent-pick-failed");
+    expect(within(sheet).queryByTestId("agent-pick-empty")).toBeNull();
+    expect(failed.textContent).not.toContain("timed out");
+    const retry = within(failed).getByRole("button", { name: "Retry" });
+    expect(retry.className).toContain("min-h-11");
+    failing = false;
+    fireEvent.click(retry);
+    expect(await within(sheet).findByTestId("agent-pick-agent-1")).toBeTruthy();
+  });
+
+  it("项目树读失败：不出「还没有项目」，原位说明 + 重试", async () => {
+    stubReads();
+    const succeed = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path: string, ...rest) => {
+      if (path.startsWith("/v1/workspace/projects"))
+        throw new ApiTimeoutError("/v1/workspace/projects", 15000);
+      return succeed(path, ...rest);
+    });
+    const sheet = await openPhoneSheet();
+    fireEvent.click(within(sheet).getByTestId("sheet-from-project"));
+    const pane = await screen.findByTestId("project-agent-pane");
+    const failed = await within(pane).findByTestId("project-tree-failed");
+    expect(pane.textContent).not.toContain(i18n.t("chat.noProjects"));
+    expect(within(failed).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
 });
 
 /**
@@ -3247,6 +3284,30 @@ describe("手机上新对话各步骤进历史", () => {
     );
     return screen.findByTestId("new-conversation-sheet");
   }
+
+  // 草稿页上的浮层（D1）：项目、运行在两行事实开出的选择弹层，系统返回先关它、停在草稿页。
+  it.each([
+    ["draft-fact-project", "draft-project-none"],
+    ["draft-fact-target", "draft-tier-3"],
+  ])(
+    "草稿页上点 %s 开的选择弹层：系统返回只关弹层，草稿页还在",
+    async (fact, inside) => {
+      const sheet = await openSheet();
+      fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+      await screen.findByTestId("draft-session");
+      await waitFor(() =>
+        expect(screen.getByTestId(fact).hasAttribute("disabled")).toBe(false),
+      );
+      fireEvent.click(screen.getByTestId(fact));
+      await screen.findByTestId(inside);
+
+      systemBack();
+
+      await waitFor(() => expect(screen.queryByTestId(inside)).toBeNull());
+      expect(screen.getByTestId("draft-session")).toBeTruthy();
+      expect(historyPath()).toBe("/chat");
+    },
+  );
 
   it("挑 Agent 进草稿：系统返回回到列表（不是上一页、也不是弹层），再返回才离开", async () => {
     const sheet = await openSheet();

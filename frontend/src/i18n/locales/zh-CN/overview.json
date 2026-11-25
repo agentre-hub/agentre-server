@@ -69,7 +69,7 @@
         "wed": "三",
         "fri": "五"
       },
-      "timeZone": "按服务器时区（{{zone}}）的自然日统计。",
+      "timeZone": "按{{zone}}统计。",
       "timeZoneUnknown": "按服务器时区的自然日统计。"
     },
     "agents": {

@@ -84,4 +84,34 @@ describe("新建项目超时（F5、W13）", () => {
     if (out.ok) return;
     expect(out.failure.message).toContain("可能已经建好了");
   });
+
+  it("重读失败后再提交：先核实；读仍失败就不发第二个 POST（找不到才允许再提交）", async () => {
+    await projectRoster.get();
+    readsFail = true;
+    const ports = createProjectCreatePorts(createProjectFsPort());
+    const first = await ports.create({ name: "X" } as never);
+    expect(first.ok).toBe(false);
+    expect(postCount).toBe(1);
+    // 再提交一次：核实的读仍失败 → 不 POST，仍说「可能已经建好了」。
+    const again = await ports.create({ name: "X" } as never);
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.failure.message).toContain("可能已经建好了");
+    expect(postCount).toBe(1);
+    // 读恢复了，认出那一条：当作建成，仍不 POST。
+    readsFail = false;
+    server.push(wire("made-x", "X"));
+    const res = await ports.create({ name: "X" } as never);
+    expect(res).toEqual({ ok: true, id: "made-x" });
+    expect(postCount).toBe(1);
+  });
+
+  it("重读失败后再提交、核实确实没有：这才发第二个 POST", async () => {
+    await projectRoster.get();
+    readsFail = true;
+    const ports = createProjectCreatePorts(createProjectFsPort());
+    await ports.create({ name: "X" } as never);
+    readsFail = false;
+    await ports.create({ name: "X" } as never);
+    expect(postCount).toBe(2);
+  });
 });

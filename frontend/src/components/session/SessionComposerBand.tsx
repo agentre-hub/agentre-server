@@ -174,6 +174,11 @@ export interface SessionComposerBandProps {
    * d9）：三键置灰、键上方写「正在确认是否还在等你」。不给 = 原样。
    */
   dockConfirming?: boolean;
+  /**
+   * 这条对话连上过、此刻在换连接（取票期间「连接中」，规格 E3）：输入框照常可用，
+   * 发送走排队。不给 = 原样（只有已连接 / 重连中可用）。
+   */
+  connectionReplacing?: boolean;
 }
 
 /**
@@ -227,6 +232,7 @@ export default function SessionComposerBand({
   dockedPermission,
   decisionPorts,
   dockConfirming = false,
+  connectionReplacing = false,
 }: SessionComposerBandProps) {
   const { t, i18n } = useTranslation();
   const composerModule = useSessionComposerModule();
@@ -321,21 +327,29 @@ export default function SessionComposerBand({
             ) : (
               <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />
             )}
-            <span className="flex min-w-0 flex-col">
-              <span>{readonlyNote}</span>
-              {/* 最后在线只在这一处说（规格 H5）：页头只写「离线」，手机上顶部横幅撤了。 */}
-              {machineLastSeenMs && status !== "deviceRevoked" ? (
-                <time
-                  data-testid="session-compose-last-seen"
-                  dateTime={new Date(machineLastSeenMs).toISOString()}
-                  title={new Date(machineLastSeenMs).toLocaleString()}
-                >
-                  {t("session.banner.lastSeen", {
-                    time: formatRelativeTime(machineLastSeenMs, i18n.language),
-                  })}
-                </time>
-              ) : null}
-            </span>
+            {/* 最后在线只在这一处说（规格 H5）：页头只写「离线」，手机上顶部横幅撤了。
+                桌面宽度横幅还在、由它说「最后在线」，这一带保持原样（桌面布局不变）。 */}
+            {isMobile ? (
+              <span className="flex min-w-0 flex-col">
+                <span>{readonlyNote}</span>
+                {machineLastSeenMs && status !== "deviceRevoked" ? (
+                  <time
+                    data-testid="session-compose-last-seen"
+                    dateTime={new Date(machineLastSeenMs).toISOString()}
+                    title={new Date(machineLastSeenMs).toLocaleString()}
+                  >
+                    {t("session.banner.lastSeen", {
+                      time: formatRelativeTime(
+                        machineLastSeenMs,
+                        i18n.language,
+                      ),
+                    })}
+                  </time>
+                ) : null}
+              </span>
+            ) : (
+              readonlyNote
+            )}
             {/* 手机上停在这一带的出口：去看那台机器（撤销那一档它不会回来，不摆）。 */}
             {isMobile && status !== "deviceRevoked" ? (
               <Link
@@ -409,7 +423,11 @@ export default function SessionComposerBand({
                 重连期间**不禁用**（决策 6）：重连通常几秒就回来，禁用换来的只是
                 让人干等着。这时按发送会排一条看得见的队，连上自动发出。
               */
-            disabled={status !== "connected" && status !== "reconnecting"}
+            disabled={
+              status !== "connected" &&
+              status !== "reconnecting" &&
+              !connectionReplacing
+            }
             // 在途单独说，不折进 disabled：包据此把提交键转成 spinner，输入框保持
             // 可用，用户还能接着敲下一句。
             sending={sending}

@@ -222,9 +222,17 @@ export default function AppShell({
       .catch(() => {});
   }, []);
   useAliveEffect((alive) => {
+    // 本地优先（规格 2026-11-25 决策 A1）：冷启动先画本机存的上一份角标，网络那一份
+    // 到了再替换；网络先到就不要存储里的。
+    let landed = false;
+    void attentionRoster.stored().then((counts) => {
+      if (!alive() || landed || !counts) return;
+      setAttention(counts);
+    });
     attentionRoster
       .get()
       .then((counts) => {
+        landed = true;
         if (!alive()) return;
         setAttention(counts);
       })

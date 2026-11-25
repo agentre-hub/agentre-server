@@ -9,6 +9,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import SendAttachments from "@/components/session/SendAttachments";
+import { useIsMobile } from "@/components/use-is-mobile";
 import type { SendFailureKind } from "@/lib/sessionView";
 
 /**
@@ -83,6 +84,8 @@ export default function SendFailureBubble({
   onDiscard: () => void;
 }) {
   const { t } = useTranslation();
+  // 手机上点按区 44px（规格 2026-11-25 硬约束）；桌面照旧。
+  const touchTarget = useIsMobile() ? "min-h-11" : undefined;
 
   /**
    * 把这条没发出去的文本交给剪贴板。
@@ -138,6 +141,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant={transport ? "outline" : "default"}
+            className={touchTarget}
             data-testid="send-failure-retry"
             disabled={busy}
             onClick={onRetry}
@@ -152,6 +156,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant="ghost"
+            className={touchTarget}
             data-testid="send-failure-copy"
             onClick={() => void copyText()}
           >
@@ -161,6 +166,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant="ghost"
+            className={touchTarget}
             data-testid="send-failure-discard"
             onClick={onDiscard}
           >

@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "@/lib/api";
@@ -1160,6 +1160,115 @@ describe("Account page: sessions and times (task 30)", () => {
     expect(tall(desktopAdd)).toBe(false);
     expect(
       tall(screen.getByRole("button", { name: "Sign out everywhere else" })),
+    ).toBe(false);
+  });
+});
+
+/**
+ * 手机上的浮层与危险确认（规格 2026-11-25 D1、F3）：添加通行密钥、删除通行密钥、登出其它
+ * 全部在手机上都是浮层，系统返回先关它、停在原页；两个危险确认走底部 sheet（44px 满宽、
+ * 危险键在上），桌面仍是原来的对话框。
+ */
+describe("Account page: phone overlays and back (D1, F3)", () => {
+  const originalMatchMedia = window.matchMedia;
+  function setViewport(mobile: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: mobile && query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  function Probe() {
+    const navigate = useNavigate();
+    const { pathname } = useLocation();
+    return (
+      <>
+        <span data-testid="where">{pathname}</span>
+        <button data-testid="system-back" onClick={() => void navigate(-1)}>
+          back
+        </button>
+      </>
+    );
+  }
+  function renderPhone() {
+    return render(
+      <MemoryRouter initialEntries={["/prev", "/account"]} initialIndex={1}>
+        <Probe />
+        <Account />
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+  }
+  const back = () => fireEvent.click(screen.getByTestId("system-back"));
+  const where = () => screen.getByTestId("where").textContent;
+
+  it("adding a passkey: system back closes the name dialog and stays", async () => {
+    setViewport(true);
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderPhone();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add a passkey" }),
+    );
+    await screen.findByRole("dialog");
+    back();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(where()).toBe("/account");
+  });
+
+  it("removing a passkey uses the bottom confirm sheet, danger on top; back cancels", async () => {
+    setViewport(true);
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderPhone();
+    const row = (await screen.findByText("YubiKey 5C")).closest(
+      "li",
+    ) as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    const sheet = await screen.findByTestId("confirm-sheet");
+    const buttons = within(sheet).getAllByRole("button");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Remove", "Cancel"]);
+    for (const b of buttons) expect(b.className).toContain("h-11");
+    back();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(where()).toBe("/account");
+    expect(mockedApi.mock.calls.some((c) => c[0] === "/v1/passkeys/2")).toBe(
+      false,
+    );
+  });
+
+  it("signing out other sessions uses the bottom confirm sheet; back cancels", async () => {
+    setViewport(true);
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderPhone();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign out everywhere else" }),
+    );
+    const sheet = await screen.findByTestId("confirm-sheet");
+    const buttons = within(sheet).getAllByRole("button");
+    expect(buttons[0].textContent).toBe("Sign out everywhere else");
+    for (const b of buttons) expect(b.className).toContain("h-11");
+    back();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(where()).toBe("/account");
+    expect(
+      mockedApi.mock.calls.some(
+        (c) => c[0] === "/v1/auth/sessions/revoke-others",
+      ),
     ).toBe(false);
   });
 });

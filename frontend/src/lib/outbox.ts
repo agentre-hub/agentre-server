@@ -145,6 +145,13 @@ async function senderAlive(
  */
 const persistedQueued = new Set<string>();
 
+/**
+ * 同理，在库里确认见过的失败（从库里恢复出来、或写入后读回过的）。从失败气泡上重发时
+ * 只有它们要求库里那一条还在：库里没了 = 已经有人（别的标签页、或这一页连点的上一下）
+ * 拿它去重发了，这一下不发（不变量「不会把一条消息发两次」）。
+ */
+const persistedFailures = new Set<string>();
+
 // ── 同页通知 ───────────────────────────────────────────────────────────────
 
 const listeners = new Map<string, Set<(entry: OutboxEntry) => void>>();
@@ -197,6 +204,10 @@ export const outboxStore = {
       const result = await fn(entry);
       if (isEmptyEntry(entry)) await accountStore.delete(KIND, conversationId);
       else await accountStore.put(KIND, conversationId, entry);
+      if (entry.failed.length > 0) {
+        const back = await accountStore.get<OutboxEntry>(KIND, conversationId);
+        for (const f of back?.failed ?? []) persistedFailures.add(f.id);
+      }
       for (const listener of [...(listeners.get(conversationId) ?? [])]) {
         listener(entry);
       }
@@ -262,7 +273,12 @@ export const outboxStore = {
    *
    * `claimQueued` = 这一条就是排着的那条：比较并交换，库里那条还是它才认领得到；确认
    * 见过而库里已经没有了 = 别的实例认领走了，返回 false，调用方不发。`replacing` =
-   * 从失败气泡上重发，那条失败此刻改记为已交出。
+   * 从失败气泡上重发，那条失败此刻改记为已交出；同样是比较并交换——确认见过的失败
+   * 在库里已经没有了，就是别处已经拿它重发了，不发。
+   *
+   * 两样都要在拿发送锁**之前**判掉：重发用的是那条失败的身份，抢输的一方若照样去等
+   * 发送锁，它是攥着发件箱锁在等，而赢的一方结果回来时要这把发件箱锁才能落库、放锁
+   * ——两边互相等死。
    *
    * 认领成功时交回放锁的函数（结果落库之后调），否则 null。发送锁在同一次读-改-写里
    * 拿：别的实例只能在这把发件箱锁里看见「已交出」，那时发送锁必定已经被持有。
@@ -278,6 +294,13 @@ export const outboxStore = {
       if (claimQueued) {
         if (entry.queued?.id === claimQueued) delete entry.queued;
         else if (persistedQueued.has(claimQueued)) return;
+      }
+      if (
+        replacing &&
+        !entry.failed.some((f) => f.id === replacing) &&
+        persistedFailures.has(replacing)
+      ) {
+        return;
       }
       release = await holdSendLock(conversationId, message.id);
       if (replacing) removeFailure(entry, replacing);
@@ -311,7 +334,11 @@ export const outboxStore = {
   },
 };
 
-/** 手机首页：每条有排队消息的对话 → 它的正文（挂载时读一次）。 */
+/**
+ * 手机首页：每条有待发送消息的对话 → 它的正文（挂载时读一次）。排着队的那条优先；
+ * 没有排队、只有没发出去（失败）的，取最近那条失败——它同样还没到对端手里，等着用户
+ * 回去重发（规格 2026-11-25 C2）。
+ */
 export function useOutboxMap(): Map<string, PendingSend> {
   const [pending, setPending] = useState<Map<string, PendingSend>>(
     () => new Map(),
@@ -321,7 +348,8 @@ export function useOutboxMap(): Map<string, PendingSend> {
       if (!alive()) return;
       const next = new Map<string, PendingSend>();
       for (const [conversationId, entry] of all) {
-        if (entry.queued) next.set(conversationId, { text: entry.queued.text });
+        const waiting = entry.queued ?? entry.failed.at(-1);
+        if (waiting) next.set(conversationId, { text: waiting.text });
       }
       setPending(next);
     });

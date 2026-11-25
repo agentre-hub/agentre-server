@@ -419,3 +419,24 @@ describe("任务整屏页的历史与未保存改动（D2、F4）", () => {
     );
   });
 });
+
+/**
+ * 看板手机上的浮层（规格 2026-11-25 D1）：标签管理框系统返回先关它、停在看板。
+ * 任务页上的机器与模型选择见 issues-pills.test.tsx。
+ */
+describe("看板手机浮层：系统返回先关浮层（D1）", () => {
+  it("标签管理框：返回关掉它，停在看板", async () => {
+    await renderPhoneBoard();
+    fireEvent.click(screen.getByTestId("filter-trigger"));
+    const sheet = await screen.findByTestId("filter-sheet");
+    fireEvent.click(
+      within(sheet).getByRole("button", { name: "Manage labels" }),
+    );
+    await screen.findByRole("heading", { name: "Labels" });
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Labels" })).toBeNull(),
+    );
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+  });
+});

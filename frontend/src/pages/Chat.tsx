@@ -190,7 +190,7 @@ interface DraftSeed {
  * 判据是「账号里一条都还没保存过」——那正是「还没同意过」这件事在数据上的形态，
  * 不另存一个本地标记（换台电脑、换个浏览器就说不出话了）。
  */
-function FirstSaveDialog({
+export function FirstSaveDialog({
   open,
   onOpenChange,
   onConfirm,
@@ -200,6 +200,8 @@ function FirstSaveDialog({
   onConfirm: () => void;
 }) {
   const { t } = useTranslation();
+  // 手机上是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(open, () => onOpenChange(false));
   return (
     <DialogShell open={open} onOpenChange={onOpenChange} size="md">
       <DialogShellHeader
@@ -300,6 +302,9 @@ export default function Chat() {
    * 一句还没有任何依据的肯定话。问过了没有得自己记一格，清单本身答不了。
    */
   const [agentsSettled, setAgentsSettled] = useState(false);
+  /** Agent / 项目名单最近一次读失败的原值（成功即清）。空清单配上它不说「还没有…」（G1）。 */
+  const [agentsLoadError, setAgentsLoadError] = useState<unknown>(null);
+  const [projectsLoadError, setProjectsLoadError] = useState<unknown>(null);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   /** 项目树**问过了**没有。理由与 `agentsSettled` 同：空清单说不出自己是哪一种空。 */
   const [projectsSettled, setProjectsSettled] = useState(false);
@@ -673,10 +678,12 @@ export default function Chat() {
         rostersLandedRef.current.agents = true;
         applyDevices(d);
         setAgents(a);
+        setAgentsLoadError(null);
       })
       .catch((e: unknown) => {
         if (!alive()) return;
         setRostersFailed(true);
+        setAgentsLoadError(e);
         sessionIndex.setLoadError(e);
       })
       // 取不到也算问过：挑 Agent 那一屏不能为了一次失败永远转下去。
@@ -701,10 +708,24 @@ export default function Chat() {
       .then((p) => {
         rostersLandedRef.current.projects = true;
         setProjects(p);
+        setProjectsLoadError(null);
       })
-      .catch(() => {})
+      // 列表照常（都进「未归项目」）；只记下原值，挑项目那一屏据此不说「还没有项目」。
+      .catch((e: unknown) => setProjectsLoadError(e))
       // 取不到也算问过：那一屏不能为了一次失败永远转下去。
       .finally(() => setProjectsSettled(true));
+  }, []);
+  /** 挑 Agent 那一屏的「重试」：只重读 Agent 名单。 */
+  const retryAgents = useCallback(() => {
+    agentRoster.invalidate();
+    agentRoster
+      .get<NewConvAgent & { department_name?: string }>()
+      .then((a) => {
+        rostersLandedRef.current.agents = true;
+        setAgents(a);
+        setAgentsLoadError(null);
+      })
+      .catch((e: unknown) => setAgentsLoadError(e));
   }, []);
   useEffect(() => {
     loadProjects();
@@ -1215,6 +1236,9 @@ export default function Chat() {
     <div data-testid="chat-chrome" className="h-14 shrink-0" />
   );
 
+  const agentsLoadFailure = agentsLoadError
+    ? { error: agentsLoadError, onRetry: retryAgents }
+    : null;
   const composePick = (
     <NewConversationPane
       agents={agents}
@@ -1222,6 +1246,7 @@ export default function Chat() {
       onPick={(agent) => goStep({ step: "draft", agent })}
       onFromProject={() => goStep({ step: "project" })}
       settled={agentsSettled}
+      loadFailure={agentsLoadFailure}
     />
   );
   const composeProject = (
@@ -1234,6 +1259,12 @@ export default function Chat() {
       onNewProject={projectManagement.openCreate}
       projectsSettled={projectsSettled}
       agentsSettled={agentsSettled}
+      projectsFailure={
+        projectsLoadError
+          ? { error: projectsLoadError, onRetry: reloadProjects }
+          : null
+      }
+      agentsFailure={agentsLoadFailure}
     />
   );
   const composeDraft =
@@ -1782,6 +1813,7 @@ export default function Chat() {
               ) : undefined
             }
             loadFailed={!!sessionIndex.loadError}
+            loadError={sessionIndex.loadError ?? undefined}
             onRetry={() => {
               // 与横幅上那颗同一个动作：清掉再重取，成功了错误态不会还挂着。
               sessionIndex.setLoadError(null);
@@ -1925,6 +1957,7 @@ export default function Chat() {
           }
           onFromProject={() => goStep({ step: "project" })}
           settled={agentsSettled}
+          loadFailure={agentsLoadFailure}
         />
       )}
 

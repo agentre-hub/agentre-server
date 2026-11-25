@@ -120,7 +120,7 @@
     "cancel": "Cancel"
   },
   "errors": {
-    "loadFailed": "Could not load your organization chart.",
+    "loadFailedWhat": "Could not load your organization chart",
     "generic": "Something went wrong. Please try again.",
     "createTimeout": "The network timed out. It may already have been created.",
     "createRefresh": "Refresh to check",

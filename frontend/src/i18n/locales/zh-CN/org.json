@@ -120,7 +120,7 @@
     "cancel": "取消"
   },
   "errors": {
-    "loadFailed": "没能加载组织架构。",
+    "loadFailedWhat": "没能加载组织架构",
     "generic": "出了点问题，请重试。",
     "createTimeout": "网络超时，可能已经建好了",
     "createRefresh": "刷新看看",

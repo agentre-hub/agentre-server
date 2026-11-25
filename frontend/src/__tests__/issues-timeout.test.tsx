@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
 import i18n from "@/i18n";
-import { api, ApiTimeoutError } from "@/lib/api";
+import { api, ApiTimeoutError, ApiUnavailableError } from "@/lib/api";
 import Issues from "@/pages/Issues";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -238,6 +238,33 @@ describe.each([
     expect(creates()).toHaveLength(1);
   });
 
+  it("超时后不点「刷新看看」直接再提交：先刷新，认出来就直接打开，不发第二个 POST", async () => {
+    await renderBoard(phone);
+    await submitUntilTimeout();
+    serverIssues = [issue("iss-new", "Phone task"), ...serverIssues];
+
+    fireEvent.click(screen.getByTestId("task-form-submit"));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("task-form-breadcrumb").textContent,
+      ).not.toMatch(/New task/),
+    );
+    expect(creates()).toHaveLength(1);
+  });
+
+  it("超时后直接再提交、刷新本身也失败：不当成没建，不发第二个 POST", async () => {
+    await renderBoard(phone);
+    await submitUntilTimeout();
+    boardReadFails = true;
+
+    fireEvent.click(screen.getByTestId("task-form-submit"));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(creates()).toHaveLength(1);
+  });
+
   it("刷新在途时再点提交不发第二个 POST；等刷新认出来就直接打开", async () => {
     await renderBoard(phone);
     await submitUntilTimeout();
@@ -407,5 +434,83 @@ describe("新建标签超时（F5、W13）", () => {
     fireEvent.click(screen.getByTestId("label-create"));
     const error = await screen.findByTestId("label-manager-error");
     expect(error.textContent).toMatch(/may already have been created/i);
+  });
+
+  it("重读失败后再提交：先核实；读仍失败不发第二个 POST，读恢复且认出就当作建成", async () => {
+    await renderBoard(true);
+    fireEvent.pointerDown(screen.getByTestId("filter-trigger"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByTestId("filter-trigger"));
+    fireEvent.click(await screen.findByTestId("filter-manage-labels"));
+    const input = await screen.findByTestId("label-new-name");
+    fireEvent.change(input, { target: { value: "infra" } });
+    boardReadFails = true;
+    fireEvent.click(screen.getByTestId("label-create"));
+    await screen.findByTestId("label-manager-error");
+    expect(labelPosts()).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("label-create"));
+    await waitFor(() =>
+      expect(
+        mockedApi.mock.calls.filter(([p]) =>
+          String(p).startsWith("/v1/workspace/issues"),
+        ).length,
+      ).toBeGreaterThan(3),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(labelPosts()).toHaveLength(1);
+    expect(screen.getByTestId("label-manager-error").textContent).toMatch(
+      /may already have been created/i,
+    );
+
+    boardReadFails = false;
+    serverLabels = [
+      ...serverLabels,
+      { sync_id: "lab-new", name: "infra", tone: "gray", usage_count: 0 },
+    ];
+    fireEvent.click(screen.getByTestId("label-create"));
+    await waitFor(() => expect(input).toHaveProperty("value", ""));
+    expect(labelPosts()).toHaveLength(1);
+  });
+});
+
+describe("编辑任务超时（F5、G2）", () => {
+  it("保存超时不露英文原文", async () => {
+    await renderBoard(true);
+    fireEvent.click(await screen.findByText("Old one"));
+    fireEvent.change(await screen.findByTestId("task-title"), {
+      target: { value: "Old one edited" },
+    });
+    fireEvent.click(screen.getByTestId("task-form-submit"));
+    const error = await screen.findByTestId("task-form-error");
+    expect(error.textContent).not.toMatch(/timed out|\/v1\//);
+    expect(error.textContent).toBeTruthy();
+  });
+});
+
+describe("标签写失败的说法（G2）", () => {
+  it("新建标签遇到 502 门户页：说服务暂时不可用（502），不露 non-JSON 原文", async () => {
+    await renderBoard(true);
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST")
+        throw new ApiUnavailableError(path, 502, "<html>");
+      return base(path, init);
+    });
+    fireEvent.pointerDown(screen.getByTestId("filter-trigger"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByTestId("filter-trigger"));
+    fireEvent.click(await screen.findByTestId("filter-manage-labels"));
+    fireEvent.change(await screen.findByTestId("label-new-name"), {
+      target: { value: "ops" },
+    });
+    fireEvent.click(screen.getByTestId("label-create"));
+    const error = await screen.findByTestId("label-manager-error");
+    expect(error.textContent).toContain("502");
+    expect(error.textContent).not.toMatch(/non-JSON|\/v1\//);
   });
 });

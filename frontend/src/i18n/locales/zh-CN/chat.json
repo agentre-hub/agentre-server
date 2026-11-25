@@ -24,6 +24,8 @@
   "searchAgents": "搜索 Agent",
   "fromProject": "从项目里挑一个 Agent",
   "projects": "项目",
+  "agentsLoadFailedWhat": "没能读到 Agent 名单",
+  "projectsLoadFailedWhat": "没能读到项目列表",
   "noProjects": "还没有项目。",
   "noProjectsYetHint": "建一个项目，把 Agent 加进去，就能在这里开项目对话。",
   "noAgentsInProject": "这个项目里还没有 Agent",

@@ -1062,10 +1062,14 @@ describe("RelayConnection 的重连退让", () => {
     const sockets: BinarySocket[] = [];
     const delays: number[] = [];
     const timers: Array<() => void> = [];
+    // 拨号超时（E3：不开不关的拨号也要落回退避）是另一只表，这组只量退让的节奏。
+    const DIAL_TIMEOUT = 987_654;
     vi.spyOn(globalThis, "setTimeout").mockImplementation(((
       fn: () => void,
       ms?: number,
     ) => {
+      if (ms === DIAL_TIMEOUT)
+        return 0 as unknown as ReturnType<typeof setTimeout>;
       delays.push(ms ?? 0);
       timers.push(fn);
       return 0 as unknown as ReturnType<typeof setTimeout>;
@@ -1073,6 +1077,7 @@ describe("RelayConnection 的重连退让", () => {
     const connection = new RelayConnection({
       url: "ws://relay.test/v1/relay/client",
       jwt: "jwt",
+      dialTimeoutMs: DIAL_TIMEOUT,
       reconnectDelayMs: 1000,
       stableConnectionMs: 10_000,
       random: () => 1,

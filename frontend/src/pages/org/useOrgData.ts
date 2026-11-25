@@ -23,6 +23,8 @@ export interface UseOrgDataResult {
   backends: OrgBackendItem[];
   loading: boolean;
   error: string | null;
+  /** 最近一次读失败的原值（给 describeFailure 分类：原因与出口）；成功后清空。 */
+  failure: unknown;
   reload: () => Promise<void>;
 }
 
@@ -31,6 +33,7 @@ export function useOrgData(): UseOrgDataResult {
   const [backends, setBackends] = React.useState<OrgBackendItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [failure, setFailure] = React.useState<unknown>(null);
 
   const reloadSequence = React.useRef(0);
   const reload = React.useCallback(async () => {
@@ -45,8 +48,12 @@ export function useOrgData(): UseOrgDataResult {
       setChart(chartRes);
       setBackends(backendsRes.backends ?? []);
       setError(null);
+      setFailure(null);
     } catch (err) {
-      if (sequence === reloadSequence.current) setError(errorText(err));
+      if (sequence === reloadSequence.current) {
+        setError(errorText(err));
+        setFailure(err);
+      }
     } finally {
       if (sequence === reloadSequence.current) setLoading(false);
     }
@@ -65,5 +72,5 @@ export function useOrgData(): UseOrgDataResult {
   // 的是上面那个 effect，不等通道。
   useAccountChannel([AccountChannelSyncVersion], () => void reload());
 
-  return { chart, backends, loading, error, reload };
+  return { chart, backends, loading, error, failure, reload };
 }

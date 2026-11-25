@@ -18,6 +18,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { SessionRow, TouchProvider } from "@agentre-hub/agentre-ui";
@@ -41,16 +42,19 @@ function renderHeader(
 ) {
   const onOpen = over.onOpen ?? vi.fn();
   const onDelete = over.onDelete ?? vi.fn();
+  // 头部的 ••• 菜单经 useBackDismiss 接系统返回（D1），要在 Router 里。
   render(
-    <OrgDetailHeader
-      identity={() => <span data-testid="identity">研发部</span>}
-      save={{ state: { kind: "idle" }, run: vi.fn(), retry: vi.fn() }}
-      menuItems={[
-        { key: "open", label: "打开", onSelect: onOpen },
-        { key: "delete", label: "删除", danger: true, onSelect: onDelete },
-      ]}
-      onClose={vi.fn()}
-    />,
+    <MemoryRouter>
+      <OrgDetailHeader
+        identity={() => <span data-testid="identity">研发部</span>}
+        save={{ state: { kind: "idle" }, run: vi.fn(), retry: vi.fn() }}
+        menuItems={[
+          { key: "open", label: "打开", onSelect: onOpen },
+          { key: "delete", label: "删除", danger: true, onSelect: onDelete },
+        ]}
+        onClose={vi.fn()}
+      />
+    </MemoryRouter>,
   );
   return { onOpen, onDelete };
 }

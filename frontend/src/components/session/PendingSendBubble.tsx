@@ -8,6 +8,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import SendAttachments from "@/components/session/SendAttachments";
+import { useIsMobile } from "@/components/use-is-mobile";
 import type { UploadProgress } from "@/lib/relayClient";
 
 /** 字节数按当前语言写成「340 kB」「1.5 MB」（十进制单位，与系统文件大小同一口径）。 */
@@ -123,6 +124,7 @@ export default function PendingSendBubble({
   progress?: UploadProgress;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   if (state === "sending") {
     return (
       <ChatMessage
@@ -172,6 +174,8 @@ export default function PendingSendBubble({
         <Button
           size="xs"
           variant="ghost"
+          // 手机上点按区 44px（规格 2026-11-25 硬约束）；桌面照旧。
+          className={isMobile ? "min-h-11" : undefined}
           data-testid="send-pending-cancel"
           onClick={onCancel}
         >

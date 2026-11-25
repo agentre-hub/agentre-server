@@ -357,6 +357,32 @@ describe("排队那一条跟着对话走（C2、I1）", () => {
     expect(runCalls()).toHaveLength(0);
   });
 
+  it("「撤销」带图的那条时，输入框里刚写的字不被盖掉（还没落库也一样）", async () => {
+    relayState = "reconnecting";
+    stubRun(() => ({}));
+    await seed({ queued: { id: "q1", text: "放回来的那句", images: [shot] } });
+
+    mount();
+    const queued = await screen.findByTestId("send-pending");
+    await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
+    // 排队之后又写了一段：草稿的防抖保存还没触发就点「撤销」。
+    act(() => editorEl().editor?.commands.setContent("<p>后来写的</p>"));
+    fireEvent.click(within(queued).getByTestId("send-pending-cancel"));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-pending")).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(editorEl().textContent).toContain("放回来的那句"),
+    );
+    expect(editorEl().textContent).toContain("后来写的");
+    expect(
+      within(screen.getByTestId("session-composer-band")).getByAltText(
+        "shot.png",
+      ),
+    ).toBeTruthy();
+  });
+
   it("存储不可用：照今天的内存行为，排队 → 连上发一次", async () => {
     delete g.indexedDB;
     relayState = "reconnecting";
@@ -422,6 +448,9 @@ describe("已交出（C3）：不发两次", () => {
       timeout: 5000,
     });
     expect(bubble.getAttribute("data-failure-kind")).toBe("transport");
+    // 标题说的是「可能已送达」，不是「没送到」（C3）。
+    expect(bubble.textContent).toContain("May have reached");
+    expect(bubble.textContent).not.toContain("Did not reach");
     expect(bubble.textContent).toContain("这条可能已经到了");
     await settle();
     expect(runCalls()).toHaveLength(1);
@@ -475,6 +504,60 @@ describe("已交出（C3）：不发两次", () => {
   });
 });
 
+describe("从失败气泡重发：不发两次（C3）", () => {
+  it("两个实例对着同一条恢复出来的失败都点「重发」：只发一次，两边都不卡住", async () => {
+    installLocks();
+    let finish: () => void = () => {};
+    stubRun(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({});
+        }),
+    );
+    await seed({
+      failed: [{ id: "f1", text: "只重发一次", kind: "rejected" }],
+    });
+
+    render(
+      <>
+        {page()}
+        {page()}
+      </>,
+    );
+    await waitFor(() =>
+      expect(screen.getAllByTestId("send-failure-retry")).toHaveLength(2),
+    );
+    const [a, b] = screen.getAllByTestId("send-failure-retry");
+    fireEvent.click(a);
+    await waitFor(() => expect(runCalls()).toHaveLength(1));
+    fireEvent.click(b);
+    await settle();
+    await act(async () => finish());
+    await settle();
+    await settle();
+
+    expect(runCalls()).toHaveLength(1);
+    // 发件箱没被两把锁互相卡住：结果照常落库。
+    await waitFor(async () =>
+      expect(await outboxStore.get(CID)).toBeUndefined(),
+    );
+  });
+
+  it("同一页连点两下「重发」：只发一次", async () => {
+    stubRun(() => new Promise(() => {}));
+    await seed({ failed: [{ id: "f1", text: "连点两下", kind: "rejected" }] });
+
+    mount();
+    const retry = await screen.findByTestId("send-failure-retry");
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    await settle();
+    await settle();
+
+    expect(runCalls()).toHaveLength(1);
+  });
+});
+
 describe("失败的那一条跟着对话走（C2、H8）", () => {
   it("被拒的消息：离开再回来仍是失败气泡，手机上与发送中同侧（右）；丢弃后库里清掉", async () => {
     stubRun(() => Promise.reject(new RelayError(-32603, "会话正忙")));
@@ -497,6 +580,41 @@ describe("失败的那一条跟着对话走（C2、H8）", () => {
     );
     await settle();
     expect(await outboxStore.get(CID)).toBeUndefined();
+  });
+
+  it("手机上气泡里的按键（撤销、重发、复制文本、丢弃）点按区 44px", async () => {
+    relayState = "reconnecting";
+    stubRun(() => ({}));
+    await seed({
+      queued: { id: "q1", text: "排着" },
+      failed: [{ id: "f1", text: "没发出去", kind: "notSent" }],
+    });
+    mount();
+    const cancel = await screen.findByTestId("send-pending-cancel");
+    expect(cancel.className).toContain("min-h-11");
+    for (const id of [
+      "send-failure-retry",
+      "send-failure-copy",
+      "send-failure-discard",
+    ]) {
+      expect((await screen.findByTestId(id)).className).toContain("min-h-11");
+    }
+  });
+
+  it("桌面上气泡按键照旧（不加 44px）", async () => {
+    window.matchMedia = originalMatchMedia;
+    relayState = "reconnecting";
+    stubRun(() => ({}));
+    await seed({
+      queued: { id: "q1", text: "排着" },
+      failed: [{ id: "f1", text: "没发出去", kind: "notSent" }],
+    });
+    mount();
+    const cancel = await screen.findByTestId("send-pending-cancel");
+    expect(cancel.className).not.toContain("min-h-11");
+    expect(
+      (await screen.findByTestId("send-failure-retry")).className,
+    ).not.toContain("min-h-11");
   });
 
   it("换账号：清空本机业务数据后，这条对话的待发送与失败都读不到", async () => {
@@ -589,6 +707,21 @@ describe("手机首页行：「待发送」优先于「[草稿]」（C2）", () 
     await waitFor(() =>
       expect(result.current.get(CID)).toEqual({ text: "排队的\n第二行" }),
     );
+  });
+
+  it("useOutboxMap：只有失败（没发出去）的那条也算待发送；排队与失败都有时取排队那条", async () => {
+    await seed({
+      failed: [{ id: "f1", text: "没发出去的那句", kind: "notSent" }],
+    });
+    await outboxStore.update("other", (e) => {
+      e.queued = { id: "q2", text: "排着的" };
+      e.failed = [{ id: "f2", text: "失败的", kind: "notSent" }];
+    });
+    const { result } = renderHook(() => useOutboxMap());
+    await waitFor(() =>
+      expect(result.current.get(CID)).toEqual({ text: "没发出去的那句" }),
+    );
+    expect(result.current.get("other")).toEqual({ text: "排着的" });
   });
 
   it("同一条对话既有排队又有草稿：副行是「Pending: 首行」，不是「[Draft]」", async () => {

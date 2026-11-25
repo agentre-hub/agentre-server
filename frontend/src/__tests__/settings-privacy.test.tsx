@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { edgeClasses } from "./helpers/edge-classes";
@@ -769,5 +769,98 @@ describe("设置 · 隐私：读失败与触屏点按区（任务 30）", () => 
     expect(
       tall(screen.getByRole("button", { name: "Turn off and delete" })),
     ).toBe(false);
+  });
+});
+
+/**
+ * 手机上的两个确认（规格 2026-11-25 D1、F3）：系统返回先关它、停在设置页；关闭并删除
+ * 是危险确认，走底部 sheet（危险键在上、44px 满宽），桌面仍是对话框。
+ */
+describe("设置 · 隐私：手机上的确认与返回（D1、F3）", () => {
+  const originalMatchMedia = window.matchMedia;
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  });
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  function Probe() {
+    const navigate = useNavigate();
+    const { pathname } = useLocation();
+    return (
+      <>
+        <span data-testid="where">{pathname}</span>
+        <button data-testid="system-back" onClick={() => void navigate(-1)}>
+          back
+        </button>
+      </>
+    );
+  }
+  function renderPhone() {
+    return render(
+      <MemoryRouter
+        initialEntries={["/prev", "/settings?tab=privacy"]}
+        initialIndex={1}
+      >
+        <ThemeProvider>
+          <Probe />
+          <Settings />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+  const back = () => fireEvent.click(screen.getByTestId("system-back"));
+
+  it("关闭并删除：底部确认 sheet，危险键在上；系统返回即取消、不发请求", async () => {
+    serve();
+    renderPhone();
+    await screen.findByTestId("privacy-activity-panel");
+    fireEvent.click(
+      within(screen.getByTestId("privacy-danger-zone")).getByRole("button", {
+        name: "Turn off and delete",
+      }),
+    );
+    const sheet = await screen.findByTestId("confirm-sheet");
+    const buttons = within(sheet).getAllByRole("button");
+    expect(buttons[0].textContent).toBe("Turn off and delete");
+    for (const b of buttons) expect(b.className).toContain("h-11");
+    back();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("where").textContent).toBe("/settings");
+    expect(
+      mockedApi.mock.calls.some(
+        (c) => (c[1] as RequestInit | undefined)?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  it("开启的说明框：系统返回关掉它、停在设置页", async () => {
+    serve({
+      "/v1/stats/settings": settingsResponse({
+        activity_stats_enabled: false,
+        devices: undefined,
+      }),
+    });
+    renderPhone();
+    const panel = await screen.findByTestId("privacy-activity-panel");
+    fireEvent.click(
+      within(panel).getByRole("switch", { name: "Activity stats" }),
+    );
+    await screen.findByRole("dialog");
+    back();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("where").textContent).toBe("/settings");
   });
 });

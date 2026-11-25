@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { TimerOff } from "lucide-react";
 
 import { buttonVariants } from "@agentre-hub/agentre-ui";
-import AuthLayout from "@/components/AuthLayout";
+import AuthLayout, { AuthMobileHeader } from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
 import { useIsMobile } from "@/components/use-is-mobile";
 
@@ -15,10 +15,19 @@ import { useIsMobile } from "@/components/use-is-mobile";
 export default function DeviceExpired() {
   const { t } = useTranslation();
   const mobile = useIsMobile();
-  // 手机：照拒绝页——图标 + 标题 + 说明居中，「重新输入代码」钉底，没有卡片与页脚。
+  // 手机：与输码页、批准页同一版式（规格 J6）——「✕ 授权设备」页头、内容靠上，
+  // 「重新输入代码」钉底，没有卡片与页脚。
   if (mobile) {
     return (
       <AuthLayout
+        header={
+          <AuthMobileHeader
+            to="/"
+            icon="close"
+            label={t("device.add.close")}
+            title={t("device.approve.mobileTitle")}
+          />
+        }
         pinned={
           <Link
             to="/device"
@@ -28,14 +37,14 @@ export default function DeviceExpired() {
           </Link>
         }
       >
-        <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+        <div className="flex flex-col gap-6 pt-6">
           <div className="flex size-[60px] items-center justify-center rounded-full bg-status-waiting-bg">
             <TimerOff
               className="size-6 text-status-waiting"
               aria-hidden="true"
             />
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2.5">
             <PageTitle>{t("device.expiredScreen.title")}</PageTitle>
             <p className="text-sm text-muted-foreground">
               {t("device.expiredScreen.body")}

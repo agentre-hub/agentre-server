@@ -10,6 +10,7 @@ import type {
 } from "@agentre-hub/agentre-ui";
 
 import { api } from "@/lib/api";
+import { localizeTransportFailure } from "@/lib/writeFailure";
 import { cliOverlayPath, listCLIModelsOn } from "@/lib/cliModels";
 import {
   deviceDisplayName,
@@ -1361,5 +1362,40 @@ export function createBrowserEngineSettingsPorts(
     },
   };
 
+  // 写失败不露英文原文（规格 F5、G2）：超时、非 JSON 响应、断网换成当前语言的一句话，
+  // 原值挂在 cause 上；服务端给的业务原因（ApiError）照旧原样交给包。
+  for (const name of WRITE_PORTS) {
+    const original = ports[name] as (...args: unknown[]) => Promise<unknown>;
+    (ports as unknown as Record<string, unknown>)[name] = async (
+      ...args: unknown[]
+    ) => {
+      try {
+        return await original.apply(ports, args);
+      } catch (err) {
+        throw localizeTransportFailure(err, {
+          create: name.startsWith("create"),
+        });
+      }
+    };
+  }
+
   return ports;
 }
+
+/** 会写东西的端口（读与探测不在此列：读失败由包的原位失败说明处理）。 */
+const WRITE_PORTS = [
+  "createProvider",
+  "updateProvider",
+  "deleteProvider",
+  "setProviderEnabled",
+  "setModelEnabled",
+  "createModels",
+  "updateModel",
+  "deleteModel",
+  "setDefaultModel",
+  "createBackend",
+  "updateBackend",
+  "deleteBackend",
+  "createOpenClawBackend",
+  "updateOpenClawBackend",
+] as const satisfies readonly (keyof EngineSettingsPorts)[];

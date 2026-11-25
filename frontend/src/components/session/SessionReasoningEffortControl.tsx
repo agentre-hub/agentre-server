@@ -2,6 +2,11 @@ import {
   ReasoningEffortPicker,
   type ReasoningEffortValue,
 } from "@agentre-hub/agentre-ui";
+import { useState } from "react";
+
+import { useTriggerBackDismiss } from "@/hooks/use-trigger-back-dismiss";
+
+const TRIGGER_TESTID = "composer-reasoning-effort";
 
 /**
  * 输入框底栏右侧那颗「思考力度」控件。会话详情与「还没发第一句」的草稿共用同一个 ——
@@ -34,8 +39,11 @@ export default function SessionReasoningEffortControl({
    */
   errorText?: string | null;
 }) {
+  // 弹层在手机上是浮层：系统返回先关它、停在原页（D1）。包不对外报开关，认触发器。
+  const [root, setRoot] = useState<HTMLElement | null>(null);
+  useTriggerBackDismiss(root, TRIGGER_TESTID);
   return (
-    <div className="flex min-w-0 items-center gap-1">
+    <div ref={setRoot} className="flex min-w-0 items-center gap-1">
       <ReasoningEffortPicker
         // 两格在 wire / REST 上都是裸 string（写入前已由执行端按那张六档表校验），
         // 窄化的做法与后端编辑器里那一处一致。
@@ -43,7 +51,7 @@ export default function SessionReasoningEffortControl({
         backendValue={backendValue as ReasoningEffortValue}
         onChange={onChange}
         errorText={errorText ?? undefined}
-        dataTestId="composer-reasoning-effort"
+        dataTestId={TRIGGER_TESTID}
       />
       {/*
         这一行说明摆在控件**旁边**而不是弹层里：「只写成一台」不是错误，而是一句

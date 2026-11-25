@@ -16,8 +16,10 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import { CardLoadError } from "@/components/console";
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 // 包里同名的那个 formatRelativeTime 收的是 t()，这里要的是按 locale 的 Intl 版本。
 import { formatRelativeTime } from "@/lib/sessionView";
 import {
@@ -86,6 +88,9 @@ export function ActivityStatsPanel({
   const [reloadKey, setReloadKey] = useState(0);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [confirm, setConfirm] = useState<"enable" | "disable" | null>(null);
+  // 开启说明框在手机上是浮层：系统返回先关它、停在原页（D1）。关闭确认在手机上是
+  // ConfirmSheet，它自己接返回。
+  useBackDismiss(confirm === "enable", () => setConfirm(null));
   const [backfill, setBackfill] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -477,6 +482,35 @@ function DisableDialog({
   onSubmit: () => void;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  if (isMobile) {
+    // 手机：底部确认 sheet，危险键在上、44px 满宽堆叠（F3）；系统返回即取消（D1）。
+    return (
+      <ConfirmSheet
+        open={open}
+        title={t("settings.privacy.activity.disable.title")}
+        description={`${t("settings.privacy.activity.disable.body")} ${t("settings.privacy.activity.disable.note")}`}
+        error={error}
+        onCancel={() => {
+          if (!busy) onClose();
+        }}
+        actions={[
+          {
+            label: t("settings.privacy.activity.disable.submit"),
+            variant: "destructive",
+            disabled: busy,
+            onSelect: onSubmit,
+          },
+          {
+            label: t("common.cancel"),
+            variant: "secondary",
+            disabled: busy,
+            onSelect: onClose,
+          },
+        ]}
+      />
+    );
+  }
   return (
     <DialogShell
       open={open}

@@ -15,7 +15,12 @@ import {
   type PickerProvider,
 } from "@agentre-hub/agentre-ui";
 import { Cpu } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
+
+import { useTriggerBackDismiss } from "@/hooks/use-trigger-back-dismiss";
+
+const TRIGGER_TESTID = "board-model-pill";
 
 export interface BoardModelPillProps {
   /** 共享包递过来的 pill 形状；三颗触发器摆在一排必须是同一串。 */
@@ -42,6 +47,9 @@ export function BoardModelPill({
   disabled,
 }: BoardModelPillProps) {
   const { t } = useTranslation();
+  // 选择器在手机任务页上是浮层：系统返回先关它，任务页留着（D1）。
+  const [root, setRoot] = useState<HTMLElement | null>(null);
+  useTriggerBackDismiss(root, TRIGGER_TESTID);
   const pillState = resolveProviderPillState({
     boundProviderKey,
     boundModelKey,
@@ -50,25 +58,30 @@ export function BoardModelPill({
   });
 
   return (
-    <ModelTargetPicker
-      scenario="chat"
-      backendType={backendType}
-      selected={target}
-      onChange={onChange}
-      catalog={catalog}
-      invalid={pillState.mode === "invalid"}
-      disabled={disabled}
-      triggerLabel={
-        // 同一排的机器 pill 也「跟随 Agent」：跟随态写明字段名并换掉人形图标，两颗才分得清。
-        <ProviderPillTrigger
-          state={pillState}
-          followLabel={t("issues.exec.modelFollow")}
-          followIcon={<Cpu className="size-3.5 shrink-0" aria-hidden="true" />}
-        />
-      }
-      data-testid="board-model-pill"
-      aria-label={t("issues.exec.modelAria")}
-      className={className}
-    />
+    // contents：只为给观察器一个根，不参与那一排 pill 的排版。
+    <div ref={setRoot} className="contents">
+      <ModelTargetPicker
+        scenario="chat"
+        backendType={backendType}
+        selected={target}
+        onChange={onChange}
+        catalog={catalog}
+        invalid={pillState.mode === "invalid"}
+        disabled={disabled}
+        triggerLabel={
+          // 同一排的机器 pill 也「跟随 Agent」：跟随态写明字段名并换掉人形图标，两颗才分得清。
+          <ProviderPillTrigger
+            state={pillState}
+            followLabel={t("issues.exec.modelFollow")}
+            followIcon={
+              <Cpu className="size-3.5 shrink-0" aria-hidden="true" />
+            }
+          />
+        }
+        data-testid={TRIGGER_TESTID}
+        aria-label={t("issues.exec.modelAria")}
+        className={className}
+      />
+    </div>
   );
 }

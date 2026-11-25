@@ -35,7 +35,7 @@ import {
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
 import { MobileDrawerProvider } from "@/components/console/MobileNav";
-import { api } from "@/lib/api";
+import { api, ApiError, ApiUnavailableError } from "@/lib/api";
 import { draftStore, useDraftKey } from "@/lib/drafts";
 import { bindAccount } from "@/lib/localStore";
 import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
@@ -572,6 +572,35 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
 
     expect(await screen.findByText("等你批")).toBeTruthy();
     expect(screen.queryByTestId("chat-load-failed")).toBeNull();
+  });
+});
+
+describe("手机首页：列表取数失败的原因与出口（G1、G2）", () => {
+  function failIndexWith(err: unknown) {
+    stubApi([waitingMirrored]);
+    const succeed = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      if (path.startsWith("/v1/agent-sessions?")) throw err;
+      return succeed(path, ...rest);
+    });
+  }
+
+  it("502 非 JSON：正文说服务暂时不可用并带状态码，不露原文", async () => {
+    failIndexWith(new ApiUnavailableError("/v1/agent-sessions", 502, "<html>"));
+    renderChat();
+    const failed = await screen.findByTestId("chat-load-failed");
+    expect(failed.textContent).toContain("502");
+    expect(failed.textContent).not.toContain("non-JSON");
+    expect(within(failed).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("401：出口是 44px「重新登录」而不是重试", async () => {
+    failIndexWith(new ApiError(401, "未登录", 401));
+    renderChat();
+    const failed = await screen.findByTestId("chat-load-failed");
+    const signIn = within(failed).getByRole("link", { name: "Sign in again" });
+    expect(signIn.className).toContain("h-11");
+    expect(within(failed).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
 
@@ -1496,6 +1525,10 @@ describe("手机首页：对话列表", () => {
 
     const banner = await screen.findByTestId("index-load-error");
     expect(within(banner).getByRole("button", { name: "Retry" })).toBeTruthy();
+    // 手机上横幅里的「重试」点按区 44px（G1）。
+    expect(
+      within(banner).getByRole("button", { name: "Retry" }).className,
+    ).toContain("min-h-11");
     expect(screen.getByText("老对话")).toBeTruthy();
     expect(screen.queryByTestId("chat-load-failed")).toBeNull();
     const list = screen.getByTestId("chat-phone-list");

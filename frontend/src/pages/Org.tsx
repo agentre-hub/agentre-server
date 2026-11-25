@@ -18,8 +18,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "@/components/AppShell";
 import { api, ApiTimeoutError } from "@/lib/api";
 import { errorText } from "@/lib/errorText";
+import { describeFailure } from "@/lib/describeFailure";
+import { transportFailureText } from "@/lib/writeFailure";
 import { useIsMobile } from "@/components/use-is-mobile";
-import { EmptyState, useMobileBack } from "@/components/console";
+import { EmptyState, FailureNotice, useMobileBack } from "@/components/console";
 import {
   Button,
   Skeleton,
@@ -104,7 +106,7 @@ type SyncSelection = { kind: "agent" | "department"; syncId: string } | null;
 
 export default function Org() {
   const { t } = useTranslation();
-  const { chart, backends, loading, error, reload } = useOrgData();
+  const { chart, backends, loading, error, failure, reload } = useOrgData();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   // ‹ = 回到上一处（D3）：有上一处退一步、没有则以替换回 /org；不 push，历史不变长。
@@ -227,13 +229,15 @@ export default function Org() {
     fields: AgentFields | DepartmentFields,
     write: () => Promise<{ sync_id: string }>,
   ) => {
-    // 刷新在途、或上一次超时还没核实：先等核实；认出来了就不再发 POST。
+    // 刷新在途、或上一次超时还没核实：先等核实；认出来了就不再发 POST。核实的那次读
+    // 本身失败（refreshFailed）仍是「不知道建没建」，也不发——找不到才允许再提交（F5）。
     if (refreshRef.current && (await refreshRef.current)) return;
-    if (
-      createNoticeRef.current?.phase === "timeout" &&
-      (await refreshCreated())
-    )
-      return;
+    const unverified = () => {
+      const phase = createNoticeRef.current?.phase;
+      return phase === "timeout" || phase === "refreshFailed";
+    };
+    if (unverified() && (await refreshCreated())) return;
+    if (unverified()) return;
     const knownBefore = new Set<string>([
       ...(chart?.agents ?? []).map((a) => a.sync_id),
       ...(chart?.departments ?? []).map((d) => d.sync_id),
@@ -270,7 +274,10 @@ export default function Org() {
       // 原来的详情已卸载时，其局部保存态不再可见，由页面报告失败。
       if (currentSelection.current !== selection) {
         mutationErrorRevision.current += 1;
-        setMutationError(errorText(error, t("org.errors.generic")));
+        setMutationError(
+          transportFailureText(error) ??
+            errorText(error, t("org.errors.generic")),
+        );
       }
     });
     return write;
@@ -365,11 +372,25 @@ export default function Org() {
       </Button>
     </span>
   ) : null;
-  const alertMessage: React.ReactNode = initialFailed
-    ? null
-    : error
-      ? t("org.errors.generic")
-      : createNoticeNode || mutationError || null;
+  // 读失败（规格 G1）：原因与出口由 describeFailure 分类——原位一行 + 重试（手机 44px），
+  // 401 给「重新登录」；原文只进「复制诊断信息」。首次失败与「已有数据时刷新失败」同一句。
+  const loadFailureNotice =
+    error !== null ? (
+      <FailureNotice
+        failure={describeFailure(failure, {
+          t,
+          what: t("org.errors.loadFailedWhat"),
+        })}
+        onRetry={() => void reload()}
+      />
+    ) : null;
+  const alertMessage: React.ReactNode = initialFailed ? null : error ? (
+    <span className="flex flex-wrap items-center gap-2">
+      {loadFailureNotice}
+    </span>
+  ) : (
+    createNoticeNode || mutationError || null
+  );
   // 只在移动端且真的在看详情（不是骨架/失败态）时才递下去——两个详情组件把它摆在
   // 自己的头部下方（OrgDetailHeader 之后、正文之前）；桌面端不传，桌面的这条错误
   // 只在索引底部那一处出现，形态不变。
@@ -394,14 +415,9 @@ export default function Org() {
       {initialFailed ? (
         <div
           data-testid="org-index-failed"
-          className="flex flex-col items-start gap-2.5 p-4"
+          className="flex flex-wrap items-center gap-2.5 p-4 text-sm text-muted-foreground"
         >
-          <p className="text-sm text-muted-foreground">
-            {t("org.errors.loadFailed")}
-          </p>
-          <Button size="sm" variant="outline" onClick={() => void reload()}>
-            {t("common.retry")}
-          </Button>
+          {loadFailureNotice}
         </div>
       ) : initialLoading ? (
         <OrgIndexSkeleton />
@@ -488,18 +504,9 @@ export default function Org() {
             {initialFailed ? (
               <div
                 data-testid="org-detail-failed"
-                className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 p-6"
+                className="flex min-h-0 flex-1 flex-wrap content-center items-center justify-center gap-2.5 p-6 text-sm text-muted-foreground"
               >
-                <p className="text-sm text-muted-foreground">
-                  {t("org.errors.loadFailed")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void reload()}
-                >
-                  {t("common.retry")}
-                </Button>
+                {loadFailureNotice}
               </div>
             ) : initialLoading ? (
               <OrgDetailSkeleton />

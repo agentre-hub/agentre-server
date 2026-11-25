@@ -183,6 +183,13 @@ export default function App() {
           mobileOffset={{
             top: "calc(8px + env(safe-area-inset-top, 0px))",
           }}
+          // sonner 自带的动作键只有 24px 高；手机上「重试」这类出口补到 44px 点按区
+          // （规格 F 节）。sonner 的选择器更具体，所以带 !。桌面不变。
+          toastOptions={
+            isMobile
+              ? { classNames: { actionButton: "min-h-11! px-4! text-sm!" } }
+              : undefined
+          }
         />
       </BrowserRouter>
     </TouchProvider>

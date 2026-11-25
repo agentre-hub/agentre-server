@@ -43,6 +43,7 @@ import { useIsMobile } from "@/components/use-is-mobile";
 import { orderProjectTree } from "@/components/session/newconv/ProjectAgentPane";
 import type { NewConvAgent } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { useMe } from "@/hooks/use-me";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
@@ -105,6 +106,8 @@ export default function Issues() {
   const [query, setQuery] = React.useState<BoardQuery>(EMPTY_BOARD_QUERY);
   const [editing, setEditing] = React.useState<TaskFormValue | null>(null);
   const [labelsOpen, setLabelsOpen] = React.useState(false);
+  // 标签管理框在手机上是浮层：系统返回先关它、停在看板（D1）。
+  useBackDismiss(labelsOpen, () => setLabelsOpen(false));
 
   const [projects, setProjects] = React.useState<ProjectNode[]>([]);
   const [agents, setAgents] = React.useState<NewConvAgent[]>([]);
@@ -223,16 +226,18 @@ export default function Issues() {
   );
 
   // 新建超时后的「刷新看看」：认出刚提交的那条就换成编辑它；刷新失败说一声。
-  const refreshCreated = React.useCallback(async () => {
+  const refreshCreated = React.useCallback(async (): Promise<
+    "found" | "notFound" | "failed"
+  > => {
     try {
       const found = await board.findSubmitted();
       if (found) setEditing(found);
-      return found !== null;
+      return found ? "found" : "notFound";
     } catch (cause) {
       toast.error(
         describeFailure(cause, { t, what: t("issues.loadFailedWhat") }).message,
       );
-      return false;
+      return "failed";
     }
   }, [board, t]);
 

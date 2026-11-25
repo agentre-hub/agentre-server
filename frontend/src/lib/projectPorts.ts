@@ -29,6 +29,8 @@ import {
   removeProjectMember,
   setProjectLocation,
   updateProject,
+  verifyProjectCreate,
+  ProjectCreateTimeoutError,
   type ProjectFields,
   type ProjectMachine,
 } from "@/lib/projects";
@@ -192,6 +194,12 @@ function writeMachinePath(
 export function createProjectCreatePorts(
   fs: DisposableProjectFsPort,
 ): ProjectCreatePorts {
+  /**
+   * 上一次新建超时、连重读都失败了：那一次可能已经建好。再提交前先拿它的基线核实——
+   * 认出来就当作建成，确定没有才发新的 POST，读仍失败就不发（规格 F5「找不到才允许
+   * 再提交」）。
+   */
+  let unverified: ReadonlySet<string> | null = null;
   return {
     create: async (draft) => {
       // 指针语义：**只送这次真的填了的键**，没填的不翻成空串送下去。
@@ -201,9 +209,20 @@ export function createProjectCreatePorts(
       if (draft.color) fields.color = draft.color;
       if (draft.parentId) fields.parent_sync_id = draft.parentId;
       try {
+        if (unverified) {
+          const found = await verifyProjectCreate(fields, unverified);
+          unverified = null;
+          if (found) return { ok: true, id: found.sync_id };
+        }
         const created = await createProject(fields);
         return { ok: true, id: created.sync_id };
       } catch (err) {
+        if (
+          err instanceof ProjectCreateTimeoutError &&
+          !err.checked &&
+          err.knownBefore
+        )
+          unverified = err.knownBefore;
         return { ok: false, failure: restFailure(err) };
       }
     },

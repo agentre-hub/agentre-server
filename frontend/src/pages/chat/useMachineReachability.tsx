@@ -12,7 +12,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { useDelayedFlag } from "@/components/session/SessionConnectionIndicator";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { runsSessions, type DeviceItem } from "@/lib/devices";
@@ -324,6 +323,22 @@ export function useMachineReachability({
   const [machineState, setMachineState] = useState<
     Record<string, MachineState>
   >({});
+  /**
+   * 哪几台的「不可达」已经持续满 UNREACHABLE_DEBOUNCE_MS（规格 E5），按指纹。去抖是
+   * **一台一台**算的：一台已经确认连不上，不该让另一台刚抖的那一下跟着立刻报出来。
+   */
+  const [unreachableConfirmed, setUnreachableConfirmed] = useState<
+    Record<string, true>
+  >({});
+  const unreachableTimersRef = useRef<
+    Record<string, ReturnType<typeof setTimeout>>
+  >({});
+  useEffect(() => {
+    const timers = unreachableTimersRef.current;
+    return () => {
+      for (const handle of Object.values(timers)) clearTimeout(handle);
+    };
+  }, []);
 
   const devicesByFp = useMemo(
     () => new Map(devices.map((d) => [d.fingerprint, d])),
@@ -375,21 +390,14 @@ export function useMachineReachability({
    * 都出不来（那颗按钮只在 unreachable 这一档渲染）。清单陈旧但仍读得，所以行
    * 留着；说谎的是状态。
    */
-  const anyUnreachable = onlineMachines.some(
-    (d) => machineState[d.fingerprint] === "unreachable",
-  );
-  // 任何一台持续不可达满 3 秒才算数；期间那一台按「没有这个信号」落到下面的
+  // 那一台持续不可达满 3 秒才算数；期间它按「没有这个信号」落到下面的
   // 已交出清单 → connected、否则 connecting，不闪。
-  const unreachableConfirmed = useDelayedFlag(
-    anyUnreachable,
-    UNREACHABLE_DEBOUNCE_MS,
-  );
   const machineStates = useMemo(() => {
     const states: Record<number, MachineState> = {};
     for (const device of onlineMachines) {
       states[device.id] =
         machineState[device.fingerprint] === "unreachable" &&
-        unreachableConfirmed
+        unreachableConfirmed[device.fingerprint]
           ? "unreachable"
           : machineState[device.fingerprint] === "connecting"
             ? "connecting"
@@ -404,11 +412,41 @@ export function useMachineReachability({
     setResolved((prev) => ({ ...prev, [fp]: machine }));
   }, []);
 
-  const onState = useCallback((fp: string, state: MachineState) => {
-    setMachineState((prev) =>
-      prev[fp] === state ? prev : { ...prev, [fp]: state },
-    );
+  /** 撤掉这一台的去抖：排着的确认作废，已确认的收回。 */
+  const clearUnreachable = useCallback((fp: string) => {
+    const timers = unreachableTimersRef.current;
+    if (timers[fp] !== undefined) {
+      clearTimeout(timers[fp]);
+      delete timers[fp];
+    }
+    setUnreachableConfirmed((prev) => {
+      if (!prev[fp]) return prev;
+      const next = { ...prev };
+      delete next[fp];
+      return next;
+    });
   }, []);
+
+  const onState = useCallback(
+    (fp: string, state: MachineState) => {
+      setMachineState((prev) =>
+        prev[fp] === state ? prev : { ...prev, [fp]: state },
+      );
+      if (state !== "unreachable") {
+        clearUnreachable(fp);
+        return;
+      }
+      const timers = unreachableTimersRef.current;
+      if (timers[fp] !== undefined) return;
+      timers[fp] = setTimeout(() => {
+        delete timers[fp];
+        setUnreachableConfirmed((prev) =>
+          prev[fp] ? prev : { ...prev, [fp]: true },
+        );
+      }, UNREACHABLE_DEBOUNCE_MS);
+    },
+    [clearUnreachable],
+  );
 
   /**
    * 每台机器「再要一页」的入口。放 ref 而不是 state：它变的时候没有任何东西要重画，
@@ -442,12 +480,19 @@ export function useMachineReachability({
   const forgetResolved = useCallback(() => {
     setResolved({});
     setMachineState({});
+    const timers = unreachableTimersRef.current;
+    for (const fp of Object.keys(timers)) {
+      clearTimeout(timers[fp]);
+      delete timers[fp];
+    }
+    setUnreachableConfirmed({});
   }, []);
 
   const retryMachine = useCallback(
     (deviceId: number) => {
       const device = devices.find((d) => d.id === deviceId);
       if (!device) return;
+      clearUnreachable(device.fingerprint);
       setMachineState((prev) => ({
         ...prev,
         [device.fingerprint]: "connecting",
@@ -457,7 +502,7 @@ export function useMachineReachability({
         [device.fingerprint]: (prev[device.fingerprint] ?? 0) + 1,
       }));
     },
-    [devices],
+    [devices, clearUnreachable],
   );
 
   /**

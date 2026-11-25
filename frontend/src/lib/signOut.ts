@@ -1,3 +1,4 @@
+import { abandonMe } from "@/hooks/use-me";
 import { api } from "@/lib/api";
 import { wipeBusinessData } from "@/lib/localStore";
 
@@ -13,6 +14,7 @@ import { wipeBusinessData } from "@/lib/localStore";
  * 才是真正的假象。失败被吞掉，避免留下未处理的 rejection。
  */
 export function signOut(next?: string): void {
+  abandonMe();
   const landing = next ? `/login?next=${encodeURIComponent(next)}` : "/login";
   const logout = api("/v1/auth/logout", { method: "POST" }).catch(() => {});
   void Promise.all([logout, wipeBusinessData()]).finally(() => {

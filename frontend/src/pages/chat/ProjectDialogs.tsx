@@ -10,6 +10,8 @@ import {
   type ProjectSettingsPorts,
   type ProjectSettingsView,
 } from "@agentre-hub/agentre-ui";
+
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 // 图标清单在共享包里（项目的 icon 与部门 / Agent 的 avatar_icon 存的是同一串
 // key）；本站留的是这个选择器的渲染，所以包收的是画好的东西。
 
@@ -63,6 +65,10 @@ export function ProjectDialogs({
   deletion,
 }: ProjectDialogsProps) {
   const { t } = useTranslation();
+  // 三个弹窗在手机上都是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(create.parent !== false, create.close);
+  useBackDismiss(settings.project !== null, settings.close);
+  useBackDismiss(deletion.project !== null, deletion.close);
 
   return (
     <>

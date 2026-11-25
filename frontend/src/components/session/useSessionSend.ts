@@ -21,7 +21,12 @@ import type { FailedSend } from "@/components/session/SendFailureBubble";
 import type { SteerQueue } from "@/components/session/useSteerQueue";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useTargetGuard } from "@/hooks/use-target-guard";
-import { draftStore, isEmptyDraft, useDraftKey } from "@/lib/drafts";
+import {
+  draftStore,
+  isEmptyDraft,
+  liveDraftOf,
+  useDraftKey,
+} from "@/lib/drafts";
 import { forgetLiveTurn, noteLiveTurn, seedLiveTurn } from "@/lib/liveSessions";
 import {
   outboxStore,
@@ -905,8 +910,11 @@ export function useSessionSend({
     撤销排着的那一条：整条消息（字与图，原样）放回输入框（规格 2026-11-25 C 节）。
 
     输入框里此刻若已经有别的字（排队之后又写了一段），不盖掉它：纯文字接在后面
-    （appendDraft：空行分隔），带图的把两份并成一份放回——草稿库里就是输入框此刻的
-    那一份。够不着输入框时这一条留着不撤：撤了就没有地方能找回它。
+    （appendDraft：空行分隔），带图的把两份并成一份放回。「输入框此刻的那一份」取它
+    最近一次报告的草稿（liveDraftOf），不取草稿库：库是防抖写的，刚敲的几个字还没
+    落进去，存储不可用时更是什么都没有——拿它去 restoreDraft 会把它们盖掉。输入框
+    挂上后还没报告过时，它的内容就是库里恢复出来的那份。够不着输入框时这一条留着
+    不撤：撤了就没有地方能找回它。
   */
   async function putBackIntoComposer(message: ChatComposerSubmit) {
     const handle = composerHandleRef?.current;
@@ -915,7 +923,9 @@ export function useSessionSend({
       handle.appendDraft(message.text);
       return;
     }
-    const current = draftKey ? await draftStore.get(draftKey) : undefined;
+    const current =
+      liveDraftOf(handle) ??
+      (draftKey ? await draftStore.get(draftKey) : undefined);
     if (current && !isEmptyDraft(current)) {
       handle.restoreDraft(
         current.text.trim()

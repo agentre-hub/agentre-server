@@ -184,6 +184,7 @@ export function IndexBanners({
           <Button
             variant="outline"
             size="sm"
+            className={isMobile ? "min-h-11 px-4" : undefined}
             onClick={() => {
               // 清掉再重取：横幅留着的话，这一次成功了它也还挂在那儿。
               sessionIndex.setLoadError(null);
@@ -220,7 +221,12 @@ export function IndexBanners({
           title: saveFailure.title,
         })}
       </span>
-      <Button variant="outline" size="sm" onClick={sessionIndex.retrySave}>
+      <Button
+        variant="outline"
+        size="sm"
+        className={isMobile ? "min-h-11 px-4" : undefined}
+        onClick={sessionIndex.retrySave}
+      >
         <RotateCw aria-hidden="true" className="size-3.5" />
         {t("sessionIndex.saveFailed.retry")}
       </Button>

@@ -13,6 +13,12 @@
     "signedOut": "Your session has expired. Sign in again.",
     "denied": "You don't have permission to do this."
   },
+  "writeFailure": {
+    "createTimeout": "The network didn't respond in time. It may already have been created — refresh the list before trying again.",
+    "timeout": "The network didn't respond in time. It may already have taken effect — refresh to check.",
+    "unavailable": "The service is temporarily unavailable ({{status}}). Try again in a moment.",
+    "network": "The network seems to be down. Try again in a moment."
+  },
   "projectError": {
     "fallback": "That did not go through. Please try again."
   },

@@ -101,6 +101,7 @@ import {
   classifySendFailure,
   deriveSessionViewStatus,
   sessionTitle,
+  type SessionViewStatus,
 } from "@/lib/sessionView";
 import {
   loadMirrorTail,
@@ -1524,6 +1525,33 @@ export default function SessionDetailView({
   });
 
   /*
+    换连接（规格 E3「换连接取票期间状态即为「连接中」，此时发送走排队」）：这条对话连上
+    过之后又落回「连接中」——池子判死连接换 socket、页面「立即重试」——取票这一段里
+    输入框照常可用、发送走与重连同一条排队路，连上只发一次。从没连上过的首拨不算：
+    那时排进去的是一个不知道会不会到的承诺（决策 6 只对重连排队）。
+    「连上过」按 (did, sid) 记，换对话从头算（渲染期调整，不在 effect 里 setState）。
+  */
+  const [connectedOnce, setConnectedOnce] = useState({
+    did,
+    sid,
+    connected: status === "connected",
+  });
+  if (connectedOnce.did !== did || connectedOnce.sid !== sid) {
+    setConnectedOnce({ did, sid, connected: status === "connected" });
+  } else if (status === "connected" && !connectedOnce.connected) {
+    setConnectedOnce({ did, sid, connected: true });
+  }
+  const replacingConnection =
+    status === "connecting" &&
+    connectedOnce.did === did &&
+    connectedOnce.sid === sid &&
+    connectedOnce.connected;
+  /** 发送这一侧读的档位：换连接期间按重连处理（排队）。 */
+  const sendStatus: SessionViewStatus = replacingConnection
+    ? "reconnecting"
+    : status;
+
+  /*
     「正在连接 / 重连」满约 20 秒仍没连上：页头改口「连不上 · 立即重试」，页头下写
     「下次自动重试 N 秒后」（E1）。只在这两档里成立——机器离线、401、版本不符各有各的
     话；连上或换了档立刻撤掉，下一段重新计时。
@@ -1879,7 +1907,7 @@ export default function SessionDetailView({
     did,
     sid,
     originProp,
-    status,
+    status: sendStatus,
     summary,
     // 装载那一遍还在等这个客户端上的清单（ready 之后摘要由轮次边界刷新，不再等）。
     summaryPending: !ready && listed?.client !== client,
@@ -2511,6 +2539,7 @@ export default function SessionDetailView({
       did={did}
       sid={sid}
       status={status}
+      connectionReplacing={replacingConnection}
       // Skill 补全要问的三样事实。`identity` 而不是 `summary`：镜像先于实时清单
       // 落地，输入框不必等那一趟往返才拿得到补全。
       agentSyncId={identity?.agentSyncId}
