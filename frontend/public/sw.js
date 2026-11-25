@@ -1,4 +1,4 @@
-/* global self, caches, fetch, Response, URL */
+/* global self, caches, fetch, Response, URL, setTimeout, clearTimeout */
 /*
  * Agentre web console 的 service worker（classic，非 module）。
  *
