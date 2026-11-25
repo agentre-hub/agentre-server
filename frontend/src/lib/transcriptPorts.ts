@@ -27,6 +27,12 @@ type AnswerToolApprovalInput = Parameters<
   TranscriptPorts["answerToolApproval"]
 >[0];
 
+/** 包没导出 `PreviewFileTarget`，同样从端口签名上取。 */
+type PreviewFileTarget = Exclude<
+  Parameters<NonNullable<TranscriptPorts["previewFile"]>>[1],
+  string
+>;
+
 /** 宿主要提供的三个提交动作。sessionId / peerFingerprint 由调用方自己闭包进去。 */
 export interface ServerTranscriptPortDeps {
   submitToolPermission(input: AnswerToolPermissionInput): Promise<unknown>;
@@ -93,11 +99,15 @@ export function createServerTranscriptPorts(
       ? {
           // 定位目标（链接里写的 `:311-330`）原样转交：包解析、宿主执行，中间这
           // 一层不解释也不补默认值——包没给就是「这次不定位」。
+          //
+          // 包的 `path` 现在可以是 `{ root, path }`，但那只在宿主给了工作根时出现；
+          // 网页端不给（根固定为会话 cwd），所以只认字符串，对象形状谢绝接手。
           previewFile: (
             _sessionId: number,
-            path: string,
+            path: string | PreviewFileTarget,
             anchor?: PreviewAnchor,
-          ) => deps.previewFile!(path, anchor),
+          ) =>
+            typeof path === "string" ? deps.previewFile!(path, anchor) : false,
         }
       : {}),
 

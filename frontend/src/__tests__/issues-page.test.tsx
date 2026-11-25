@@ -365,6 +365,20 @@ describe("card actions land on the write endpoints", () => {
     });
   });
 
+  it("offers no start-session item and no linked-session block on the web host", async () => {
+    mockBoardApi();
+    await renderBoard();
+
+    const todo = screen.getByTestId("board-column-todo");
+    open(within(todo).getByTestId(/^board-card-menu-/));
+    await screen.findByRole("menuitem", { name: "Delete" });
+
+    expect(
+      screen.queryByRole("menuitem", { name: /Start session/i }),
+    ).toBeNull();
+    expect(screen.queryByText(/Linked sessions/i)).toBeNull();
+  });
+
   it("deletes a card by sync id", async () => {
     mockBoardApi();
     await renderBoard();

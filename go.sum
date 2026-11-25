@@ -20,6 +20,8 @@ github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261115022658-86f269faceb5 h1:aq
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261115022658-86f269faceb5/go.mod h1:0C+dvC2R00+FEkRp5udfettHgkkPROJybrz/bnZ2oNw=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261116015408-fa4e6951dd96 h1:WVBVXLKaRfYA3w6OH+vzdHhPPSW6F4Ph5Qyyqoh6XFA=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261116015408-fa4e6951dd96/go.mod h1:0C+dvC2R00+FEkRp5udfettHgkkPROJybrz/bnZ2oNw=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261124175825-3b88153a65bd h1:so3XYrZNIybjUvmxGKWKQrdGCeKQhQGddaVovUo2SIg=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261124175825-3b88153a65bd/go.mod h1:0C+dvC2R00+FEkRp5udfettHgkkPROJybrz/bnZ2oNw=
 github.com/alicebob/miniredis/v2 v2.38.0 h1:nZAzCR+Lj+Vxk4ZXzm2NuKq2O33RXj1XxJ2e2uP9jiw=
 github.com/alicebob/miniredis/v2 v2.38.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=
