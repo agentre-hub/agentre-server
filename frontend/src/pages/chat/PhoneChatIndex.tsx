@@ -43,6 +43,7 @@ import {
   type SessionIndexAgent,
   type SessionPathTarget,
 } from "@/components/session/SessionIndex";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { toAgentStatus } from "@/lib/attentionAdapter";
 import { conversationDraftKey, useDraftMap } from "@/lib/drafts";
 import { useOutboxMap } from "@/lib/outbox";
@@ -354,10 +355,20 @@ export function PhoneChatIndex({
     [counts, t],
   );
 
+  // 搜索态是一层浮层（D1）：系统返回先退出搜索，不离开页面。
   const closeSearch = () => {
     onSearchChange("");
     setSearchOpen(false);
   };
+  useBackDismiss(searchOpen, closeSearch);
+  // 「取消」把搜索框连同触发它的 🔍 一起卸掉了，焦点会落到 body（D5）：退出后
+  // 把焦点交给重新出现的 🔍。首次渲染就在搜索态（搜索词还在）时不抢焦点。
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const wasSearchOpen = useRef(searchOpen);
+  useEffect(() => {
+    if (wasSearchOpen.current && !searchOpen) searchButtonRef.current?.focus();
+    wasSearchOpen.current = searchOpen;
+  }, [searchOpen]);
 
   const renderRow = (row: MirrorIndexRow) => {
     const agent = agentById.get(row.agentSyncId);
@@ -642,6 +653,7 @@ export function PhoneChatIndex({
               variant="ghost"
               size="icon"
               className="size-11"
+              ref={searchButtonRef}
               aria-label={t("chat.phone.search")}
               onClick={() => setSearchOpen(true)}
             >

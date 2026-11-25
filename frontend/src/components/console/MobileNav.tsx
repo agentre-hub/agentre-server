@@ -9,6 +9,7 @@ import {
   DialogTitle,
   cn,
 } from "@agentre-hub/agentre-ui";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { PHONE_HEADER_BUTTON_CLASS } from "@/components/PhonePageHeader";
 
 /**
@@ -122,13 +123,40 @@ export function MobileDrawer({
   account: ReactNode;
   children: ReactNode;
 }) {
+  const location = useLocation();
+  // 系统返回先关抽屉（D1）：抽屉开着时历史里有它的一条记号。
+  useBackDismiss(open, () => onOpenChange(false));
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
-        onClick={(e) => {
-          if ((e.target as HTMLElement).closest("a")) onOpenChange(false);
+        // 打开时焦点落在当前页那一项（D5），而不是 DOM 里最后一个可聚焦的（语言）。
+        onOpenAutoFocus={(e) => {
+          const current =
+            e.currentTarget instanceof HTMLElement
+              ? e.currentTarget.querySelector<HTMLElement>(
+                  '[aria-current="page"]',
+                )
+              : null;
+          if (!current) return;
+          e.preventDefault();
+          current.focus();
+        }}
+        // 点到去别处的链接：不在这里关抽屉。链接的跳转先发出，紧接着再退抽屉那条记号
+        // 的 navigate(-1) 会把刚跳的页退回来；路由一换，useBackDismiss 看到记号没了
+        // 自己会收。点到的就是当前页（跳转是 replace，会把记号换成新条目、抽屉被误判
+        // 为还开着）则拦下跳转，当作普通的关闭。
+        onClickCapture={(e) => {
+          const link = (e.target as HTMLElement).closest("a");
+          if (!link) return;
+          if (
+            link.pathname + link.search ===
+            location.pathname + location.search
+          ) {
+            e.preventDefault();
+            onOpenChange(false);
+          }
         }}
         className={cn(
           "left-0 top-0 h-dvh w-[84%] max-w-[320px] translate-x-0 translate-y-0 rounded-none rounded-r-xl bg-chrome",

@@ -35,6 +35,7 @@ import { useMobileBack } from "@/components/console/MobileNav";
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
 import { stopReachable } from "@/components/session/useTurnStop";
 import { useIsMobile } from "@/components/use-is-mobile";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import {
   formatRelativeTime,
   sessionStatusLabel,
@@ -333,6 +334,8 @@ function PhoneSessionHeader({
   const { t, i18n } = useTranslation();
   const { t: uiT } = useUiTranslation();
   const [infoOpen, setInfoOpen] = useState(false);
+  // 系统返回先关对话信息（D1）。
+  useBackDismiss(infoOpen, () => setInfoOpen(false));
 
   const statusKnown = Boolean(
     identity?.lifecycleState || running || decisionPending,

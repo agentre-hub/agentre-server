@@ -36,6 +36,7 @@ import type {
   NewConvProject,
 } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { backDismissLayerOf, useBackDismiss } from "@/hooks/use-back-dismiss";
 import { useMe } from "@/hooks/use-me";
 import {
   deviceDisplayName,
@@ -316,6 +317,16 @@ export default function Chat() {
   >(null);
   /** 新对话草稿此刻的内容（DraftSession 报上来的），换 Agent 时带去下一个。 */
   const liveNewDraft = useRef<Draft | undefined>(undefined);
+  // 手机「挑一个 Agent」弹层（屏 23）是浮层：系统返回先关它（D1）。关法与弹层自己的
+  // onOpenChange(false) 一致——草稿上的选择器回到原草稿，其余收掉新对话。
+  const newConvSheetOpen =
+    compose?.step === "pick" ||
+    (compose?.step === "draft" && compose.picking === true);
+  useBackDismiss(newConvSheetOpen, () =>
+    setCompose((prev) =>
+      prev?.step === "draft" ? { ...prev, picking: false } : null,
+    ),
+  );
   /**
    * 派发种子留在这一页的内存里、不进历史记录：浏览器刷新会保留 history.state，放在那里
    * 的话刷新之后还拿着派发那一刻的机器去连，绕过按地址认领（规格决策 4）。
@@ -1335,13 +1346,25 @@ export default function Chat() {
     (open: boolean) => setScopeSheet((prev) => ({ ...prev, open })),
     [],
   );
+  // 选中：先收弹层（退掉它压在历史里的那条记号），记号退干净之后再换范围——换范围
+  // 是 replace，与退记号的 navigate(-1) 同时发出会互相踩：先 replace 则记号被换成
+  // 新地址、弹层误以为还开着；先退则新范围被退回去。
+  const pendingScope = useRef<Parameters<typeof phoneScopeOf>[0] | null>(null);
   const selectScope = useCallback(
     (value: Parameters<typeof phoneScopeOf>[0]) => {
-      setPhoneScope(phoneScopeOf(value));
+      pendingScope.current = value;
       setScopeSheet((prev) => ({ ...prev, open: false }));
     },
-    [setPhoneScope],
+    [],
   );
+  const scopeLayer = backDismissLayerOf(location.state);
+  useEffect(() => {
+    if (scopeSheet.open || scopeLayer > 0 || !pendingScope.current) return;
+    const value = pendingScope.current;
+    pendingScope.current = null;
+    setPhoneScope(phoneScopeOf(value));
+  }, [scopeSheet.open, scopeLayer, setPhoneScope]);
+
   /*
     每项的数：控制台没有逐项计数的端点，数的是已载入的行。换了范围之后手上只剩那一
     范围的行，别的项会数成 0——所以只在「全部」、筛选为全部且没在搜索时刷新（搜索中
