@@ -374,13 +374,13 @@ func (st *state) backendRefs(providerSyncID, modelKey string) int32 {
 	return n
 }
 
-// providerDoc：API key 在这里就只剩掩码，明文不出这个函数。
+// providerDoc：API key 不进响应，只留「是否已设置」。
 func (st *state) providerDoc(r *sync_entity.SyncObject) *agentrewire.CtlProvider {
 	var p syncwire.LLMProviderPayload
 	_ = json.Unmarshal([]byte(r.Payload), &p)
 	return &agentrewire.CtlProvider{
 		Id: r.ID, Name: p.Name, Type: p.Type, BaseUrl: p.BaseURL, Enabled: p.Enabled,
-		ApiKey: MaskSecret(p.APIKey), ApiKeySet: p.APIKey != "",
+		ApiKey: "", ApiKeySet: p.APIKey != "", // 只写字段：响应里永不带 key，连掩码也不给。
 		DefaultModelKey: p.DefaultModelKey, BackendRefs: st.backendRefs(r.SyncID, ""),
 	}
 }
@@ -479,19 +479,4 @@ func resourceID(r *agentrewire.CtlResource) int64 {
 		return d.Backend.GetId()
 	}
 	return 0
-}
-
-// maskBullets 是掩码中间的圆点数，与桌面端 ctl_svc.MaskSecret 同形。
-const maskBullets = 6
-
-// MaskSecret 把密钥收成「前 4 位、圆点、后 4 位」；8 位以内全部换成圆点。按 rune 计。
-func MaskSecret(s string) string {
-	if s == "" {
-		return ""
-	}
-	runes := []rune(s)
-	if len(runes) <= 8 {
-		return strings.Repeat("•", len(runes))
-	}
-	return string(runes[:4]) + strings.Repeat("•", maskBullets) + string(runes[len(runes)-4:])
 }
