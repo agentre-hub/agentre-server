@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -157,5 +159,63 @@ func TestAssets_MissingIconDoesNotFallBackToHTML(t *testing.T) {
 		convey.So(w.Code, convey.ShouldEqual, http.StatusNotFound)
 		convey.So(w.Header().Get("Content-Type"), convey.ShouldNotContainSubstring, "text/html")
 		convey.So(w.Body.String(), convey.ShouldBeEmpty)
+	})
+}
+
+func unbrotli(t *testing.T, b []byte) []byte {
+	t.Helper()
+	got, err := io.ReadAll(brotli.NewReader(bytes.NewReader(b)))
+	convey.So(err, convey.ShouldBeNil)
+	return got
+}
+
+// TestAssets_BrotliWhenClientAccepts 声明支持 br 时给 brotli(比 gzip 更小),
+// 缓存头与 Vary 不变。
+func TestAssets_BrotliWhenClientAccepts(t *testing.T) {
+	convey.Convey("Accept-Encoding 含 br 时给 brotli", t, func() {
+		w := serve(t, "/assets/index-abc123.js", http.Header{"Accept-Encoding": []string{"gzip, deflate, br"}})
+		convey.So(w.Code, convey.ShouldEqual, http.StatusOK)
+		convey.So(w.Header().Get("Content-Encoding"), convey.ShouldEqual, "br")
+		convey.So(w.Header().Get("Vary"), convey.ShouldContainSubstring, "Accept-Encoding")
+		convey.So(w.Header().Get("Cache-Control"), convey.ShouldContainSubstring, "immutable")
+		convey.So(w.Header().Get("Content-Type"), convey.ShouldContainSubstring, "javascript")
+		convey.So(w.Header().Get("Content-Length"), convey.ShouldEqual, strconv.Itoa(w.Body.Len()))
+		convey.So(bytes.Equal(unbrotli(t, w.Body.Bytes()), bundleJS), convey.ShouldBeTrue)
+	})
+	convey.Convey("只声明 br 也行,HEAD 不带正文", t, func() {
+		w := serve(t, "/assets/index-abc123.js", http.Header{"Accept-Encoding": []string{"BR"}})
+		convey.So(w.Header().Get("Content-Encoding"), convey.ShouldEqual, "br")
+	})
+}
+
+// TestAssets_BrotliFallsBackToGzip 不要 br(缺席或 q=0)就回落 gzip,
+// q 值更高的一方优先。
+func TestAssets_BrotliFallsBackToGzip(t *testing.T) {
+	cases := map[string]string{
+		"gzip":               "gzip",
+		"br;q=0, gzip":       "gzip",
+		"br; q=0.0, gzip":    "gzip",
+		"gzip, br;q=0":       "gzip",
+		"br;q=0.5, gzip;q=1": "gzip",
+		"br;q=1, gzip;q=0.5": "br",
+		"gzip;q=0, br":       "br",
+		"br;q=0, gzip;q=0":   "",
+		"identity":           "",
+		"":                   "",
+	}
+	for ae, want := range cases {
+		convey.Convey("Accept-Encoding: "+ae, t, func() {
+			w := serve(t, "/assets/index-abc123.js", http.Header{"Accept-Encoding": []string{ae}})
+			convey.So(w.Header().Get("Content-Encoding"), convey.ShouldEqual, want)
+			convey.So(w.Header().Get("Vary"), convey.ShouldContainSubstring, "Accept-Encoding")
+		})
+	}
+}
+
+// TestAssets_BrotliSkipsAlreadyCompressedFormats woff2 不重复压缩。
+func TestAssets_BrotliSkipsAlreadyCompressedFormats(t *testing.T) {
+	convey.Convey("woff2 即使接受 br 也原样返回", t, func() {
+		w := serve(t, "/assets/font-abc123.woff2", http.Header{"Accept-Encoding": []string{"br, gzip"}})
+		convey.So(w.Header().Get("Content-Encoding"), convey.ShouldBeEmpty)
 	})
 }
