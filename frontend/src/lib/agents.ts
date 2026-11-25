@@ -21,6 +21,7 @@ export async function fetchAgents<T = NewConvAgent>(): Promise<T[]> {
 const agentList = createRoster(
   () => fetchAgents<unknown>(),
   [AccountChannelSyncVersion],
+  "roster-agents",
 );
 
 /**
@@ -33,4 +34,6 @@ const agentList = createRoster(
 export const agentRoster = {
   get: <T = NewConvAgent>(): Promise<T[]> => agentList.get() as Promise<T[]>,
   invalidate: (): void => agentList.invalidate(),
+  stored: <T = NewConvAgent>(): Promise<T[] | undefined> =>
+    agentList.stored() as Promise<T[] | undefined>,
 };

@@ -65,6 +65,27 @@ interface NavItem {
 }
 
 /**
+ * 身份核对失败、用着本地身份时的「网络不稳定」细条（规格 2026-11-25 决策 A3，对比稿
+ * d1 B 帧 3）：不换页、不挡操作，只说一句屏上是刚才的内容、正在重试。
+ *
+ * 只此一份：外壳自己摆它，自画页头、页头又高过 52px 的页（手机对话首页）拿 `ownStrip`
+ * 接过去，摆进自己的页头下方。
+ */
+export function IdentityUnstableStrip() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="status"
+      data-testid="identity-unstable"
+      className="flex shrink-0 items-center gap-2 bg-status-waiting-bg px-4 py-1.5 text-xs text-status-waiting-text"
+    >
+      <WifiOff className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 truncate">{t("appShell.unstable")}</span>
+    </div>
+  );
+}
+
+/**
  * 账号级控制台的外壳：桌面 224px SideNav（R969Y：Brand / 6 导航项 /
  * 账号区）+ 52px TopBar（title 槽 + right 槽 + AppControls）+ 主区；移动（≤767px）
  * 主导航改为页头 ☰ 打开的左抽屉（规格 2026-11-05），没有底部 TabBar。
@@ -94,6 +115,7 @@ export default function AppShell({
   right,
   flush,
   ownHeader,
+  ownStrip,
   immersive,
   index,
   children,
@@ -111,6 +133,12 @@ export default function AppShell({
    * 叠着。
    */
   ownHeader?: boolean;
+  /**
+   * 页面自己摆「网络不稳定」细条（`IdentityUnstableStrip`）：手机上壳不再把它压在
+   * 52px 那条下沿。给页头高过 52px（下面还有筛选条）的自画页头页用，否则细条会盖在
+   * 页头里的东西上。
+   */
+  ownStrip?: boolean;
   /**
    * 沉浸形态（移动端会话详情与新对话草稿）：顶栏与移动底部 tab 都不画，整屏只剩页面
    * 自己那一层头部（返回列表就回到带壳的页，两者恢复）。壳的两条都不在了，刘海与
@@ -427,29 +455,18 @@ export default function AppShell({
   ) : null;
 
   /*
-    身份核对失败、用着本地身份时的「网络不稳定」细条（规格 2026-11-25 决策 A3，对比稿
-    d1 B 帧 3）：不换页、不挡操作，只说一句屏上是刚才的内容、正在重试。
-
-    落在页头之下。外壳自己画页头时跟在它后面；页面自己画页头（ownHeader / 沉浸形态）
-    时，桌面放在内容列最上面，手机上压在页面那条 52px 页头（PhonePageHeader，所有手机
-    页同一高度）的下沿——那条页头在页面自己的树里，外壳插不进它后面。压着的那一条
-    不接指针，点按照旧落到下面。
+    「网络不稳定」细条（IdentityUnstableStrip）落在页头之下。外壳自己画页头时跟在它
+    后面；页面自己画页头（ownHeader / 沉浸形态）时，桌面放在内容列最上面，手机上压在
+    页面那条 52px 页头（PhonePageHeader，所有手机页同一高度）的下沿——那条页头在页面
+    自己的树里，外壳插不进它后面。压着的那一条不接指针，点按照旧落到下面。页头更高的
+    页（ownStrip）自己摆。
 
     「控制台有新版本 · 重新加载」（决策 B1，对比稿 d8 B）跟它同一个位置、排在它下面；
     压着的时候只有这一条接指针——它有按钮，且可关闭。
   */
   const shellHeader = !ownHeader && !immersive;
   const unstable = identityStatus === "unstable";
-  const unstableStrip = (
-    <div
-      role="status"
-      data-testid="identity-unstable"
-      className="flex shrink-0 items-center gap-2 bg-status-waiting-bg px-4 py-1.5 text-xs text-status-waiting-text"
-    >
-      <WifiOff className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="min-w-0 truncate">{t("appShell.unstable")}</span>
-    </div>
-  );
+  const unstableStrip = <IdentityUnstableStrip />;
 
   /*
     整页不滚：滚动落在 main 里。根若是 min-h-screen，页面高于视口时整份文档往下
@@ -592,7 +609,7 @@ export default function AppShell({
         </div>
         {!shellHeader && isMobile && (
           <div className="pointer-events-none absolute inset-x-0 top-[calc(52px_+_env(safe-area-inset-top,0px))] z-20 flex flex-col">
-            {unstable && unstableStrip}
+            {unstable && !ownStrip && unstableStrip}
             <UpdateAvailableBar className="pointer-events-auto" />
           </div>
         )}

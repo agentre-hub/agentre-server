@@ -36,6 +36,7 @@ import type {
   NewConvProject,
 } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useMe } from "@/hooks/use-me";
 import {
   deviceDisplayName,
   deviceRoster,
@@ -279,6 +280,15 @@ export default function Chat() {
   /** 项目树**问过了**没有。理由与 `agentsSettled` 同：空清单说不出自己是哪一种空。 */
   const [projectsSettled, setProjectsSettled] = useState(false);
   /**
+   * 设备名单有没有一份可信的答案（网络取回过，或从本机存储读回过）。没有时机器数
+   * 写「—」而不是 0 / 0（W25）：空数组说不出是「没有机器」还是「还不知道」。
+   */
+  const [devicesKnown, setDevicesKnown] = useState(false);
+  /** 手上的设备名单是本机存储里上次的那一份，网络的还没到（决策 A5：在线点置灰）。 */
+  const [devicesFromStore, setDevicesFromStore] = useState(false);
+  /** 这一次的名单取数失败了：本地的旧样子不再「同步中」。 */
+  const [rostersFailed, setRostersFailed] = useState(false);
+  /**
    * 「新对话」这一路走到哪了。null = 没在开新对话。
    *
    * 它**不落进会话列表**：draft 还不是一条会话，左栏凭空多一行会让人以为已经
@@ -501,6 +511,46 @@ export default function Chat() {
    */
 
   /**
+   * 本地优先（规格 2026-11-25 决策 A1、A5）：冷启动时先把本机存储里上次的名单铺上，
+   * 不等网络。只给这一页铺：`roster.get()` 仍只交网络上的实情，外壳与详情不受影响。
+   * 网络那一份先到了就不要存储里的（landed 记着谁已经到了）；存储不可用、换了账号
+   * 时读到 undefined，照旧等网络（A6）。
+   */
+  const rostersLandedRef = useRef({
+    devices: false,
+    agents: false,
+    projects: false,
+  });
+  useAliveEffect((alive) => {
+    const landed = rostersLandedRef.current;
+    void deviceRoster.stored().then((d) => {
+      if (!alive() || !d || landed.devices) return;
+      setDevices(d);
+      setDevicesKnown(true);
+      setDevicesFromStore(true);
+    });
+    void agentRoster
+      .stored<NewConvAgent & { department_name?: string }>()
+      .then((a) => {
+        if (!alive() || !a || landed.agents) return;
+        setAgents(a);
+        setAgentsSettled(true);
+      });
+    void projectRoster.stored().then((p) => {
+      if (!alive() || !p || landed.projects) return;
+      setProjects(p);
+      setProjectsSettled(true);
+    });
+  }, []);
+  const applyDevices = useCallback((d: DeviceItem[]) => {
+    rostersLandedRef.current.devices = true;
+    setDevices(d);
+    setDevicesKnown(true);
+    setDevicesFromStore(false);
+    setRostersFailed(false);
+  }, []);
+
+  /**
    * 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。
    *
    * 这几份名单（含下面的项目树）走共享取数（`@/lib/rosterFetch`）：外壳、详情与目标
@@ -514,11 +564,14 @@ export default function Chat() {
     ])
       .then(([d, a]) => {
         if (!alive()) return;
-        setDevices(d);
+        rostersLandedRef.current.agents = true;
+        applyDevices(d);
         setAgents(a);
       })
       .catch((e: unknown) => {
-        if (alive()) sessionIndex.setLoadError(e);
+        if (!alive()) return;
+        setRostersFailed(true);
+        sessionIndex.setLoadError(e);
       })
       // 取不到也算问过：挑 Agent 那一屏不能为了一次失败永远转下去。
       .finally(() => {
@@ -529,7 +582,7 @@ export default function Chat() {
   useAccountChannel([AccountChannelDevicePresence], () => {
     deviceRoster
       .get()
-      .then(setDevices)
+      .then(applyDevices)
       // 名单取不到时保持原样：组头少一维好过把用户正在看的一列清空。
       .catch(() => {});
   });
@@ -539,7 +592,10 @@ export default function Chat() {
   const loadProjects = useCallback(() => {
     projectRoster
       .get()
-      .then(setProjects)
+      .then((p) => {
+        rostersLandedRef.current.projects = true;
+        setProjects(p);
+      })
       .catch(() => {})
       // 取不到也算问过：那一屏不能为了一次失败永远转下去。
       .finally(() => setProjectsSettled(true));
@@ -559,7 +615,10 @@ export default function Chat() {
   useAccountChannel([AccountChannelSyncVersion], () => {
     agentRoster
       .get<NewConvAgent & { department_name?: string }>()
-      .then(setAgents)
+      .then((a) => {
+        rostersLandedRef.current.agents = true;
+        setAgents(a);
+      })
       .catch(() => {});
     reloadProjects();
   });
@@ -1169,8 +1228,25 @@ export default function Chat() {
     setHeldCounts({ key: countsKey, counts: phoneCounts });
   }
 
-  /** 列表载入之后断网：副标题换成「没有网络 · HH:MM 的内容」，不加横幅。 */
-  const offlineSince = useOfflineSince();
+  /**
+   * 没有网络时副标题换成「没有网络 · HH:MM 的内容」，不加横幅。摆着的是本机存储里
+   * 的旧样子（含完全离线打开）时，时间取那一份的时间。
+   */
+  const offlineSince = useOfflineSince(sessionIndex.freshAt);
+  /**
+   * 摆着的是本地的旧样子（列表或设备名单，规格 2026-11-25 决策 A5）：实时标记置灰。
+   * 正在核对时才说「同步中」「更新中」——取数失败或没有网络时没有在同步。
+   */
+  const phoneStale = sessionIndex.stale || devicesFromStore;
+  const phoneSyncing =
+    phoneStale &&
+    !sessionIndex.loadError &&
+    !rostersFailed &&
+    offlineSince === null;
+  /** 取数失败的横幅：没有网络时不挂，副标题已经说了（决策同上）。 */
+  const phoneShowsLoadError =
+    !!sessionIndex.loadError && phoneRows.length > 0 && offlineSince === null;
+  const { status: identityStatus } = useMe();
 
   /** 长按「停止这一轮」：只给在跑、且承载它的机器在线（停止发得出去）的那几行。 */
   const onlineDeviceIds = useMemo(
@@ -1450,11 +1526,17 @@ export default function Chat() {
         : scopedDevice
           ? presence(scopedDevice.online)
           : {
-              text: t("chat.phone.machinesOnline", {
-                online: onlineMachineCount,
-                total: sessionMachines.length,
-              }),
-              dot: onlineMachineCount > 0 ? "running" : "idle",
+              // 名单还没到 / 取不到时数量未知，写「—」而不是 0（W25）。
+              text: t(
+                "chat.phone.machinesOnline",
+                devicesKnown
+                  ? {
+                      online: onlineMachineCount,
+                      total: sessionMachines.length,
+                    }
+                  : { online: "—", total: "—" },
+              ),
+              dot: devicesKnown && onlineMachineCount > 0 ? "running" : "idle",
             };
   /**
    * 搜索框下「命中几条」。端点那几轴、且没有本地再收窄时，是端点在完整集合上数的；
@@ -1469,6 +1551,10 @@ export default function Chat() {
     <AppShell
       flush
       ownHeader
+      // 手机首页的页头高过 52px（还有筛选条），细条由它摆在自己的页头下方。
+      ownStrip={
+        isMobile && compose?.step !== "draft" && compose?.step !== "project"
+      }
       index={desktopIndex}
       // 新对话草稿与会话详情同一种沉浸形态（决策 3）：底部 tab 也让出来，只剩草稿自己那层头部。
       immersive={isMobile && compose?.step === "draft"}
@@ -1504,6 +1590,9 @@ export default function Chat() {
             searchCount={phoneSearchCount}
             settled={phoneSettled}
             refreshing={phoneRefreshing}
+            stale={phoneStale}
+            syncing={phoneSyncing}
+            unstable={identityStatus === "unstable"}
             rows={phoneRows}
             filter={filter}
             onFilterChange={setFilter}
@@ -1525,11 +1614,10 @@ export default function Chat() {
             loadMoreFailed={sessionIndex.loadMoreFailed}
             onLoadMore={sessionIndex.loadMore}
             banners={
-              (sessionIndex.loadError && phoneRows.length > 0) ||
-              sessionIndex.saveFailure ? (
+              phoneShowsLoadError || sessionIndex.saveFailure ? (
                 <IndexBanners
                   sessionIndex={sessionIndex}
-                  showLoadError={phoneRows.length > 0}
+                  showLoadError={phoneShowsLoadError}
                 />
               ) : undefined
             }

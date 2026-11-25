@@ -7,6 +7,7 @@ import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
 import { attentionReasonOf } from "@/lib/attentionAdapter";
 import { api } from "@/lib/api";
 import type { DeviceItem } from "@/lib/devices";
+import { accountStore } from "@/lib/localStore";
 import type { IndexAxis } from "@/lib/sessionAxes";
 import type { SessionFilter } from "@/lib/sessionView";
 import {
@@ -27,6 +28,12 @@ import {
  * 响应体大一点——它本来就不上屏。
  */
 const MIRROR_MAX_PER_GROUP = "50";
+
+/**
+ * 列表在本机存储里的类别名（规格 2026-11-25 决策 A1）：键是范围键，值是 `StoredRange`。
+ * 每个看过的「范围 + 筛选 + 搜索词」各存一份第一页。
+ */
+const STORE_KIND = "session-index";
 
 /** 索引数据层要向页面借的东西。 */
 export interface SessionIndexInput {
@@ -92,6 +99,21 @@ export type SaveFailure = {
 interface RangeSnapshot {
   groups: IndexGroupPayload[];
   unreadTotal: number;
+  /**
+   * 这一份是从本机存储读回来的（决策 A5）时，它当初取回的时刻；本页内存里取回的
+   * 没有这一格。有它就是「新数据到达之前的旧样子」：实时标记置灰、标「同步中」。
+   */
+  savedAt?: number;
+  /** 从存储读回时一并带回的账号总数（本页还没问出来之前先用它）。 */
+  accountTotal?: number;
+}
+
+/** 落进本机存储的那一份：取回的时刻是必填的，读回来才分得清有多旧。 */
+interface StoredRange {
+  groups: IndexGroupPayload[];
+  unreadTotal: number;
+  accountTotal: number;
+  savedAt: number;
 }
 
 /** 「对话」页与索引数据层之间的全部契约。 */
@@ -104,8 +126,16 @@ export interface SessionIndexData {
   accountTotal: number | null;
   /** 「未读」chip 上那个数。 */
   unreadTotal: number;
-  /** 这一次取数成功过没有。 */
+  /** 这一次取数成功过没有（或者手上已有从本机存储读回的这一范围，见 `stale`）。 */
   loaded: boolean;
+  /**
+   * 摆着的是从本机存储读回来的这一范围（规格 2026-11-25 决策 A5）：这一遍取数还没
+   * 落地，行上的实时标记（等你 / 运行中 / 出错）说的是上次的样子。落地即为假；取数
+   * 失败时仍为真（旧样子还在屏上）。机器轴恒为假：那一档不落盘。
+   */
+  stale: boolean;
+  /** `stale` 时那一份当初取回的时刻（离线副行用它）；否则 null。 */
+  freshAt: number | null;
   /**
    * 当前范围这一遍的取数还没落地；旧范围不能参与机器快照 reconciliation。
    *
@@ -267,7 +297,8 @@ export function useSessionIndex({
   const [searchQuery, setSearchQuery] = useState("");
 
   /**
-   * 每个范围上一次的结果（决策 6）。只活在这一页的内存里，不落手机存储。
+   * 每个范围上一次的结果（决策 6）。本页内存里的这一份是快路；本机存储里的那一份
+   * （决策 A1）只在内存里还没有这一范围时读回来补上，并带着 savedAt 标成旧的。
    * 放 state 而不是 ref：切回看过的范围时渲染就要读它。
    */
   const [rangeCache, setRangeCache] = useState<Map<string, RangeSnapshot>>(
@@ -349,6 +380,24 @@ export function useSessionIndex({
   const rangeKey = `${axis}|${scope ?? ""}|${debouncedSearch}|${filter}`;
   /** 平铺那一档的组身份：收了 scope 就是那一组，否则是时间轴那唯一的一组。 */
   const flatScope = scope ?? "time";
+
+  // 本机存储里这一范围上次的样子（决策 A1、A5）：内存里还没有它时读回来先摆上，不等
+  // 这一遍取数。网络先回来了就不要它（内存里已有这一范围、且是新的）。存储不可用、
+  // 换了账号时读到的是 undefined，照旧骨架等网络（A6）。机器轴不读：那一档不落盘。
+  useEffect(() => {
+    if (axis === "machine") return;
+    let current = true;
+    const key = rangeKey;
+    void accountStore.get<StoredRange>(STORE_KIND, key).then((stored) => {
+      if (!current || !stored) return;
+      setRangeCache((prev) =>
+        prev.has(key) ? prev : new Map(prev).set(key, stored),
+      );
+    });
+    return () => {
+      current = false;
+    };
+  }, [axis, rangeKey]);
   // pending 必须与这一次 render 的范围同步，不能等 passive effect 再补一拍；否则
   // 新控件会短暂配上旧行，A→B→A 也可能被 B 留下的布尔状态永久卡住。
   const rangePending = appliedRangeKey !== rangeKey;
@@ -525,6 +574,15 @@ export function useSessionIndex({
               unreadTotal: unread.total ?? 0,
             }),
           );
+          // 下一次冷启动先摆这一份（决策 A1）。机器轴的行来自机器快照，不落盘。
+          if (axis !== "machine") {
+            void accountStore.put<StoredRange>(STORE_KIND, rangeKey, {
+              groups,
+              unreadTotal: unread.total ?? 0,
+              accountTotal: account.total ?? 0,
+              savedAt: Date.now(),
+            });
+          }
           settleRound();
         })
         .catch((e: unknown) => {
@@ -868,7 +926,9 @@ export function useSessionIndex({
       });
       setOptimisticRemoved((prev) => [...prev, rowKey(row.conversationId)]);
       // 别的范围的缓存里也可能有它：整份作废，免得切过去时删掉的那条又闪回来。
+      // 本机存储里各范围的那几份同理，从里面摘掉这一条（下次冷启动不闪回）。
       setRangeCache(new Map());
+      void forgetStored(row.conversationId);
       shiftTotals(row, -1);
       onDeleted(row);
       setPendingDelete(null);
@@ -880,12 +940,16 @@ export function useSessionIndex({
     }
   }, [pendingDelete, shiftTotals, onDeleted]);
 
+  const stale = cached?.savedAt !== undefined;
+
   return {
     indexGroups: shownGroups,
     mirrorRows,
-    accountTotal,
+    accountTotal: accountTotal ?? cached?.accountTotal ?? null,
     unreadTotal: cached ? cached.unreadTotal : unreadTotal,
-    loaded,
+    loaded: loaded || stale,
+    stale,
+    freshAt: cached?.savedAt ?? null,
     rangePending,
     refreshing,
     loadError: visibleLoadError,
@@ -920,4 +984,22 @@ export function useSessionIndex({
     deleting,
     confirmDelete,
   };
+}
+
+/** 把一条删掉的对话从本机存储里每个范围的那一份里摘掉。 */
+async function forgetStored(conversationId: string): Promise<void> {
+  const entries = await accountStore.list<StoredRange>(STORE_KIND);
+  await Promise.all(
+    entries.map(({ key, value }) =>
+      accountStore.put<StoredRange>(STORE_KIND, key, {
+        ...value,
+        groups: value.groups.map((g) => ({
+          ...g,
+          items: (g.items ?? []).filter(
+            (item) => item.conversation_id !== conversationId,
+          ),
+        })),
+      }),
+    ),
+  );
 }

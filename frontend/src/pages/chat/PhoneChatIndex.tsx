@@ -15,6 +15,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 import {
   ChevronDown,
+  LoaderCircle,
   MessageCirclePlus,
   RotateCw,
   Search,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -32,6 +34,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { IdentityUnstableStrip } from "@/components/AppShell";
 import { EmptyState, MobileNavButton } from "@/components/console";
 import {
   IndexRefreshBar,
@@ -60,6 +63,37 @@ import {
  * 筛选不用记在这里——它是 Chat 的状态，Chat 在 `/chat` 与 `/chat/:id` 之间不卸载。
  */
 const scrollMemory = new Map<string, number>();
+
+/** 新数据替换本地数据时，离开的行淡出多久后从列表里拿掉（与 fade-out 时长一致）。 */
+const LEAVE_MS = 200;
+
+/**
+ * 本地数据换成新数据的那一刻（规格 2026-11-25 决策 A5）。
+ *
+ * 旧样子的那批行在 `stale` 期间一直记着；`stale` 落下时与新的一批比一次：多出来的
+ * 行淡入，走掉的行原地淡出、`LEAVE_MS` 之后拿掉，其余行就是原来那几个节点。
+ */
+interface Swap {
+  stale: boolean;
+  /** `stale` 期间最后一批行。 */
+  staleRows: MirrorIndexRow[];
+  entering: ReadonlySet<string>;
+  leaving: MirrorIndexRow[];
+}
+
+const NO_ENTERING: ReadonlySet<string> = new Set();
+
+/** 两批行是不是同一组对话（同序）。按身份比而不是按引用：宿主每次给新数组也不会来回置。 */
+function sameKeys(a: MirrorIndexRow[], b: MirrorIndexRow[]): boolean {
+  return a.length === b.length && a.every((row, i) => row.key === b[i].key);
+}
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
 
 /** 页头副标题：一句状态，前面可带一颗点。 */
 export interface PhoneSubtitle {
@@ -92,6 +126,18 @@ export interface PhoneChatIndexProps {
    * 2026-11-20 决策 5）：留在原位变淡、仍点得开，列表 aria-busy，筛选条下出细进度条。
    */
   refreshing?: boolean;
+  /**
+   * 摆着的是本机存储里上次的样子（规格 2026-11-25 决策 A5）：行上的实时标记（等你 /
+   * 运行中 / 出错）与页头的在线点置灰，直到新数据到达。
+   */
+  stale?: boolean;
+  /**
+   * 本地的旧样子正在被核对：分组标题旁「同步中」，页头副行前加「更新中」，页头底边
+   * 出细进度条。取数失败、或没有网络时不说（那时没有在同步）。
+   */
+  syncing?: boolean;
+  /** 身份核对失败（「网络不稳定」）：细条摆在这一页自己的页头下方。 */
+  unstable?: boolean;
   /** 已按筛选收窄过的行。 */
   rows: MirrorIndexRow[];
   filter: PhoneFilter;
@@ -179,6 +225,9 @@ export function PhoneChatIndex({
   searchCount,
   settled,
   refreshing = false,
+  stale = false,
+  syncing = false,
+  unstable = false,
   rows,
   filter,
   onFilterChange,
@@ -222,6 +271,48 @@ export function PhoneChatIndex({
     if (el) scrollMemory.set(scopeKey, el.scrollTop);
   }, [scopeKey]);
 
+  // 旧样子换成新数据：渲染期比一次，不经 effect（state 由事件 / 定时器回调之外只在
+  // 这里推进，与 Chat 的 heldCounts 同一个写法）。
+  const [swap, setSwap] = useState<Swap>(() => ({
+    stale,
+    staleRows: stale ? rows : [],
+    entering: NO_ENTERING,
+    leaving: [],
+  }));
+  if (stale && (!swap.stale || !sameKeys(swap.staleRows, rows))) {
+    setSwap({ stale, staleRows: rows, entering: NO_ENTERING, leaving: [] });
+  } else if (!stale && swap.stale) {
+    const before = new Set(swap.staleRows.map((row) => row.key));
+    const after = new Set(rows.map((row) => row.key));
+    setSwap({
+      stale,
+      staleRows: [],
+      entering: new Set(
+        rows.filter((row) => !before.has(row.key)).map((row) => row.key),
+      ),
+      // 减少动态时不留着淡出，直接拿掉。
+      leaving: prefersReducedMotion()
+        ? []
+        : swap.staleRows.filter((row) => !after.has(row.key)),
+    });
+  }
+  useEffect(() => {
+    if (swap.leaving.length === 0) return;
+    const timer = setTimeout(
+      () => setSwap((prev) => ({ ...prev, leaving: [] })),
+      LEAVE_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [swap.leaving]);
+  const shownRows = useMemo(
+    () => (swap.leaving.length > 0 ? [...rows, ...swap.leaving] : rows),
+    [rows, swap.leaving],
+  );
+  const leavingKeys = useMemo(
+    () => new Set(swap.leaving.map((row) => row.key)),
+    [swap.leaving],
+  );
+
   const agentById = useMemo(
     () => new Map(agents.map((agent) => [agent.syncId, agent])),
     [agents],
@@ -235,11 +326,11 @@ export function PhoneChatIndex({
   const sections = useMemo(
     () =>
       phaseSections(
-        rows.map(toPhaseItem),
+        shownRows.map(toPhaseItem),
         // eslint-disable-next-line react-hooks/purity -- 分界只在行变化时读一次时钟，见上。
         startOfToday(Date.now()),
       ),
-    [rows],
+    [shownRows],
   );
 
   const filterItems = useMemo<
@@ -274,8 +365,27 @@ export function PhoneChatIndex({
       row.deviceId === undefined
         ? undefined
         : sessionPath({ ...row, deviceId: row.deviceId });
+    const leaving = leavingKeys.has(row.key);
+    const entering = swap.entering.has(row.key);
     return (
-      <li key={row.key}>
+      <li
+        key={row.key}
+        data-stale={stale || undefined}
+        data-entering={entering || undefined}
+        data-leaving={leaving || undefined}
+        aria-hidden={leaving || undefined}
+        className={cn(
+          // 旧样子：状态牌、运行 / 出错标记、未读点褪成灰（行里只有它们是 rounded-full
+          // 或 status-mark），新数据到了复色。头像与文字不动。
+          "[&_.rounded-full]:transition-[filter] [&_[data-slot=status-mark]]:transition-[filter] motion-reduce:[&_.rounded-full]:transition-none motion-reduce:[&_[data-slot=status-mark]]:transition-none",
+          stale &&
+            "[&_.rounded-full]:grayscale [&_[data-slot=status-mark]]:grayscale",
+          entering &&
+            "animate-in duration-300 fade-in motion-reduce:animate-none",
+          leaving &&
+            "pointer-events-none animate-out duration-200 fill-mode-forwards fade-out motion-reduce:animate-none",
+        )}
+      >
         <SessionRow
           variant="phone"
           sessionId={row.key}
@@ -403,9 +513,18 @@ export function PhoneChatIndex({
           >
             <h2
               id={`phase-${section.key}-title`}
-              className="px-4 pt-3 pb-0.5 text-xs font-semibold text-muted-foreground"
+              className="flex items-center gap-2 px-4 pt-3 pb-0.5 text-xs font-semibold text-muted-foreground"
             >
               {t(SECTION_LABEL[section.key])}
+              {syncing ? (
+                <span className="inline-flex items-center gap-1 text-3xs font-normal text-decorative-foreground">
+                  <LoaderCircle
+                    className="size-3 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                  {t("chat.phone.syncing")}
+                </span>
+              ) : null}
             </h2>
             <ul>{section.items.map(renderRow)}</ul>
           </section>
@@ -480,13 +599,18 @@ export function PhoneChatIndex({
               >
                 {subtitle.dot ? (
                   <StatusDot
-                    status={subtitle.dot}
+                    // 在线点同样是实时标记：旧样子时置灰。
+                    status={stale ? "idle" : subtitle.dot}
                     size="xs"
                     aria-hidden="true"
                     aria-label={undefined}
                   />
                 ) : null}
-                <span className="truncate">{subtitle.text}</span>
+                <span className="truncate">
+                  {syncing
+                    ? t("chat.phone.updatingSubtitle", { text: subtitle.text })
+                    : subtitle.text}
+                </span>
               </span>
             </button>
             <Button
@@ -531,14 +655,16 @@ export function PhoneChatIndex({
           />
         )}
         {/* 贴着页头底边（筛选条下，搜索时在命中句下），出现与消失都不推动列表。 */}
-        {refreshing && settled ? (
+        {(refreshing || syncing) && settled ? (
           <IndexRefreshBar className="bottom-0" />
         ) : null}
       </header>
+      {/* 页头下方、列表之上：占自己的一行，不压在筛选条或行上。 */}
+      {unstable ? <IdentityUnstableStrip /> : null}
       <div
         ref={listRef}
         data-testid="chat-phone-list"
-        aria-busy={!settled || refreshing || undefined}
+        aria-busy={!settled || refreshing || syncing || undefined}
         onScroll={onScroll}
         className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,0px)]"
       >

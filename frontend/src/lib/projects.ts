@@ -113,9 +113,11 @@ export async function fetchProjects(): Promise<ProjectNode[]> {
  * 共享的那一份项目树（`@/lib/rosterFetch`）：对话页与详情同一屏上共用一个在飞请求、
  * 10 秒内复用。同步版本推进与本文件里的每一个写作废它。
  */
-export const projectRoster = createRoster(fetchProjects, [
-  AccountChannelSyncVersion,
-]);
+export const projectRoster = createRoster(
+  fetchProjects,
+  [AccountChannelSyncVersion],
+  "roster-projects",
+);
 
 export function createProject(
   fields: ProjectFields,

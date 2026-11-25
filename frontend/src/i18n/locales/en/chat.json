@@ -67,6 +67,8 @@
     "online": "Online",
     "offline": "Offline",
     "offlineSince": "No network · content from {{time}}",
+    "syncing": "Syncing",
+    "updatingSubtitle": "Updating · {{text}}",
     "search": "Search conversation titles",
     "searchScope": "Searching titles in “{{scope}}” · {{count}}",
     "searchNote": "Only titles are matched. To find by agent, project or machine, switch the scope at the top.",

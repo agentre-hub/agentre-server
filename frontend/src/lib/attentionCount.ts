@@ -48,6 +48,8 @@ export async function fetchAttentionCounts(): Promise<AttentionCounts> {
  * 共享的那一份计数（`@/lib/rosterFetch`）：外壳随每个页面重新挂上，10 秒内复用上一次
  * 的数，不为一次换页再数一遍。镜像变了的信号作废它——数字只会落后到下一条信号为止。
  */
-export const attentionRoster = createRoster(fetchAttentionCounts, [
-  AccountChannelMirrorChanged,
-]);
+export const attentionRoster = createRoster(
+  fetchAttentionCounts,
+  [AccountChannelMirrorChanged],
+  "roster-attention",
+);
