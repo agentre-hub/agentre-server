@@ -34,6 +34,7 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { flushSync } from "react-dom";
 import { Link } from "react-router-dom";
 
 import { IdentityUnstableStrip } from "@/components/AppShell";
@@ -402,6 +403,24 @@ export function PhoneChatIndex({
     wasSearchOpen.current = searchOpen;
   }, [searchOpen]);
 
+  // 长按菜单是一层浮层（D1）：开着时系统返回只关菜单、停在原页。菜单自己不进历史，
+  // 由包的 onMenuOpenChange 告知开关，宿主登记记号；返回键里把 menuOpen 置 false，
+  // 包随之关掉那一个菜单。同一时刻只会有一行的菜单开着，状态记行键即可。
+  const [menuRowKey, setMenuRowKey] = useState<string | null>(null);
+  useBackDismiss(menuRowKey !== null, () => setMenuRowKey(null));
+  // 选一项会同时「关菜单」和做事（换地址、开确认框）。菜单的记号要先退干净，动作再
+  // 发生：否则动作在记号还垫在底下时 replace 了地址，useBackDismiss 随后按旧记号多退
+  // 一格，刚换的范围就被退掉了（搜索态下还压着第二层记号）。flushSync 让关菜单与它的
+  // 退记号 effect 在动作之前落地。
+  const onRowMenuOpenChange = (key: string, open: boolean) =>
+    setMenuRowKey((cur) => (open ? key : cur === key ? null : cur));
+  const afterMenuClosed = (fn: (() => void) | undefined) =>
+    fn &&
+    (() => {
+      flushSync(() => setMenuRowKey(null));
+      fn();
+    });
+
   const renderRow = (row: MirrorIndexRow) => {
     const agent = agentById.get(row.agentSyncId);
     const path = row.projectSyncId
@@ -481,13 +500,17 @@ export function PhoneChatIndex({
           }}
           href={href}
           renderLink={renderLink}
+          menuOpen={menuRowKey === row.key}
+          onMenuOpenChange={(open) => onRowMenuOpenChange(row.key, open)}
           // 长按时这一行浮起来，菜单贴着它（规格「长按」）；长按不弹系统的链接预览。
           className="px-4 select-none [-webkit-touch-callout:none] data-[state=open]:relative data-[state=open]:z-10 data-[state=open]:bg-raised data-[state=open]:shadow-overlay"
-          onStopTurn={stopTurnOf(row)}
-          onFilterAgent={filterAgentOf(row)}
-          onFilterMachine={filterMachineOf(row)}
+          onStopTurn={afterMenuClosed(stopTurnOf(row))}
+          onFilterAgent={afterMenuClosed(filterAgentOf(row))}
+          onFilterMachine={afterMenuClosed(filterMachineOf(row))}
           onDeleteSession={
-            row.saved !== false ? () => onDelete(row) : undefined
+            row.saved !== false
+              ? afterMenuClosed(() => onDelete(row))
+              : undefined
           }
           rowActions={
             row.saved === false ? (
@@ -522,7 +545,7 @@ export function PhoneChatIndex({
           body={t("chat.phone.loadFailed.body")}
           testId="chat-load-failed"
           action={
-            <Button size="lg" className="w-full" onClick={onRetry}>
+            <Button size="lg" className="h-11 w-full" onClick={onRetry}>
               <RotateCw aria-hidden="true" />
               {t("sessionIndex.loadMore.retry")}
             </Button>

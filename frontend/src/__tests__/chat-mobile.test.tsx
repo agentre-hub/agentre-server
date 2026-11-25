@@ -564,6 +564,8 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     );
     const retry = within(failed).getByRole("button", { name: "Retry" });
     expect(retry.className).toContain("w-full");
+    // G1：触屏点击目标 44px（Button lg 只有 h-10）。
+    expect(retry.className).toContain("h-11");
 
     failing = false;
     fireEvent.click(retry);
