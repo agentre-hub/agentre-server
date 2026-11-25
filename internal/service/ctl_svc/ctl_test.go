@@ -520,7 +520,11 @@ func TestWrite_GivenUnsupportedServerOps_ThenClearRejectionAndNoWrite(t *testing
 	assert.Equal(t, http.StatusUnprocessableEntity, statusOf(t, err))
 	assert.Contains(t, err.Error(), "desktop")
 
-	assert.Equal(t, http.StatusUnprocessableEntity, statusOf(t, ErrSendUnsupported))
+}
+
+func TestSend_GivenServerPath_ThenTheAnswerNamesTheOwningAgentred(t *testing.T) {
+	assert.Equal(t, http.StatusMisdirectedRequest, statusOf(t, ErrSendHandledByAgentred))
+	assert.Contains(t, ErrSendHandledByAgentred.Error(), "handled by the agentred that owns the session")
 }
 
 func TestWrite_GivenReadOnlyField_ThenBadRequest(t *testing.T) {

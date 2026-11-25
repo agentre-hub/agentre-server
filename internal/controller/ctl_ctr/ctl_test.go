@@ -138,8 +138,11 @@ func TestResources_GivenErrors_ThenStatusAndErrorBodyFollowTheContract(t *testin
 	assert.Equal(t, "invalid request body", errorOf(t, rec))
 }
 
-func TestSend_GivenServerPath_ThenClearlyUnsupported(t *testing.T) {
+func TestSend_GivenServerPath_ThenItPointsAtTheAgentredThatOwnsTheSession(t *testing.T) {
+	// 控制台会话里的 send 由会话所在的 agentred 以账号对端身份执行(spec 2026-11-25 决策 12):
+	// server 不派发,只说清楚该由谁处理——不再是「不支持」的用法错误。
 	rec := post(newEngine(t, &fakeCtl{}), "/v1/ctl/send", agentredToken(), `{"agent":"Eva","text":"hi"}`)
-	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
-	assert.Contains(t, errorOf(t, rec), "send is not supported")
+	assert.Equal(t, http.StatusMisdirectedRequest, rec.Code)
+	assert.Contains(t, errorOf(t, rec), "handled by the agentred that owns the session")
+	assert.NotContains(t, errorOf(t, rec), "not supported")
 }

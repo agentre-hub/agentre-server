@@ -105,15 +105,16 @@ func notFound(kind agentrewire.CtlKind, id int64) error {
 	return &Error{Status: http.StatusNotFound, Msg: fmt.Sprintf("%s id %d not found", kindNames[kind], id)}
 }
 
-// unsupported 是本 spec 在 server 路径上明确不做的操作（send、OpenClaw token、桌面
-// 设备的本机路径）。
+// unsupported 是本 spec 在 server 路径上明确不做的操作（OpenClaw token、桌面设备的本机路径）。
 func unsupported(format string, a ...any) error {
 	return &Error{Status: http.StatusUnprocessableEntity, Msg: fmt.Sprintf(format, a...)}
 }
 
-// ErrSendUnsupported 是 `agrctl send` 打到 server 上时的回答。
-var ErrSendUnsupported = unsupported(
-	"send is not supported for sessions dispatched from the web console; dispatch the task from the console instead")
+// ErrSendHandledByAgentred 是 `agrctl send` 打到 server 上时的回答：控制台会话里的 send 由会话
+// 所在的 agentred 以账号对端身份执行（spec 2026-11-25 决策 12），server 从不派发。还在打这里的
+// 是旧版 agentred（421，agrctl 按执行失败退出）。
+var ErrSendHandledByAgentred = &Error{Status: http.StatusMisdirectedRequest, Msg: "send from a session is handled by the agentred that owns the session, " +
+	"not by the account server; upgrade that agentred"}
 
 // kindNames 是错误消息与变更清单里的资源名，与 agrctl 的资源名一致。
 var kindNames = map[agentrewire.CtlKind]string{
