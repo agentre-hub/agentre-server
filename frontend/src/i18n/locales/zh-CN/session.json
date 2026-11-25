@@ -117,7 +117,8 @@
   "decision": {
     "alreadyHandled": "该请求已被处理。",
     "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。",
-    "retry": "重试"
+    "retry": "重试",
+    "confirmingWaiting": "正在确认是否还在等你"
   },
   "phoneHeader": {
     "status": {
@@ -128,7 +129,8 @@
       "idle": "空闲",
       "offline": "离线 · {{time}}",
       "offlineNoTime": "离线",
-      "connecting": "正在连接"
+      "connecting": "正在连接",
+      "syncing": "同步中"
     },
     "info": {
       "title": "对话信息",

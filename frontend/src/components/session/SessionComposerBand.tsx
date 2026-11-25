@@ -7,6 +7,7 @@ import {
   Button,
   isPendingToolPermission,
   QueuedMessagesBar,
+  Spinner,
   ToolPermissionDock,
   TranscriptPortsProvider,
   type ChatComposerHandle,
@@ -76,18 +77,40 @@ export interface DockedPermission {
  * 手机上要停靠的那条审批（规格 2026-11-05「底部停靠区 · 等你审批」）：转录里最早
  * 一条还没决定的工具权限请求。提问与计划审批不算（`isPendingToolPermission`），
  * 它们留在转录里作答。没有就是 null，停靠区回到输入框。
+ *
+ * `skip` 里的那几条不停靠：本地先画出来、问过之后那台机器已经不在等的审批（规格
+ * 2026-11-25 d9「不再等则收起」）。
  */
 export function pickDockedPermission(
   messages: readonly TranscriptMessage[],
+  skip?: ReadonlySet<string>,
 ): DockedPermission | null {
   for (const message of messages) {
     for (const block of message.blocks) {
-      if (isPendingToolPermission(block)) {
+      if (
+        isPendingToolPermission(block) &&
+        !skip?.has(dockedRequestId(block))
+      ) {
         return { toolBlock: block, messageId: message.id };
       }
     }
   }
   return null;
+}
+
+/**
+ * 一条工具权限块的请求号（`isPendingToolPermission` 认的同一格：canonical 的
+ * `tool.permission` 载荷）。共享包没有导出它的读取器，这里只读这一格。
+ */
+export function dockedRequestId(block: TranscriptBlock): string {
+  const canonical = (
+    block as {
+      canonical?: { kind?: string; toolPermission?: { requestId?: string } };
+    }
+  ).canonical;
+  return canonical?.kind === "tool.permission"
+    ? (canonical.toolPermission?.requestId ?? "")
+    : "";
 }
 
 export interface SessionComposerBandProps {
@@ -144,7 +167,20 @@ export interface SessionComposerBandProps {
   dockedPermission?: DockedPermission | null;
   /** 停靠审批提交时走的端口，与转录里那张卡同一组。 */
   decisionPorts?: TranscriptPorts;
+  /**
+   * 停靠的那条审批是本地先画出来的，还没问到那台机器是不是还在等（规格 2026-11-25
+   * d9）：三键置灰、键上方写「正在确认是否还在等你」。不给 = 原样。
+   */
+  dockConfirming?: boolean;
 }
+
+/**
+ * 「正在确认」那一行排在「允许」之上。停靠条是共享包的组件，它只留了一个槽（停止，
+ * 排在最下面），所以这一行从那个槽进去，再用 flex 的 order 挪到按钮前面：按钮、按钮
+ * 那一排与错误行排到后面，标题与工具入参留在前面。只在确认期间套用。
+ */
+const DOCK_CONFIRMING_ORDER =
+  "[&>button]:order-2 [&>.grid]:order-2 [&>p]:order-2";
 
 /**
  * 钉住的那一带：输入框，或者三档「等下去也不会变」时的只读条；手机上还可能是
@@ -187,6 +223,7 @@ export default function SessionComposerBand({
   composerHandleRef,
   dockedPermission,
   decisionPorts,
+  dockConfirming = false,
 }: SessionComposerBandProps) {
   const { t } = useTranslation();
   const composerModule = useSessionComposerModule();
@@ -294,27 +331,47 @@ export default function SessionComposerBand({
           </p>
         ) : dockedPermission && decisionPorts ? (
           <TranscriptPortsProvider ports={decisionPorts}>
-            <ToolPermissionDock
-              toolBlock={dockedPermission.toolBlock}
-              messageId={dockedPermission.messageId}
-              sessionId={TranscriptSessionId}
-              cwd={cwd}
-              // 「■ 停止」与输入框提交位那颗同一份停止中状态（useTurnStop）。
-              stop={
-                running && onStop ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="min-h-11 self-start text-muted-foreground"
-                    disabled={stopping}
-                    onClick={onStop}
-                  >
-                    <Square aria-hidden="true" className="size-3.5" />
-                    {t("session.abort")}
-                  </Button>
-                ) : null
-              }
-            />
+            {/*
+              确认期间整条停靠条禁用：共享包的停靠条没有「另一种原因的禁用」入参（它的
+              connecting 会写「正在连接」，说的不是这件事），fieldset 的 disabled 让里面
+              每一颗按钮都按 :disabled 置灰、点不动。contents 不占一层盒子。
+            */}
+            <fieldset disabled={dockConfirming} className="contents">
+              <ToolPermissionDock
+                toolBlock={dockedPermission.toolBlock}
+                messageId={dockedPermission.messageId}
+                sessionId={TranscriptSessionId}
+                cwd={cwd}
+                className={dockConfirming ? DOCK_CONFIRMING_ORDER : undefined}
+                // 「■ 停止」与输入框提交位那颗同一份停止中状态（useTurnStop）。
+                stop={
+                  <>
+                    {dockConfirming ? (
+                      <div
+                        role="status"
+                        data-testid="tool-permission-dock-confirming"
+                        className="order-1 flex items-center gap-2 text-aux text-muted-foreground"
+                      >
+                        <Spinner className="size-3.5" />
+                        {t("session.decision.confirmingWaiting")}
+                      </div>
+                    ) : null}
+                    {running && onStop ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="min-h-11 self-start text-muted-foreground"
+                        disabled={stopping}
+                        onClick={onStop}
+                      >
+                        <Square aria-hidden="true" className="size-3.5" />
+                        {t("session.abort")}
+                      </Button>
+                    ) : null}
+                  </>
+                }
+              />
+            </fieldset>
           </TranscriptPortsProvider>
         ) : composerModule ? (
           <composerModule.default

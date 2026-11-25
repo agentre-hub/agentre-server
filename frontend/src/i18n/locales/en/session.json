@@ -117,7 +117,8 @@
   "decision": {
     "alreadyHandled": "This request has already been handled.",
     "submitFailed": "That decision could not be submitted. Nothing was sent — try again.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "confirmingWaiting": "Checking whether it's still waiting for you"
   },
   "phoneHeader": {
     "status": {
@@ -128,7 +129,8 @@
       "idle": "Idle",
       "offline": "Offline · {{time}}",
       "offlineNoTime": "Offline",
-      "connecting": "Connecting"
+      "connecting": "Connecting",
+      "syncing": "Syncing"
     },
     "info": {
       "title": "Conversation info",

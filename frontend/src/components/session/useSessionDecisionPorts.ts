@@ -40,6 +40,12 @@ export interface SessionDecisionPorts {
   waiters: Waiters;
   /** 刚刚发现已被别的端回答过的那一条（R10）。 */
   handledRequestId: string | null;
+  /**
+   * 这条对话的待决清单**问到过**没有（至少一次答上来了）。`waiters` 的初值是空清单，
+   * 与「问过了，没有」长得一样：本地先画出来的那张审批卡要等这一格为真才算确认过
+   * （规格 2026-11-25 d9）。问失败不算。
+   */
+  waitersConfirmed: boolean;
   /** 目标会话换了。由详情视图的渲染期重置调用。 */
   reset: () => void;
   /**
@@ -83,6 +89,8 @@ export function useSessionDecisionPorts({
    * 一个正要消失的东西上。见 DecisionPanel 文件头。
    */
   const [handledRequestId, setHandledRequestId] = useState<string | null>(null);
+  /** 哪一条对话的待决清单答上来过。按 sid 记：换了对话，上一条的答复不算。 */
+  const [confirmedFor, setConfirmedFor] = useState<string | null>(null);
 
   const refreshWaiters = useCallback(async (): Promise<Waiters | null> => {
     const c = clientRef.current;
@@ -100,6 +108,7 @@ export function useSessionDecisionPorts({
           []) as PendingAskQuestionShape[],
       };
       setWaiters(next);
+      setConfirmedFor(sid);
       // 「已被处理」是对**那一条**待决策的说明,不是页面的永久状态:新的待决策上来
       // 之后还挂着,就成了「已被处理」与一张真等着人批的卡并排自相矛盾。
       if (next.toolPermissions.length > 0 || next.askUserQuestions.length > 0) {
@@ -332,6 +341,7 @@ export function useSessionDecisionPorts({
   const reset = useCallback(() => {
     setWaiters({ toolPermissions: [], askUserQuestions: [] });
     setHandledRequestId(null);
+    setConfirmedFor(null);
   }, []);
 
   const requestWaitersRefresh = useCallback(() => {
@@ -341,6 +351,7 @@ export function useSessionDecisionPorts({
   return {
     waiters,
     handledRequestId,
+    waitersConfirmed: confirmedFor === sid,
     reset,
     refreshWaiters,
     requestWaitersRefresh,

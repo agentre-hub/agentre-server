@@ -39,6 +39,7 @@ import { FailureNotice } from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
 import SessionDetailHeader from "@/components/session/SessionDetailHeader";
 import SessionComposerBand, {
+  dockedRequestId,
   isComposeReadonly,
   pickDockedPermission,
 } from "@/components/session/SessionComposerBand";
@@ -72,6 +73,11 @@ import {
   resolveContextWindow,
 } from "@/components/session/sessionModel";
 import { conversationTarget, machineTarget } from "@/lib/relayTarget";
+import {
+  transcriptCache,
+  type CachedTranscript,
+  type CachedTranscriptAgent,
+} from "@/lib/transcriptCache";
 import { api, ApiError } from "@/lib/api";
 import { describeFailure } from "@/lib/describeFailure";
 import { disconnected } from "@/lib/relayClient";
@@ -133,6 +139,23 @@ interface WorkspaceAgent {
 
 /** 设备状态里的「还在账号里」。撤销的设备仍会出现在清单上，只是 status 不再是它。 */
 const DEVICE_ACTIVE = 1;
+
+/** 转录变了之后停手这么久才存回本机：实时帧一批批到，不是每帧都写一次 IndexedDB。 */
+const LOCAL_SAVE_DEBOUNCE_MS = 500;
+
+const NO_IDS: readonly string[] = [];
+
+/** 一页帧里出现过的工具审批请求号（本机那一页停在哪几张审批卡上，见 localPage）。 */
+function permissionRequestIds(frames: readonly SessionEventFrame[]): string[] {
+  const ids: string[] = [];
+  for (const f of frames) {
+    const event = f.event as { kind?: string; requestId?: string } | undefined;
+    if (event?.kind === "tool_permission_request" && event.requestId) {
+      ids.push(event.requestId);
+    }
+  }
+  return ids;
+}
 
 /**
  * 会话详情视图的导航形态（任务 5 重构边界）：
@@ -406,6 +429,34 @@ export default function SessionDetailView({
    * 是两回事：前者要如实说读不到，后者还在路上。
    */
   const [history, setHistory] = useState({ settled: false, loaded: false });
+  /**
+   * 本机存着的那一页（规格 2026-11-25 决策 A1 对话部分）画出来了没有、新的到了没有。
+   *
+   * 最近打开的 30 条对话各存一页（`transcriptCache`）：点进来先画它，镜像那一页到了
+   * 再按 seq 合并（见镜像那只 effect）。`fresh` = 镜像那一页已经到了；在那之前
+   * （以及中继补齐落定之前）手机页头说「同步中」（A5）。
+   *
+   * `permissionIds` 是这一页里那几条工具审批：本地停在待审批卡上时，那台机器是不是
+   * 还在等要问过才知道，问到之前停靠条置灰（d9）。
+   *
+   * 按 sid 记：右栏换对话是同实例换 props，上一条的这一格不能漏到下一条上。
+   */
+  const [localPage, setLocalPage] = useState<{
+    sid: string;
+    fresh: boolean;
+    agent?: CachedTranscriptAgent;
+    permissionIds: readonly string[];
+  } | null>(null);
+  /**
+   * 镜像首屏那一页的边界：存回本机时从哪一格起算、往前还有没有。null = 这一趟没从
+   * 镜像读到内容（未保存的对话、读失败），不存 —— 超出 30 条与不在账号里的对话照旧。
+   */
+  const [savePage, setSavePage] = useState<{
+    sid: string;
+    oldestSeq: number;
+    hasBefore: boolean;
+    lastSeq: number;
+  } | null>(null);
   /** 从这台机器补齐失败（此前是 catch {} 静默吞掉的）。 */
   const [catchUpFailed, setCatchUpFailed] = useState(false);
   /**
@@ -461,6 +512,13 @@ export default function SessionDetailView({
    * 是异步的），所以预置游标要落在 attach 之前那一刻，而不是历史刚读完的那一刻。
    */
   const mirrorSeqRef = useRef(0);
+  /**
+   * 从本机那一页画出来的帧（按对象认）。镜像那一页到了之后它们让位：同号的换成镜像
+   * 那一份，没号的也撤掉（本机那一份无从判断是不是同一条）。
+   */
+  const localFramesRef = useRef<WeakSet<SessionEventFrame>>(new WeakSet());
+  /** 账号镜像里的那一行（宿主递下来的或自己认回来的），存回本机时一起存。 */
+  const mirrorRowRef = useRef<MirrorSessionItem | undefined>(undefined);
   /**
    * 这条会话是在**哪一个**中继客户端上 attach + 补齐过的。
    *
@@ -570,6 +628,8 @@ export default function SessionDetailView({
   ) {
     setLastTarget({ did, sid, originProp });
     setHistory({ settled: false, loaded: false });
+    setLocalPage(null);
+    setSavePage(null);
     setSummary(null);
     setListed(null);
     setMirrorSummary(null);
@@ -900,6 +960,40 @@ export default function SessionDetailView({
     (alive) => {
       if (history.settled) return;
       mirrorSeqRef.current = 0;
+      localFramesRef.current = new WeakSet();
+      mirrorRowRef.current = undefined;
+      /*
+        本机那一页与镜像**并行**去读（A1）：本机的几毫秒就到，先画；镜像那一页到了
+        以它为准。镜像先到（或已经到了）就不再画本机那一页 —— 拿旧的盖新的。
+      */
+      let fresh = false;
+      let restored: CachedTranscript | undefined;
+      const restore = (entry: CachedTranscript) => {
+        restored = entry;
+        localFramesRef.current = new WeakSet(entry.events);
+        // 已经进来的实时帧（池子里的客户端还在消费这条会话）接在后面，同号的让位。
+        setEvents((prev) => [
+          ...entry.events,
+          ...prev.filter((f) => f.seq === undefined || f.seq > entry.lastSeq),
+        ]);
+        if (entry.row) {
+          const row = entry.row;
+          setMirrorSummary((s) => s ?? mirrorRowToSummary(row));
+        }
+        // 有内容可画了；「问过了」仍等镜像（attach 与补齐守着 settled）。
+        setHistory((h) => ({ ...h, loaded: true }));
+        setLocalPage({
+          sid,
+          fresh: false,
+          agent: entry.agent,
+          permissionIds: permissionRequestIds(entry.events),
+        });
+        scrollback.noteMirrorHistory(entry.oldestSeq, entry.hasBefore);
+      };
+      const local = transcriptCache.get(sid).then((entry) => {
+        if (entry && alive() && !fresh) restore(entry);
+        return entry;
+      });
       void (async () => {
         try {
           // 那一行要整个拿到手（不只是指纹）：标题与 Agent 身份在它上面，机器离线时
@@ -913,10 +1007,33 @@ export default function SessionDetailView({
           if (!alive()) return;
           // 认领落空（端点抖动 / 账号里还没有这一行）不挡住读转录：那两件事现在
           // 各走各的，头部只是少一份替补摘要。
-          if (row) setMirrorSummary(mirrorRowToSummary(row));
+          if (row) {
+            mirrorRowRef.current = row;
+            setMirrorSummary(mirrorRowToSummary(row));
+          }
           const tail = await loadMirrorTail(sid, 0);
           if (!alive()) return;
+          fresh = true;
           mirrorSeqRef.current = tail.lastSeq;
+          /*
+            账号里已经没有这一份了（别处删掉）：本机那一页撤掉、缓存丢掉，之后与从没
+            存过一样。镜像如实回 0 帧时不分「删掉了」与「从没保存」，两者本来都不该
+            留着一页旧内容。
+          */
+          const gone = tail.frameCount === 0;
+          if (gone) {
+            void transcriptCache.forget(sid);
+            if (restored) {
+              setLocalPage(null);
+              if (!row) setMirrorSummary(null);
+              scrollback.reset();
+            }
+          } else if (restored) {
+            setLocalPage((p) =>
+              p && p.sid === sid ? { ...p, fresh: true } : p,
+            );
+          }
+          const localFrames = localFramesRef.current;
           // 历史落在最前面：这一段还没有经过中继客户端的游标去重，实时那一段由预置
           // 游标接在它后面（见下面的 attach effect）。
           //
@@ -932,9 +1049,17 @@ export default function SessionDetailView({
           // 数）而不是逐帧比对：服务端会把连续的 delta 合成一条，合出来那条的 seq 是
           // 该段最后一帧的，逐帧比对会漏掉被合掉的那些。没有 seq 的帧（轮次结束标记）
           // 留着——它不占游标，也无从判断归属哪一段。
+          //
+          // 本机那一页同理按 seq 让位，只是没号的也撤掉（本机那份无从判断是不是同一条）；
+          // 比镜像新的那几帧（看着它时实时到的、镜像落库慢一拍）留着 —— 补齐从镜像末尾
+          // 接，它们会被再送一遍，由 appendFrames 按 seq 挡掉。
           setEvents((prev) => [
             ...tail.events,
-            ...prev.filter((f) => f.seq === undefined || f.seq > tail.lastSeq),
+            ...prev.filter((f) =>
+              localFrames.has(f)
+                ? !gone && f.seq !== undefined && f.seq > tail.lastSeq
+                : f.seq === undefined || f.seq > tail.lastSeq,
+            ),
           ]);
           // loaded 说的是「账号里**有**这一份」，不是「问过了」。镜像如实回 0 帧时
           // （未保存的对话，机器轴上的大多数）它必须是假：当成读到了，页面就会摆一条
@@ -942,11 +1067,24 @@ export default function SessionDetailView({
           setHistory({ settled: true, loaded: tail.frameCount > 0 });
           if (tail.frameCount > 0) {
             scrollback.noteMirrorHistory(tail.oldestSeq, tail.hasBefore);
+            setSavePage({
+              sid,
+              oldestSeq: tail.oldestSeq,
+              hasBefore: tail.hasBefore,
+              lastSeq: tail.lastSeq,
+            });
           }
         } catch {
           // 账号里读不到这条对话的历史（端点失败 / 没有这一行）：如实收场，机器在线
           // 时中继照样能把转录补齐，离线时界面会说读不到，而不是假装是空对话。
-          if (alive()) setHistory({ settled: true, loaded: false });
+          if (!alive()) return;
+          // 本机那一页可能比这次失败晚到（离线时请求当场就败）：等它答完再收场。
+          await local;
+          if (!alive()) return;
+          // 画着本机那一页时，补齐从它的末尾接上：起点 0 会退回「只补最后 400 帧」，
+          // 在本机那一页与那一段之间留一个洞。
+          if (restored) mirrorSeqRef.current = restored.lastSeq;
+          setHistory({ settled: true, loaded: restored !== undefined });
         }
       })();
     },
@@ -2034,12 +2172,84 @@ export default function SessionDetailView({
   const resolvedAgent = identity?.agentSyncId
     ? (agents.find((a) => a.sync_id === identity.agentSyncId) ?? null)
     : null;
+  // 宿主没给种子时，本机那一页存着的 Agent 顶上（A1：名字也存在本机）。
+  const agentSeed =
+    initialAgent ?? (localPage?.sid === sid ? localPage.agent : undefined);
   const seededAgent =
-    initialAgent &&
-    (!identity?.agentSyncId || identity.agentSyncId === initialAgent.sync_id)
-      ? initialAgent
+    agentSeed &&
+    (!identity?.agentSyncId || identity.agentSyncId === agentSeed.sync_id)
+      ? agentSeed
       : null;
   const agent = resolvedAgent ?? seededAgent;
+
+  /**
+   * 存回本机（A1）：镜像首屏那一页，加上看着它时实时到的帧。更早的（往上翻读回来的）
+   * 不存 —— 存的是「最近一页」。停手 LOCAL_SAVE_DEBOUNCE_MS 才写；离开时（换对话、
+   * 卸载）把还没写的那一次补上。
+   *
+   * 每次打开第一次写走 `open`（记打开时刻、按最近打开淘汰到 30 条），之后走 `update`。
+   */
+  const localAgentRef = useRef<CachedTranscriptAgent | undefined>(undefined);
+  useEffect(() => {
+    localAgentRef.current = agent
+      ? {
+          sync_id: agent.sync_id,
+          name: agent.name,
+          avatar_color: agent.avatar_color,
+          avatar_icon: agent.avatar_icon,
+        }
+      : undefined;
+  });
+  const openedLocalRef = useRef<string | null>(null);
+  const pendingSaveRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!savePage || savePage.sid !== sid) return;
+    const page = savePage;
+    const save = () => {
+      const frames = events.filter(
+        (f) => f.seq === undefined || f.seq >= page.oldestSeq,
+      );
+      let lastSeq = page.lastSeq;
+      for (const f of frames) {
+        if (f.seq !== undefined && f.seq > lastSeq) lastSeq = f.seq;
+      }
+      const entry = {
+        events: frames,
+        lastSeq,
+        oldestSeq: page.oldestSeq,
+        hasBefore: page.hasBefore,
+        row: mirrorRowRef.current,
+        agent: localAgentRef.current,
+      };
+      if (openedLocalRef.current === page.sid) {
+        void transcriptCache.update(page.sid, entry);
+      } else {
+        openedLocalRef.current = page.sid;
+        void transcriptCache.open(page.sid, entry);
+      }
+    };
+    pendingSaveRef.current = save;
+    const timer = setTimeout(() => {
+      if (pendingSaveRef.current === save) pendingSaveRef.current = null;
+      save();
+    }, LOCAL_SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [savePage, sid, events]);
+  useEffect(
+    () => () => {
+      const save = pendingSaveRef.current;
+      pendingSaveRef.current = null;
+      save?.();
+      openedLocalRef.current = null;
+    },
+    [sid],
+  );
+
+  /**
+   * 页头「同步中」（A5）：画的是本机那一页，镜像那一页还没到、中继也还没补齐。
+   * 两者任一到了就是新的。
+   */
+  const syncing = localPage?.sid === sid && !localPage.fresh && !ready;
 
   /**
    * 这条对话归哪个项目。
@@ -2138,6 +2348,7 @@ export default function SessionDetailView({
       stopping={turnStop.stopping}
       model={fallbackModel}
       onDelete={onDelete}
+      syncing={syncing}
     />
   );
 
@@ -2146,10 +2357,31 @@ export default function SessionDetailView({
    * 同一个结果：一处画了，另一处就不画。只读条占着那一位时（机器离线等）不停靠，
    * 待决照旧留在转录里看得见。
    */
-  const dockedPermission =
-    isMobile && !isComposeReadonly(status)
-      ? pickDockedPermission(messages)
-      : null;
+  const dockable = isMobile && !isComposeReadonly(status);
+  /**
+   * 本机那一页里的审批要问过那台机器才算数（d9）：问到之前停靠条置灰（`dockConfirming`），
+   * 问到它还在等才可点，不在等了就收起 —— 输入框回来，转录里也不再画那张卡（它已经
+   * 不是一件等你的事）。问不到（离线、中继没连上）就一直置灰。
+   *
+   * 清单里有没带请求号的待决时认不出是哪一条，按「还在等」放行，提交时由那台机器裁决。
+   */
+  const localPermissionIds =
+    localPage?.sid === sid ? localPage.permissionIds : NO_IDS;
+  const waitingIds = new Set(
+    decisions.waiters.toolPermissions.map((w) => w.RequestID ?? ""),
+  );
+  const notWaiting =
+    decisions.waitersConfirmed && !waitingIds.has("")
+      ? new Set(localPermissionIds.filter((id) => !waitingIds.has(id)))
+      : undefined;
+  const firstPending = dockable ? pickDockedPermission(messages) : null;
+  const dockedPermission = dockable
+    ? pickDockedPermission(messages, notWaiting)
+    : null;
+  const dockConfirming =
+    dockedPermission !== null &&
+    !decisions.waitersConfirmed &&
+    localPermissionIds.includes(dockedRequestId(dockedPermission.toolBlock));
 
   /** 滚的只有这一带。转录、状态横幅与审批卡都在里面，头部与 Composer 都不在。 */
   const scrollBody = (
@@ -2191,7 +2423,9 @@ export default function SessionDetailView({
       pendingAssistant={pendingAssistant}
       decisions={decisions}
       send={send}
-      dockDecisions={dockedPermission !== null}
+      // 收起的那张也不回到转录里（见 dockConfirming 那处）：按「第一条待决」判，而不是
+      // 按此刻停靠的那条。
+      dockDecisions={firstPending !== null}
     />
   );
 
@@ -2238,6 +2472,7 @@ export default function SessionDetailView({
       onDiscardDropped={steerQueue.clearDropped}
       composerHandleRef={composerHandleRef}
       dockedPermission={dockedPermission}
+      dockConfirming={dockConfirming}
       decisionPorts={decisions.transcriptPorts}
     />
   );

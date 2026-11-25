@@ -117,6 +117,11 @@ export interface SessionDetailHeaderProps {
   model?: string;
   /** 手机「对话信息」弹层里的删除（见 SessionDetailView 的同名 prop）。桌面不读。 */
   onDelete?: () => void;
+  /**
+   * 画的是本地存着的那一页，新的还没到（规格 2026-11-25 决策 A5）：手机页头的状态点
+   * 置灰、状态字写「同步中」，新的一到就复原。不给 = 原样。桌面不读。
+   */
+  syncing?: boolean;
 }
 
 /** meta 行小头像要的那三样：与账号 Agent 清单（/v1/workspace/agents）同名同形。 */
@@ -330,6 +335,7 @@ function PhoneSessionHeader({
   stopping,
   model,
   onDelete,
+  syncing = false,
 }: SessionDetailHeaderProps) {
   const { t, i18n } = useTranslation();
   const { t: uiT } = useUiTranslation();
@@ -344,15 +350,26 @@ function PhoneSessionHeader({
     lifecycleState: running ? "running" : (identity?.lifecycleState ?? "idle"),
     waitingForInput: decisionPending,
   });
-  const word = phoneStatusWord(t, {
-    status,
-    running,
-    stopping,
-    decisionPending,
-    lifecycleState: identity?.lifecycleState,
-    lastMessageAt: identity?.lastMessageAt,
-    language: i18n.language,
-  });
+  // 本地那一页上的状态是上一次的事，新的到之前不当真；离线那几档说的是此刻的通道，
+  // 照旧说。
+  const showSyncing =
+    syncing &&
+    status !== "machineOffline" &&
+    status !== "desktopAppNotRunning" &&
+    status !== "pinnedAgentredUnavailable" &&
+    status !== "deviceRevoked" &&
+    status !== "loggedOut";
+  const word = showSyncing
+    ? t("session.phoneHeader.status.syncing")
+    : phoneStatusWord(t, {
+        status,
+        running,
+        stopping,
+        decisionPending,
+        lifecycleState: identity?.lifecycleState,
+        lastMessageAt: identity?.lastMessageAt,
+        language: i18n.language,
+      });
   const connecting = status === "connecting" || status === "reconnecting";
 
   const metaParts: SessionHeaderMetaPart[] = [
@@ -363,9 +380,17 @@ function PhoneSessionHeader({
           role={connecting ? "status" : undefined}
           aria-live={connecting ? "polite" : undefined}
           data-testid="session-detail-status"
+          data-syncing={showSyncing || undefined}
           className="inline-flex min-w-0 items-center gap-1.5"
         >
-          {statusKnown && <StatusDot status={agentStatus} size="xs" />}
+          {statusKnown &&
+            (showSyncing ? (
+              <span className="inline-flex opacity-50 grayscale">
+                <StatusDot status={agentStatus} size="xs" />
+              </span>
+            ) : (
+              <StatusDot status={agentStatus} size="xs" />
+            ))}
           <span className="truncate">{word}</span>
         </span>
       ),
