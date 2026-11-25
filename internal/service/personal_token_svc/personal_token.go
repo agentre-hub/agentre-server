@@ -116,6 +116,9 @@ type TokenView struct {
 	// 设备此刻的显示名，设备已撤销时为空串。
 	CreatedByDeviceID   int64
 	CreatedByDeviceName string
+	// PeerFingerprint 是这枚 token 的对端指纹（它发起的会话记在这个发起方名下）。只有 Self
+	// 填它：token 据此认出自己发起的会话；管理列表不需要。
+	PeerFingerprint string
 }
 
 // Issued 是创建或轮换的结果：Token 是密钥明文，只在这一次交出，server 不保存它。
@@ -296,7 +299,12 @@ func (s *personalTokenSvc) Self(ctx context.Context, caller Caller) (TokenView, 
 	if row == nil || row.UserID != caller.AccountID {
 		return TokenView{}, i18n.NewNotFoundError(ctx, code.NotFound)
 	}
-	return s.view(ctx, caller.AccountID, row)
+	view, err := s.view(ctx, caller.AccountID, row)
+	if err != nil {
+		return TokenView{}, err
+	}
+	view.PeerFingerprint = row.PeerFingerprint
+	return view, nil
 }
 
 func (s *personalTokenSvc) Delete(ctx context.Context, caller Caller, name string) error {

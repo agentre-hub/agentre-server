@@ -59,6 +59,9 @@ type SelfRequest struct {
 
 type SelfResponse struct {
 	Item Token `json:"item"`
+	// PeerFingerprint 是这枚 token 的对端指纹：它发起的会话在账号会话索引与 agentred 上都记在
+	// 这个发起方名下（agrctl list sessions --mine 据此认出自己的会话）。它是标识，不是凭据。
+	PeerFingerprint string `json:"peer_fingerprint"`
 }
 
 // RotateRequest 给同名 token 换一个新密钥：名字、范围、对端指纹不变，旧密钥立即作废。

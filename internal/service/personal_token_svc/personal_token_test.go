@@ -432,13 +432,15 @@ func TestSelf(t *testing.T) {
 		Convey("when a personal token asks about itself, then its own facts are returned without a secret", func() {
 			tokens.EXPECT().Find(gomock.Any(), int64(11)).Return(&personal_token_entity.PersonalToken{
 				ID: 11, UserID: 7, Name: "ci", TokenHash: "digest", Scopes: "read,chat", ExpiresAt: 9000,
-				CreatedByDeviceID: 3,
+				CreatedByDeviceID: 3, PeerFingerprint: "pat:fp-11",
 			}, nil)
 			devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return(cliDevice(), nil)
 			view, err := svc.Self(ctx, patCaller)
 			So(err, ShouldBeNil)
+			// 对端指纹只有「查自己」交出:agrctl 据它认出自己发起的会话(list sessions --mine),
+			// 不必等有设备在线再从 relay 握手里读。
 			So(view, ShouldResemble, TokenView{Name: "ci", Scopes: []string{"read", "chat"}, ExpiresAt: 9000,
-				CreatedByDeviceID: 3, CreatedByDeviceName: "laptop"})
+				CreatedByDeviceID: 3, CreatedByDeviceName: "laptop", PeerFingerprint: "pat:fp-11"})
 		})
 
 		Convey("when the caller is a browser session or a device, then it is forbidden and nothing is read", func() {

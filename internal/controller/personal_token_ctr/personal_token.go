@@ -85,7 +85,7 @@ func (h *PersonalToken) Self(c *gin.Context, _ *api.SelfRequest) (*api.SelfRespo
 	if err != nil {
 		return nil, err
 	}
-	return &api.SelfResponse{Item: toToken(view)}, nil
+	return &api.SelfResponse{Item: toToken(view), PeerFingerprint: view.PeerFingerprint}, nil
 }
 
 func (h *PersonalToken) Rotate(c *gin.Context, req *api.RotateRequest) (*api.IssueResponse, error) {
