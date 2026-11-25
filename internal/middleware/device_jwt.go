@@ -32,6 +32,25 @@ func DeviceJWT(tokens BearerResolver) gin.HandlerFunc {
 	}
 }
 
+// AccountBearerAuth 只认 Bearer，放行设备 access token 与个人 token（与 DeviceJWT 同一套
+// 解析、账号闸门与身份落点）。个人 token 在这里只是「进得来」：能不能到某条路由由
+// RequireScope / DenyCLIAndTokens 决定。
+func AccountBearerAuth(tokens BearerResolver) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token, _ := bearerToken(c)
+		p, status, businessCode, ok := accountPrincipal(c, tokens, token)
+		if !ok {
+			apierr.Abort(c, status, businessCode)
+			return
+		}
+		if accountBlocked(c, p.AccountID) {
+			return
+		}
+		setBearerPrincipal(c, p)
+		c.Next()
+	}
+}
+
 // RelayTicketClaimer 认领「用这张票连一次中继」，交回这一次是不是第一次。生产上是
 // credstore.Store。
 type RelayTicketClaimer interface {

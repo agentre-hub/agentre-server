@@ -5,7 +5,8 @@
 // 响应是 protojson 的 CtlResponse，失败是 `{"error": "…"}`——agentred 的 ctl 代理因此
 // 可以原样转发正文。它不走 mux 的 code/msg/data 信封，所以是裸 gin 处理器。
 //
-// 只挂在设备 access token 那一组（DeviceJWT）：浏览器会话进不来，所以这里没有 CSRF。
+// 只挂在 Bearer 那一组（设备 access token 与个人 token）：浏览器会话进不来，所以这里没有
+// CSRF。个人 token 的范围（read / resources:write）由 ctl_svc 按调用方形态检查。
 package ctl_ctr
 
 import (
@@ -57,7 +58,10 @@ func (c *Ctl) Resources(g *gin.Context) {
 		writeErr(g, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	caller := ctl_svc.Caller{UserID: ginctx.UserID(g), DeviceID: ginctx.DeviceID(g)}
+	caller := ctl_svc.Caller{
+		UserID: ginctx.UserID(g), DeviceID: ginctx.DeviceID(g),
+		Kind: ginctx.DeviceKind(g), Scopes: ginctx.Scopes(g),
+	}
 	// preview 只要出现就是预览（fail closed）：写法不对不能落成一次没经审批的真写入。
 	_, preview := g.GetQuery("preview")
 	resp, err := c.service().Handle(g.Request.Context(), caller, &req, preview)

@@ -75,6 +75,17 @@ func devicePrincipal(c *gin.Context, tokens BearerResolver, token string) (*devi
 	return p, status, businessCode, ok
 }
 
+// accountPrincipal 在 resolvePrincipal 之上认「账号调用方」：属于某台设备的身份，或一枚个人
+// token。票据与 server 自用凭据仍进不来。个人 token 能做什么由 RequireScope 在各路由上裁，
+// 这里只回答「它是不是一个账号调用方」。
+func accountPrincipal(c *gin.Context, tokens BearerResolver, token string) (*device_svc.Principal, int, int, bool) {
+	p, status, businessCode, ok := resolvePrincipal(c, tokens, token)
+	if ok && p.DeviceID == 0 && p.Kind != device_svc.KindPersonalToken {
+		return nil, http.StatusUnauthorized, code.Unauthorized, false
+	}
+	return p, status, businessCode, ok
+}
+
 // sessionPrincipal 按 cookie 查登录会话，查不到（没带、已失效、查库出错）返回 false。
 func sessionPrincipal(c *gin.Context) (*session.Session, bool) {
 	sid, _ := c.Cookie(auth_svc.Default().CookieName())
@@ -97,6 +108,7 @@ func setBearerPrincipal(c *gin.Context, p *device_svc.Principal) {
 	ginctx.SetUserID(c, p.AccountID)
 	ginctx.SetDevice(c, p.DeviceID, p.Kind)
 	ginctx.SetCredentialHandle(c, p.Handle)
+	ginctx.SetScopes(c, p.Scopes)
 }
 
 // setSessionPrincipal 把会话身份转交下游。会话分支没有设备号，device_id 因此留空。

@@ -15,17 +15,37 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
+	"github.com/agentre-hub/agentre-server/internal/model/entity/personal_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/engine_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
-// Caller 是出示设备 Bearer 的那台机器。账号与设备都取自鉴权上下文。
+// Caller 是出示 Bearer 的调用方：一台设备，或一枚个人 token（DeviceID 为 0）。账号、设备、
+// 形态与范围都取自鉴权上下文。
 type Caller struct {
 	UserID   int64
 	DeviceID int64
+	// Kind 是调用方形态（devices.kind，或 device_svc.KindPersonalToken）。
+	Kind string
+	// Scopes 只对个人 token 有意义；设备调用方的能力由 Kind 决定，不按范围裁。
+	Scopes []string
+}
+
+// isPersonalToken 报告调用方是不是一枚个人 token——唯一按范围裁剪能力的调用方。
+func (c Caller) isPersonalToken() bool { return c.Kind == device_svc.KindPersonalToken }
+
+// requireScope 在调用方是个人 token 时要求它带着 scope；设备调用方不按范围裁（agentred 在
+// 会话里已审批过，cli 设备是账号登录态），一律放行。拒绝文案与 HTTP 中间件逐字相同。
+func (c Caller) requireScope(scope string) error {
+	if !c.isPersonalToken() || slices.Contains(c.Scopes, scope) {
+		return nil
+	}
+	return &Error{Status: http.StatusForbidden, Msg: "token lacks scope " + scope}
 }
 
 // CtlSvc 执行一次 ctl 请求。preview 为真时写请求只算变更清单、不落库——agentred 在
@@ -111,6 +131,9 @@ func (s *ctlSvc) Handle(
 ) (*agentrewire.CtlResponse, error) {
 	switch op := req.GetOp().(type) {
 	case *agentrewire.CtlRequest_List:
+		if err := caller.requireScope(personal_token_entity.ScopeRead); err != nil {
+			return nil, err
+		}
 		st, err := loadState(ctx, caller)
 		if err != nil {
 			return nil, err
@@ -123,6 +146,9 @@ func (s *ctlSvc) Handle(
 			List: &agentrewire.CtlListResponse{Items: items},
 		}}, nil
 	case *agentrewire.CtlRequest_Get:
+		if err := caller.requireScope(personal_token_entity.ScopeRead); err != nil {
+			return nil, err
+		}
 		st, err := loadState(ctx, caller)
 		if err != nil {
 			return nil, err
@@ -135,6 +161,9 @@ func (s *ctlSvc) Handle(
 			Get: &agentrewire.CtlGetResponse{Resource: res},
 		}}, nil
 	case *agentrewire.CtlRequest_Write:
+		if err := caller.requireScope(personal_token_entity.ScopeResourcesWrite); err != nil {
+			return nil, err
+		}
 		resp, err := s.write(ctx, caller, op.Write, preview)
 		if err != nil {
 			return nil, err

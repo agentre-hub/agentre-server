@@ -37,7 +37,8 @@ func (s *ctlSvc) write(
 	if err != nil {
 		return nil, err
 	}
-	if st.caller == nil {
+	// 个人 token 不属于任何设备：它没有「发起请求的那台机器」，下面只有设备调用方才查在用。
+	if st.caller == nil && !caller.isPersonalToken() {
 		return nil, &Error{Status: http.StatusForbidden, Msg: "the calling device is not active in this account"}
 	}
 	fields := append([]string(nil), req.GetFields()...)
@@ -128,7 +129,7 @@ func checkSupported(st *state, kind agentrewire.CtlKind, fields []string) error 
 			"set it on the machine the backend is bound to")
 	}
 	if kind == agentrewire.CtlKind_CTL_KIND_PROJECT && slices.Contains(fields, "path") &&
-		st.caller.Kind != device_entity.KindAgentred {
+		(st.caller == nil || st.caller.Kind != device_entity.KindAgentred) {
 		return unsupported("a desktop device's local project path cannot be set through the server; " +
 			"set it in the Agentre desktop on that machine")
 	}

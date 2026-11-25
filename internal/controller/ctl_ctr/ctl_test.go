@@ -80,7 +80,7 @@ func TestResources_GivenDeviceBearer_ThenCallerComesFromTokenAndBodyIsProtojson(
 	rec := post(newEngine(t, fake), "/v1/ctl/resources?preview=1", agentredToken(), `{"get":{"kind":"CTL_KIND_AGENT","id":"20"}}`)
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, ctl_svc.Caller{UserID: 7, DeviceID: 3}, fake.caller)
+	assert.Equal(t, ctl_svc.Caller{UserID: 7, DeviceID: 3, Kind: device_entity.KindAgentred}, fake.caller)
 	assert.True(t, fake.preview)
 	assert.Equal(t, int64(20), fake.req.GetGet().GetId())
 	var got agentrewire.CtlResponse
