@@ -197,8 +197,8 @@ func TestRotate(t *testing.T) {
 		Convey("when a token is rotated, then it gets a new secret and keeps its name, scopes and peer fingerprint", func() {
 			var updated *personal_token_entity.PersonalToken
 			tokens.EXPECT().FindByName(gomock.Any(), int64(7), "ci").Return(existing(thirtyDaysMs), nil)
-			tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, e *personal_token_entity.PersonalToken) (int64, error) {
+			tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any(), "old-digest").DoAndReturn(
+				func(_ context.Context, e *personal_token_entity.PersonalToken, _ string) (int64, error) {
 					updated = e
 					return 1, nil
 				})
@@ -223,8 +223,8 @@ func TestRotate(t *testing.T) {
 		Convey("when a never-expiring token is rotated without a lifetime, then it still never expires", func() {
 			var updated *personal_token_entity.PersonalToken
 			tokens.EXPECT().FindByName(gomock.Any(), int64(7), "ci").Return(existing(0), nil)
-			tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, e *personal_token_entity.PersonalToken) (int64, error) {
+			tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any(), "old-digest").DoAndReturn(
+				func(_ context.Context, e *personal_token_entity.PersonalToken, _ string) (int64, error) {
 					updated = e
 					return 1, nil
 				})
@@ -236,8 +236,8 @@ func TestRotate(t *testing.T) {
 		Convey("when a new lifetime is given, then it replaces the old rule", func() {
 			var updated *personal_token_entity.PersonalToken
 			tokens.EXPECT().FindByName(gomock.Any(), int64(7), "ci").Return(existing(0), nil)
-			tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, e *personal_token_entity.PersonalToken) (int64, error) {
+			tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any(), "old-digest").DoAndReturn(
+				func(_ context.Context, e *personal_token_entity.PersonalToken, _ string) (int64, error) {
 					updated = e
 					return 1, nil
 				})
@@ -251,6 +251,31 @@ func TestRotate(t *testing.T) {
 			tokens.EXPECT().FindByHash(gomock.Any(), hashutil.SHA256Hex(TokenPrefix+"old")).Return(nil, nil)
 			_, err := svc.ResolveBearer(ctx, TokenPrefix+"old")
 			So(err, ShouldEqual, device_svc.ErrBearerInvalid)
+		})
+
+		Convey("when another rotation replaced the secret between the read and the write, then it is a 409 and no secret is handed out", func() {
+			rotatedMeanwhile := existing(thirtyDaysMs)
+			rotatedMeanwhile.TokenHash = "someone-elses-digest"
+			gomock.InOrder(
+				tokens.EXPECT().FindByName(gomock.Any(), int64(7), "ci").Return(existing(thirtyDaysMs), nil),
+				tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any(), "old-digest").Return(int64(0), nil),
+				tokens.EXPECT().FindByName(gomock.Any(), int64(7), "ci").Return(rotatedMeanwhile, nil),
+			)
+			out, err := svc.Rotate(ctx, cliCaller, RotateInput{Name: "ci"})
+			So(out, ShouldBeNil)
+			status, _ := httpError(err)
+			So(status, ShouldEqual, http.StatusConflict)
+		})
+
+		Convey("when the token was deleted between the read and the write, then it is a 404", func() {
+			gomock.InOrder(
+				tokens.EXPECT().FindByName(gomock.Any(), int64(7), "ci").Return(existing(thirtyDaysMs), nil),
+				tokens.EXPECT().UpdateSecret(gomock.Any(), gomock.Any(), "old-digest").Return(int64(0), nil),
+				tokens.EXPECT().FindByName(gomock.Any(), int64(7), "ci").Return(nil, nil),
+			)
+			_, err := svc.Rotate(ctx, cliCaller, RotateInput{Name: "ci"})
+			status, _ := httpError(err)
+			So(status, ShouldEqual, http.StatusNotFound)
 		})
 
 		Convey("when the name is unknown, then it is a 404", func() {

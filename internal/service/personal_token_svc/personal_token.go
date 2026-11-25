@@ -252,16 +252,25 @@ func (s *personalTokenSvc) Rotate(ctx context.Context, caller Caller, in RotateI
 		return nil, err
 	}
 	now := s.now()
+	prevHash := row.TokenHash
 	row.TokenHash = hash
 	row.RotatedAt = now
 	row.Renew(now, lifetimeMs)
-	affected, err := repo.UpdateSecret(ctx, row)
+	affected, err := repo.UpdateSecret(ctx, row, prevHash)
 	if err != nil {
 		return nil, err
 	}
 	if affected == 0 {
-		// 查到之后、写入之前被并发删掉了。
-		return nil, i18n.NewNotFoundError(ctx, code.NotFound)
+		// 查到之后、写入之前：被并发删掉了（404），或被另一次轮换换掉了密钥（409——那一次
+		// 交出的才是有效的密钥，这一次的不能再交出去）。
+		current, err := repo.FindByName(ctx, caller.AccountID, name)
+		if err != nil {
+			return nil, err
+		}
+		if current == nil {
+			return nil, i18n.NewNotFoundError(ctx, code.NotFound)
+		}
+		return nil, i18n.NewErrorWithStatus(ctx, http.StatusConflict, code.InvalidParameter)
 	}
 	logger.Ctx(ctx).Info("personal_token_svc.Rotate: 个人 token 已轮换",
 		zap.Int64("accountId", caller.AccountID), zap.String("tokenName", row.Name),

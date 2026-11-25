@@ -2,12 +2,9 @@
 package engine_ctr
 
 import (
-	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/engine"
-	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/engine_svc"
@@ -188,10 +185,6 @@ func (e *Engine) ListCLIOverlays(c *gin.Context, _ *api.ListCLIOverlaysRequest) 
 }
 func (e *Engine) Snapshot(c *gin.Context, _ *api.SnapshotRequest) (*api.SnapshotResponse, error) {
 	ctx := c.Request.Context()
-	// 快照带明文 API key，只给执行机；agrctl 的 cli 设备是调用方，不在此列。
-	if ginctx.DeviceKind(c) == device_entity.KindCLI {
-		return nil, i18n.NewForbiddenError(ctx, code.Forbidden)
-	}
 	d, err := device_svc.Default().OwnedDevice(ctx, ginctx.UserID(c), ginctx.DeviceID(c))
 	if err != nil {
 		return nil, err

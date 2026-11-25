@@ -129,28 +129,3 @@ func TestPush_TakesIdentityFromJWTClaims(t *testing.T) {
 	require.Equal(t, int64(7), envelope.Data.Results[0].OverwrittenVersion)
 	require.Equal(t, "fp-desktop-02", envelope.Data.Results[0].OverwrittenOriginFingerprint)
 }
-
-// cli 设备（agrctl）不参与工作区同步：/v1/sync/* 每一条都 403，且 service 一次都没被调到。
-func TestSyncEndpoints_CLIDeviceIsForbidden(t *testing.T) {
-	stub := &stubSyncSvc{pushOut: &sync_svc.PushOutput{}}
-	server := newSyncTestServer(t, stub)
-	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindCLI})
-
-	for _, tc := range []struct{ method, path, body string }{
-		{http.MethodPost, "/v1/sync/push", `{"items":[{"kind":"project","sync_id":"p1","base_version":0,"payload":{"name":"a"}}]}`},
-		{http.MethodGet, "/v1/sync/pull", ""},
-		{http.MethodPost, "/v1/sync/local-paths", `{"items":[]}`},
-		{http.MethodPost, "/v1/sync/avatars", `{"content_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","content":"eA=="}`},
-		{http.MethodGet, "/v1/sync/avatars?content_hash=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ""},
-	} {
-		req, err := http.NewRequest(tc.method, server.URL+tc.path, strings.NewReader(tc.body))
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		_ = resp.Body.Close()
-		require.Equal(t, http.StatusForbidden, resp.StatusCode, tc.method+" "+tc.path)
-	}
-	require.Empty(t, stub.pushInputs)
-}

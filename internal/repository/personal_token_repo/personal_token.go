@@ -24,8 +24,10 @@ type PersonalTokenRepo interface {
 	// ListByUser 交出账号下全部 token，按创建先后排列。
 	ListByUser(ctx context.Context, userID int64) ([]*personal_token_entity.PersonalToken, error)
 	// UpdateSecret 把一行换成 e 上的新密钥与期限（token_hash / lifetime_ms / expires_at /
-	// rotated_at），名字、范围与对端指纹不动。返回受影响行数。
-	UpdateSecret(ctx context.Context, e *personal_token_entity.PersonalToken) (int64, error)
+	// rotated_at），名字、范围与对端指纹不动。只在这一行的密钥仍是 prevHash 时写：并发的
+	// 另一次轮换先换掉了它，这一次就不落（受影响 0 行），免得交出一枚已经被覆盖的密钥。
+	// 返回受影响行数。
+	UpdateSecret(ctx context.Context, e *personal_token_entity.PersonalToken, prevHash string) (int64, error)
 	// DeleteByName 吊销（硬删）账号下的一枚 token，返回受影响行数。
 	DeleteByName(ctx context.Context, userID int64, name string) (int64, error)
 	// TouchLastUsed 记下最近使用时刻。
@@ -72,8 +74,8 @@ func (r *repo) ListByUser(ctx context.Context, userID int64) ([]*personal_token_
 	return out, nil
 }
 
-func (r *repo) UpdateSecret(ctx context.Context, e *personal_token_entity.PersonalToken) (int64, error) {
-	res := db.Ctx(ctx).Model(&personal_token_entity.PersonalToken{}).Where("id=?", e.ID).Updates(map[string]any{
+func (r *repo) UpdateSecret(ctx context.Context, e *personal_token_entity.PersonalToken, prevHash string) (int64, error) {
+	res := db.Ctx(ctx).Model(&personal_token_entity.PersonalToken{}).Where("id=? AND token_hash=?", e.ID, prevHash).Updates(map[string]any{
 		"token_hash":  e.TokenHash,
 		"lifetime_ms": e.LifetimeMs,
 		"expires_at":  e.ExpiresAt,

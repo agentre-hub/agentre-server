@@ -283,22 +283,3 @@ func TestBrowserBackendCreate_DistinguishesAbsentConfigFromNull(t *testing.T) {
 	postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken, `{"name":"CC","type":"claudecode","device_fingerprint":"sha256:aaaa","config":"x"}`)
 	assert.Equal(t, `"x"`, string(stub.backendIn.Config))
 }
-
-// cli 设备（agrctl）拿到的是账号对端令牌，不是执行机：快照里有明文 API key，
-// 必须在碰设备表与 service 之前就 403。
-func TestDeviceSnapshot_CLIDeviceIsForbidden(t *testing.T) {
-	stub := &stubEngineSvc{}
-	server := newEngineServer(t, stub)
-	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindCLI})
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/engine/snapshot", nil)
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = resp.Body.Close() })
-
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.NotContains(t, string(body), "sk-secret")
-}

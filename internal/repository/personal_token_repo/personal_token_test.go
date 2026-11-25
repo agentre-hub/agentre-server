@@ -90,20 +90,21 @@ func TestListByUser(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 轮换只改密钥与期限：名字、范围、对端指纹不在 SET 里（决策 19）。
+// 轮换只改密钥与期限：名字、范围、对端指纹不在 SET 里（决策 19）；且只在密钥仍是轮换前
+// 那一枚时写（并发轮换的后到者不覆盖先到者）。
 func TestUpdateSecret_ChangesOnlySecretAndExpiry(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"UPDATE `personal_tokens` SET `expires_at`=?,`lifetime_ms`=?,`rotated_at`=?,`token_hash`=?,`updatetime`=? WHERE id=?")).
-		WithArgs(int64(5000), int64(1000), int64(4000), "digest-2", sqlmock.AnyArg(), int64(11)).
+		"UPDATE `personal_tokens` SET `expires_at`=?,`lifetime_ms`=?,`rotated_at`=?,`token_hash`=?,`updatetime`=? WHERE id=? AND token_hash=?")).
+		WithArgs(int64(5000), int64(1000), int64(4000), "digest-2", sqlmock.AnyArg(), int64(11), "digest-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	n, err := NewPersonalToken().UpdateSecret(ctx, &personal_token_entity.PersonalToken{
 		ID: 11, TokenHash: "digest-2", LifetimeMs: 1000, ExpiresAt: 5000, RotatedAt: 4000,
 		Name: "must-not-be-written", Scopes: "must-not-be-written", PeerFingerprint: "must-not-be-written",
-	})
+	}, "digest-1")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
 	assert.NoError(t, mock.ExpectationsWereMet())

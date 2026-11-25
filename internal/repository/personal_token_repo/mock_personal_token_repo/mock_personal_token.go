@@ -145,16 +145,16 @@ func (mr *MockPersonalTokenRepoMockRecorder) TouchLastUsed(ctx, id, nowMs any) *
 }
 
 // UpdateSecret mocks base method.
-func (m *MockPersonalTokenRepo) UpdateSecret(ctx context.Context, e *personal_token_entity.PersonalToken) (int64, error) {
+func (m *MockPersonalTokenRepo) UpdateSecret(ctx context.Context, e *personal_token_entity.PersonalToken, prevHash string) (int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSecret", ctx, e)
+	ret := m.ctrl.Call(m, "UpdateSecret", ctx, e, prevHash)
 	ret0, _ := ret[0].(int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // UpdateSecret indicates an expected call of UpdateSecret.
-func (mr *MockPersonalTokenRepoMockRecorder) UpdateSecret(ctx, e any) *gomock.Call {
+func (mr *MockPersonalTokenRepoMockRecorder) UpdateSecret(ctx, e, prevHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSecret", reflect.TypeOf((*MockPersonalTokenRepo)(nil).UpdateSecret), ctx, e)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSecret", reflect.TypeOf((*MockPersonalTokenRepo)(nil).UpdateSecret), ctx, e, prevHash)
 }
