@@ -14,6 +14,7 @@
  * 通道级错误，随后关掉那一条；整条连接只在鉴权失效时被服务端关掉。信号订阅建不
  * 起来同理——它也是通道级的，连接照常服务 RPC。
  */
+import { ApiError } from "@/lib/api";
 import { RedialTimer } from "@/lib/redialTimer";
 import { backoffDelay } from "@/lib/relayBackoff";
 import { unwrapEnvelope, wrapEnvelope } from "@agentre-hub/agentre-wire";
@@ -35,8 +36,31 @@ function pageVisible(): boolean {
   );
 }
 
+/**
+ * 连接（及其上每条通道）的状态。
+ *
+ * 终态只有两种来历：`disconnected`（主动关掉了 / 协议版本不符 / 目标永远开不起来）与
+ * `signedOut`（取票 401：会话已登出，再拨也只会再拿一次 401）。超时、断开、5xx 等网络
+ * 错误一律停在 `reconnecting` 持续退避重试，永不进终态（E1）。
+ */
 export type RelayState =
-  "connecting" | "connected" | "disconnected" | "reconnecting";
+  "connecting" | "connected" | "disconnected" | "reconnecting" | "signedOut";
+
+/**
+ * 这次失败说的是「账号已登出」吗。只有 401 才算：网络错误、超时、5xx、403 都不算
+ * （spec 的硬约束「只有 401 才算登出」）。
+ */
+export function isSignedOutError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
+}
+
+/**
+ * 页面可见时连着这么多次请求等不到应答，就不信这条 socket 还活着了（E3）。
+ *
+ * 浏览器发不了 WebSocket ping，一条死掉的 socket 要等很久才自己报关闭；一次超时可能
+ * 只是对端慢，两次之间没有任何一帧回来才说明是这条线死了。
+ */
+const DEAD_AFTER_TIMEOUTS = 2;
 
 /** 账号信号那条保留通道，与服务端 relay_svc.SignalChannelID 同一个值。 */
 export const SignalChannelID = "~signal";
@@ -65,6 +89,11 @@ export interface RelayChannelListener {
    * 通道级失败走 onClose，连接级的抖动走这里。
    */
   onConnectionState?: (state: RelayState) => void;
+  /**
+   * 连接下一次自动重拨排在哪个时刻（Unix 毫秒）；没排着时是 null。界面据此画
+   * 「下次自动重试 N 秒后」。
+   */
+  onNextRetryAt?: (at: number | null) => void;
 }
 
 /** 一条虚拟通道的把手。 */
@@ -152,6 +181,10 @@ export class RelayConnection {
    * 用掉之后要等一条连接活满 stableConnectionMs（或一次全新的 reconnect）才再给。
    */
   private quickRedial = true;
+  /** 下一次自动重拨排在哪个时刻，见 nextRetryAt。 */
+  private retryAt: number | null = null;
+  /** 页面可见时连着超时了几次，见 noteRequestTimeout。 */
+  private timeouts = 0;
 
   constructor(opts: RelayConnectionOptions) {
     this.opts = { reconnect: true, reconnectDelayMs: 1000, ...opts };
@@ -161,9 +194,35 @@ export class RelayConnection {
     return this.currentState;
   }
 
+  /** 下一次自动重拨排在哪个时刻（Unix 毫秒）；没排着时是 null。 */
+  get nextRetryAt(): number | null {
+    return this.retryAt;
+  }
+
+  /**
+   * 这条连接上有一条请求等满了上限也没等到应答（RelayClient 报上来）。
+   *
+   * 页面可见时连着两次、期间这条 socket 一帧都没送回来：判它已死，换一条新连接（E3）。
+   * 隐藏时不算——后台里定时器被节流，超时本身就不可信，回到前台由池子按「在后台待了
+   * 多久」换连接。没连着时也不算：那时重拨已经在途。
+   */
+  noteRequestTimeout(): void {
+    if (this.currentState !== "connected" || !pageVisible()) return;
+    this.timeouts += 1;
+    if (this.timeouts < DEAD_AFTER_TIMEOUTS) return;
+    this.timeouts = 0;
+    void this.reconnect().catch(() => {
+      // 取票失败已在 reconnect 里落成退避重试 / 登出态。
+    });
+  }
+
   /** 建立（或复用）这条账号级连接。 */
   connect(): Promise<void> {
     if (this.connectPromise) return this.connectPromise;
+    // 登出是终态：拿手上那张注定被拒的旧票再拨，只是又一轮「连上就断 → 换票 401」。
+    if (this.currentState === "signedOut") {
+      return Promise.reject(new Error("relay: 账号已登出"));
+    }
     this.closedByUser = false;
     this.setState("connecting");
     this.connectPromise = new Promise<void>((resolve, reject) => {
@@ -181,6 +240,7 @@ export class RelayConnection {
       this.ws = ws;
       ws.onopen = () => {
         this.connectedAt = Date.now();
+        this.timeouts = 0;
         this.setState("connected");
         // 新 socket 上服务端认不得旧通道：逐条重新声明目标，再让每条通道自己
         // 重做握手与补齐。顺序要紧——目标声明必须是这条通道的第一帧。
@@ -223,22 +283,28 @@ export class RelayConnection {
     // 同样配得上一次立即重拨。
     this.failures = 0;
     this.quickRedial = true;
+    // 「立即重试」：排着的那次作废，倒计时由这一次的结果重新给。
+    this.cancelRedial();
     const generation = this.closeGeneration;
+    // 换连接从这一刻起就是「连接中」（E3）：取票期间旧 socket 还挂着，但它已被判
+    // 不可信，发送据此走排队，而不是写进一条可能早已死掉的线。
+    this.setState("connecting");
     if (this.opts.refreshCredentials) {
-      const credentials = await this.opts.refreshCredentials();
+      let credentials: { url: string; jwt: string };
+      try {
+        credentials = await this.opts.refreshCredentials();
+      } catch (err) {
+        if (generation === this.closeGeneration) {
+          this.supersede();
+          this.failCredentials(err);
+        }
+        throw err;
+      }
       if (generation !== this.closeGeneration) return;
       this.opts.url = credentials.url;
       this.opts.jwt = credentials.jwt;
     }
-    const superseded = this.ws;
-    this.ws = null;
-    this.connectPromise = null;
-    // 「连上过」说的是被顶替的那条：新这条拨不通时不能被当成「连上后意外断开」。
-    this.connectedAt = null;
-    this.redial.cancel();
-    for (const channel of this.channels.values()) channel.declared = false;
-    // 先摘掉再关：那条被顶替的 socket 的 onclose 已经不属于当前连接，不会再跑收尾。
-    superseded?.close();
+    this.supersede();
     await this.connect();
   }
 
@@ -246,7 +312,7 @@ export class RelayConnection {
   close(): void {
     this.closedByUser = true;
     this.closeGeneration += 1;
-    this.redial.cancel();
+    this.cancelRedial();
     this.ws?.close();
     this.ws = null;
     this.connectPromise = null;
@@ -314,6 +380,8 @@ export class RelayConnection {
   }
 
   private handleMessage(data: unknown): void {
+    // 这条 socket 还活着：之前那几次超时不再算「连着的」。
+    this.timeouts = 0;
     let channelId: string;
     let frame: Uint8Array;
     try {
@@ -369,6 +437,8 @@ export class RelayConnection {
       this.setState("disconnected");
       return;
     }
+    // 已登出：再拨只会再拿一次 401，停在终态等人重新登录。
+    if (this.currentState === "signedOut") return;
     this.setState("reconnecting");
     if (this.redial.pending) return;
     // 页面可见时意外断线：用户正看着，第一次重拨不等退避（决策 2）。不动失败计数，
@@ -376,9 +446,7 @@ export class RelayConnection {
     // 池子换连接（RelayClientPool.watchForeground）。
     if (wasOpen && this.quickRedial && pageVisible()) {
       this.quickRedial = false;
-      this.redial.schedule(0, () => {
-        void this.redialOnce();
-      });
+      this.scheduleRedial(0);
       return;
     }
     // 指数退让并封顶：这条连接**登录期间常驻**（信号通道是永不释放的使用方），
@@ -390,23 +458,77 @@ export class RelayConnection {
       random: this.opts.random,
     });
     this.failures += 1;
-    this.redial.schedule(delay, () => {
+    this.scheduleRedial(delay);
+  }
+
+  /** 排一次重拨，并把它排在哪个时刻告诉每条通道。 */
+  private scheduleRedial(delayMs: number): void {
+    this.redial.schedule(delayMs, () => {
+      this.setRetryAt(null);
       void this.redialOnce();
     });
+    this.setRetryAt(Date.now() + delayMs);
+  }
+
+  private cancelRedial(): void {
+    this.redial.cancel();
+    this.setRetryAt(null);
+  }
+
+  /**
+   * 把当前这条 socket 摘下来关掉，好让下一次 connect() 拨一条新的。
+   *
+   * 先摘掉再关：那条被顶替的 socket 的 onclose 已经不属于当前连接，不会再跑收尾。
+   */
+  private supersede(): void {
+    const superseded = this.ws;
+    this.ws = null;
+    this.connectPromise = null;
+    // 「连上过」说的是被顶替的那条：新这条拨不通时不能被当成「连上后意外断开」。
+    this.connectedAt = null;
+    for (const channel of this.channels.values()) channel.declared = false;
+    superseded?.close();
+  }
+
+  /**
+   * 取票失败。401 是终态：停拨、转登出态；其余（网络错误、超时、5xx）都只是这一次
+   * 没成，照退避接着试，永不进终态（E1）。
+   */
+  private failCredentials(err: unknown): void {
+    if (isSignedOutError(err)) {
+      this.cancelRedial();
+      this.setState("signedOut");
+      return;
+    }
+    this.handleClose();
   }
 
   private async redialOnce(): Promise<void> {
     const generation = this.closeGeneration;
-    try {
-      if (this.opts.refreshCredentials) {
-        const credentials = await this.opts.refreshCredentials();
-        if (generation !== this.closeGeneration) return;
-        this.opts.url = credentials.url;
-        this.opts.jwt = credentials.jwt;
+    if (this.opts.refreshCredentials) {
+      let credentials: { url: string; jwt: string };
+      try {
+        credentials = await this.opts.refreshCredentials();
+      } catch (err) {
+        if (generation === this.closeGeneration) this.failCredentials(err);
+        return;
       }
+      if (generation !== this.closeGeneration) return;
+      this.opts.url = credentials.url;
+      this.opts.jwt = credentials.jwt;
+    }
+    try {
       await this.connect();
     } catch {
       this.handleClose();
+    }
+  }
+
+  private setRetryAt(at: number | null): void {
+    if (at === this.retryAt) return;
+    this.retryAt = at;
+    for (const channel of [...this.channels.values()]) {
+      channel.listener.onNextRetryAt?.(at);
     }
   }
 

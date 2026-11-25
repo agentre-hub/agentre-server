@@ -307,7 +307,17 @@ export function startAccountChannel(
   doc?.addEventListener("visibilitychange", onVisibilityChange);
 
   /**
-   * 兜底轮询：**信号不在时**的那一档，通着的时候让路。
+   * 浏览器此刻确知自己没网吗。只认明确的 `onLine === false`：拿不到 navigator 时按
+   * 有网处理。
+   */
+  function offline(): boolean {
+    return typeof navigator !== "undefined" && navigator.onLine === false;
+  }
+
+  /**
+   * 兜底轮询：**信号不在时**的那一档，通着的时候让路；**离线时**也停（E5）——那时
+   * 每喊一次，每个订阅页面都各失败一遍，换不来任何东西。网络回来时连接按 `online`
+   * 立即重连，连上那一次 refresh(null) 补齐离线期间的变更。
    *
    * `refresh(null)` 说的是「你可能已经落后了」，因此它会喊醒**所有**订阅者
    * （见 use-account-channel 的 fanOut），每个页面各拉一遍自己那份数据——一个开着
@@ -318,7 +328,7 @@ export function startAccountChannel(
    * 自己刷新，不再有 30 秒把它拉回来。
    */
   const poll = setInterval(() => {
-    if (live) return;
+    if (live || offline()) return;
     refresh(null);
   }, pollMs);
 
@@ -348,7 +358,12 @@ export function startAccountChannel(
         }
         live = false;
         // connecting 与 reconnecting 折成同一态：都是「在动，会自己回来」。
-        setState(next === "disconnected" ? "disconnected" : "connecting");
+        // signedOut（取票 401）与 disconnected 同属终态：不会自己回来。
+        setState(
+          next === "disconnected" || next === "signedOut"
+            ? "disconnected"
+            : "connecting",
+        );
       },
     },
   );

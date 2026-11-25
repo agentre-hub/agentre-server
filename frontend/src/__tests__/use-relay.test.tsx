@@ -14,9 +14,10 @@
  */
 import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useRelayChannel } from "@/hooks/use-relay";
+import { ApiError } from "@/lib/api";
 import type { RelayState } from "@/lib/relayClient";
 import { relayClientPool } from "@/lib/relayClientPool";
 import { ensureRelayTicket } from "@/lib/relayTicket";
@@ -35,6 +36,8 @@ const fake = vi.hoisted(() => {
     emit: (s: string) => void;
     /** 演一次「对端按协议版本拒了这次握手」。 */
     rejectHandshake: (detail: string) => void;
+    /** 演一次「下一次自动重试排在这个时刻」。 */
+    emitRetryAt: (at: number | null) => void;
   }[] = [];
   class FakeRelayClient {
     private readonly onStateChange: (s: string) => void;
@@ -57,12 +60,20 @@ const fake = vi.hoisted(() => {
       this.emit("disconnected");
       this.onHandshakeRejected?.(detail);
     };
+    private readonly onNextRetryAt?: (at: number | null) => void;
+    nextRetryAt: number | null = null;
+    emitRetryAt = (at: number | null) => {
+      this.nextRetryAt = at;
+      this.onNextRetryAt?.(at);
+    };
     constructor(opts: {
       onStateChange: (s: string) => void;
       onHandshakeRejected?: (detail: string) => void;
+      onNextRetryAt?: (at: number | null) => void;
     }) {
       this.onStateChange = opts.onStateChange;
       this.onHandshakeRejected = opts.onHandshakeRejected;
+      this.onNextRetryAt = opts.onNextRetryAt;
       instances.push(this);
     }
   }
@@ -153,17 +164,95 @@ describe("useRelayChannel 的连接状态", () => {
     expect(result.current.handshakeRejection).toBeNull();
   });
 
-  it("取票失败后回到「已断开」,好让页面给出重连的出口", async () => {
-    const gate = pending<typeof TICKET>();
-    mockedEnsureRelayTicket.mockReturnValue(gate.promise);
+  /*
+    E1：超时、断开、5xx 等网络错误永不进终态。取票失败从前落在 "disconnected"
+    （「已经不再自动重试」），而那只是一次网络抖动——页面停在那里直到用户自己点。
+    终态只留给 401（登出）与协议版本不符。
+  */
+  describe("取票失败", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    const flush = () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
 
+    it.each([
+      ["网络错误", () => new TypeError("Failed to fetch")],
+      ["502", () => new ApiError(-1, "bad gateway", 502)],
+    ])(
+      "%s：不进终态，报重连中与下一次时刻，到点自己再取",
+      async (_n, error) => {
+        mockedEnsureRelayTicket
+          .mockRejectedValueOnce(error())
+          .mockReturnValue(pending<typeof TICKET>().promise);
+
+        const { result } = renderHook(() => useRelayChannel("fp-1"));
+        await flush();
+
+        expect(result.current.relayState).toBe("reconnecting");
+        expect(result.current.relayTicketError).toBeTruthy();
+        const at = result.current.nextRetryAt;
+        expect(at).not.toBeNull();
+        expect(at!).toBeGreaterThan(Date.now());
+        expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(at! - Date.now());
+        });
+        expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(2);
+        expect(result.current.relayState).toBe("connecting");
+      },
+    );
+
+    it("401：转登出态，不再重试", async () => {
+      mockedEnsureRelayTicket.mockRejectedValue(
+        new ApiError(401, "unauthorized", 401),
+      );
+
+      const { result } = renderHook(() => useRelayChannel("fp-1"));
+      await flush();
+
+      expect(result.current.relayState).toBe("signedOut");
+      expect(result.current.nextRetryAt).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+      });
+      expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(1);
+    });
+
+    it("退避中按立即重试：马上再取一次票，倒计时清空", async () => {
+      mockedEnsureRelayTicket
+        .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+        .mockReturnValue(pending<typeof TICKET>().promise);
+      const { result } = renderHook(() => useRelayChannel("fp-1"));
+      await flush();
+      expect(result.current.nextRetryAt).not.toBeNull();
+
+      act(() => result.current.reconnect());
+      await flush();
+
+      expect(mockedEnsureRelayTicket).toHaveBeenCalledTimes(2);
+      expect(result.current.nextRetryAt).toBeNull();
+      expect(result.current.relayState).toBe("connecting");
+    });
+  });
+
+  it("通道交出的下一次自动重试时刻原样交给页面", async () => {
+    mockedEnsureRelayTicket.mockResolvedValue(TICKET);
     const { result } = renderHook(() => useRelayChannel("fp-1"));
-    expect(result.current.relayState).toBe("connecting");
+    await waitFor(() => expect(fake.instances).toHaveLength(1));
+    expect(result.current.nextRetryAt).toBeNull();
 
-    gate.reject(new Error("boom"));
-    // 取不到票就没有自动重试可言：终态说法（"lost" + 重新连接按钮）此时才成立。
-    await waitFor(() => expect(result.current.relayState).toBe("disconnected"));
-    expect(result.current.relayTicketError).toBeInstanceOf(Error);
+    act(() => fake.instances[0].emitRetryAt(1_700_000_001_000));
+    expect(result.current.nextRetryAt).toBe(1_700_000_001_000);
+
+    act(() => fake.instances[0].emitRetryAt(null));
+    expect(result.current.nextRetryAt).toBeNull();
   });
 
   it("按下重新连接时立刻回到「连接中」,而不是先退回红色终态", async () => {
