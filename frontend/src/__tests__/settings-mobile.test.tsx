@@ -12,7 +12,7 @@ import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
 import { api } from "@/lib/api";
 import { createBrowserEngineSettingsPorts } from "@/lib/enginePorts";
-import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { ThemeProvider, TouchProvider } from "@agentre-hub/agentre-ui";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -105,12 +105,15 @@ function NavType() {
   return <span data-testid="nav-type">{useNavigationType()}</span>;
 }
 
-function renderSettings(url = "/settings") {
+function renderSettings(url = "/settings", touch = false) {
   return render(
     <MemoryRouter initialEntries={[url]}>
       <ThemeProvider>
-        <Settings />
-        <Where />
+        {/* 与 App.tsx 同一层：手机树整棵在 TouchProvider 里（useTouch 读它）。 */}
+        <TouchProvider touch={touch}>
+          <Settings />
+          <Where />
+        </TouchProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -367,5 +370,42 @@ describe("engine ports device names", () => {
     expect(listed.deviceName).toBe("Build box");
     const [device] = await ports.listAccountDevices!();
     expect(device.name).toBe("Build box");
+  });
+});
+
+describe("Settings 供应商（W9、F10、F22）", () => {
+  it("供应商读失败：出读失败提示 + 重试，不出「还没有配置任何供应商」空态，不露原始报错", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/engine/providers")
+        throw new Error("request timed out after 15000ms");
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/engine/backends") return { backends: [backend] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      if (path === "/v1/auth/me") return session;
+      return {};
+    });
+    renderSettings("/settings?section=providers", true);
+    const notice = await screen.findByTestId("provider-load-failure");
+    expect(notice.textContent).not.toMatch(/timed out after/);
+    expect(screen.queryByText(/No LLM providers|no providers/i)).toBeNull();
+    const retry = within(notice).getByRole("button", { name: /Retry/i });
+    expect(retry.className).toMatch(/\bh-11\b|min-h-11|before:-inset/);
+  });
+
+  it("手机上供应商详情的开关是 44px 点按区；桌面不变", async () => {
+    const sizes = async (touch: boolean) => {
+      const view = renderSettings("/settings?section=providers", touch);
+      fireEvent.click((await screen.findAllByText("Anthropic")).at(-1)!);
+      await screen.findByText("claude-sonnet-4");
+      const classes = screen.getAllByRole("switch").map((el) => el.className);
+      view.unmount();
+      return classes;
+    };
+    const phone = await sizes(true);
+    const desktop = await sizes(false);
+    expect(phone.length).toBeGreaterThan(0);
+    for (const c of phone) expect(c).toMatch(/size-11|h-11|before:-inset/);
+    for (const c of desktop)
+      expect(c).not.toMatch(/size-11|h-11|before:-inset/);
   });
 });

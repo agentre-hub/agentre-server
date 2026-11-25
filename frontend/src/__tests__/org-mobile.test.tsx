@@ -14,7 +14,7 @@ import {
 } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "@/lib/api";
+import { api, ApiTimeoutError } from "@/lib/api";
 import * as accountChannel from "@/lib/accountChannel";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -823,5 +823,239 @@ describe("Agent 系统提示词与描述离开即存（F4、I12）", () => {
         expect.objectContaining({ method: "POST" }),
       ),
     );
+  });
+});
+
+describe("组织页筛选 chip 写「类型 · 机器名」（J2、F4）", () => {
+  const targetOf = (
+    id: string,
+    backend: string,
+    device: number,
+    name: string,
+  ) => ({
+    sync_id: id,
+    rank: 1,
+    backend_sync_id: backend,
+    backend_name: "Claude Code",
+    device_id: device,
+    device_name: name,
+    device_unspecified: false,
+    availability: "available" as const,
+    current: true,
+  });
+  const backendsRes = {
+    backends: [
+      {
+        sync_id: "b1",
+        name: "Claude Code",
+        backend_type: "claudecode",
+        device_id: 7,
+        device_name: "mac-mini",
+        device_unspecified: false,
+      },
+      {
+        sync_id: "b2",
+        name: "Claude Code",
+        backend_type: "claudecode",
+        device_id: 8,
+        device_name: "linux-box",
+        device_unspecified: false,
+      },
+      // 机器名未知：不凭空补后缀。
+      { sync_id: "b3", name: "Codex", backend_type: "codex" },
+    ],
+  };
+  const twoChart: OrgChartResponse = {
+    departments: [],
+    agents: [
+      {
+        sync_id: "a1",
+        name: "Alice",
+        sort_order: 0,
+        exec_targets: [targetOf("t1", "b1", 7, "mac-mini")],
+      },
+      {
+        sync_id: "a2",
+        name: "Bob",
+        sort_order: 1,
+        exec_targets: [targetOf("t2", "b2", 8, "linux-box")],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/org") return twoChart;
+      if (path === "/v1/workspace/org/backends") return backendsRes;
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 7,
+              name: "mac-mini",
+              display_name: "Studio",
+              kind: "agentred",
+            },
+          ],
+        };
+      throw new Error(`unexpected request: ${path}`);
+    });
+  });
+
+  it("同类型的两个后端各是一颗 chip：备注名优先，其次自报名；机器名未知就只写类型", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+    const chips = screen.getByTestId("org-index-filter-chips");
+    await within(chips).findByRole("button", { name: "Claude Code · Studio" });
+    expect(
+      within(chips).getByRole("button", { name: "Claude Code · linux-box" }),
+    ).toBeTruthy();
+    expect(within(chips).getByRole("button", { name: "Codex" })).toBeTruthy();
+    // 点哪一颗就只剩那台机器上的那个后端。
+    fireEvent.click(
+      within(chips).getByRole("button", { name: "Claude Code · linux-box" }),
+    );
+    expect(screen.queryByText("Alice")).toBeNull();
+    expect(screen.getByText("Bob")).toBeTruthy();
+  });
+});
+
+describe("Agent / 部门新建超时：刷新看看（F5、W13 组织侧）", () => {
+  const timeout = () => new ApiTimeoutError("/v1/workspace/org/agents", 15000);
+  let serverChart: OrgChartResponse;
+  let postFails = true;
+  let orgGate: Promise<void> | null = null;
+  const posts = (path: string) =>
+    mockedApi.mock.calls.filter(
+      ([p, init]) =>
+        p === path && (init as RequestInit | undefined)?.method === "POST",
+    );
+
+  async function openCreate(menuName: string, name: string) {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+    fireEvent.pointerDown(
+      within(screen.getByTestId("app-topbar")).getByRole("button", {
+        name: "Add agent or department",
+      }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: menuName }));
+    await screen.findByRole("dialog");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: name },
+    });
+  }
+
+  beforeEach(() => {
+    serverChart = JSON.parse(JSON.stringify(chart));
+    postFails = true;
+    orgGate = null;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && !init?.method) {
+        if (orgGate) await orgGate;
+        return serverChart;
+      }
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      if (path === "/v1/devices") return { devices: [] };
+      if (init?.method === "POST") {
+        if (postFails) throw timeout();
+        return { sync_id: "new-sync-id", version: 1 };
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+  });
+
+  it("超时只写一行中文提示 + 「刷新看看」，不露英文原文；提交本身不等任何读", async () => {
+    await openCreate("New agent", "Zed");
+    await screen.findByText("Alice");
+    // 提交之后若还有读，都挂起：POST 必须已经发出（基线取自内存里的那份，不拦在读后面）。
+    orgGate = new Promise(() => {});
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = await screen.findByRole("alert");
+    expect(posts("/v1/workspace/org/agents")).toHaveLength(1);
+    expect(alert.textContent).toContain(
+      "The network timed out. It may already have been created.",
+    );
+    expect(alert.textContent).not.toMatch(/timed out after|\/v1\//);
+    expect(
+      within(alert).getByRole("button", { name: "Refresh to check" }),
+    ).toBeTruthy();
+  });
+
+  it("刷新后认出刚提交的那条（新的、同名同部门）就直接打开，且不再 POST", async () => {
+    // 提交前板上就有一条同名的旧 Agent，不能被认错。
+    serverChart.agents.push({
+      sync_id: "old-zed",
+      name: "Zed",
+      sort_order: 5,
+      exec_targets: [],
+    });
+    await openCreate("New agent", "Zed");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = await screen.findByRole("alert");
+    // 服务端其实建好了。
+    serverChart.agents.push({
+      sync_id: "made-zed",
+      name: "Zed",
+      sort_order: 6,
+      exec_targets: [],
+    });
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Refresh to check" }),
+    );
+    await screen.findByTestId("org-detail-col");
+    expect(posts("/v1/workspace/org/agents")).toHaveLength(1);
+  });
+
+  it("没找到：提示换成「可以重新提交」，再提交才发第二个 POST", async () => {
+    await openCreate("New agent", "Zed");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(
+      within(await screen.findByRole("alert")).getByRole("button", {
+        name: "Refresh to check",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toMatch(
+        /not found|couldn't find|resubmit/i,
+      ),
+    );
+    expect(posts("/v1/workspace/org/agents")).toHaveLength(1);
+    postFails = false;
+    fireEvent.pointerDown(
+      within(screen.getByTestId("app-topbar")).getByRole("button", {
+        name: "Add agent or department",
+      }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New agent" }));
+    await screen.findByRole("dialog");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Zed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(posts("/v1/workspace/org/agents")).toHaveLength(2),
+    );
+  });
+
+  it("部门新建超时同样：刷新认出就打开该部门", async () => {
+    await openCreate("New top-level department", "Platform");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toMatch(/timed out after/);
+    serverChart.departments.push({
+      sync_id: "made-dept",
+      name: "Platform",
+      sort_order: 3,
+    });
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Refresh to check" }),
+    );
+    await screen.findByTestId("org-detail-col");
+    expect(posts("/v1/workspace/org/departments")).toHaveLength(1);
   });
 });

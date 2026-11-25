@@ -1,6 +1,8 @@
 {
   "create": {
-    "title": "New project"
+    "title": "New project",
+    "timeout": "The network timed out. It may already have been created. Check the project list before trying again.",
+    "timeoutNotFound": "The network timed out and the project wasn't found. You can submit it again."
   },
   "settings": {
     "pathsGoDevices": "Add a device"

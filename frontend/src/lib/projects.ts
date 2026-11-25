@@ -11,7 +11,7 @@
  */
 import { AccountChannelSyncVersion } from "@agentre-hub/agentre-wire";
 
-import { api } from "@/lib/api";
+import { api, ApiTimeoutError } from "@/lib/api";
 import { createRoster } from "@/lib/rosterFetch";
 
 export interface OrgWriteResponse {
@@ -119,10 +119,60 @@ export const projectRoster = createRoster(
   "roster-projects",
 );
 
-export function createProject(
+/**
+ * 新建超时（F5）后，重读也没能确认：`checked` 为假 = 连重读都失败了，项目可能已经建好；
+ * 为真 = 重读了、没找到，可以再提交。文案由 `projectFailureText` 按它说。
+ */
+export class ProjectCreateTimeoutError extends Error {
+  constructor(public checked: boolean) {
+    super("project create timed out");
+    this.name = "ProjectCreateTimeoutError";
+  }
+}
+
+/** 在重读的整份名单里认出「刚提交的那个」：提交前没见过 + 名称、上级一致，取靠后的一条。 */
+export function findCreatedProject(
+  projects: ProjectNode[],
+  submitted: ProjectFields,
+  knownBefore: ReadonlySet<string>,
+): ProjectNode | null {
+  const matches = projects.filter(
+    (p) =>
+      !knownBefore.has(p.syncId) &&
+      p.name.trim() === (submitted.name ?? "").trim() &&
+      p.parentSyncId === (submitted.parent_sync_id ?? ""),
+  );
+  return matches.length > 0 ? matches[matches.length - 1] : null;
+}
+
+/**
+ * 建项目。POST 超时时请求可能已经写进去了：重读整份名单（不带任何筛选）认出新的那个，
+ * 认出就当作建成（调用方照常打开它）；认不出抛 `ProjectCreateTimeoutError`。
+ *
+ * 「提交前」的基线取共享名单（在飞就共用、10 秒内复用）且**与 POST 同时发出、不等它**，
+ * 创建不会被基线拖慢；基线取不到时不敢认（否则同名旧项目会被认错），按「没核实」报。
+ */
+export async function createProject(
   fields: ProjectFields,
 ): Promise<OrgWriteResponse> {
-  return post("/v1/workspace/org/projects", fields);
+  const baseline = projectRoster.get().then(
+    (rows) => new Set(rows.map((p) => p.syncId)) as ReadonlySet<string>,
+    () => null,
+  );
+  try {
+    return await post<OrgWriteResponse>("/v1/workspace/org/projects", fields);
+  } catch (err) {
+    if (!(err instanceof ApiTimeoutError)) throw err;
+    const known = await baseline;
+    if (!known) throw new ProjectCreateTimeoutError(false);
+    try {
+      const found = findCreatedProject(await fetchProjects(), fields, known);
+      if (found) return { sync_id: found.syncId, version: 0 };
+    } catch {
+      throw new ProjectCreateTimeoutError(false);
+    }
+    throw new ProjectCreateTimeoutError(true);
+  }
 }
 
 export function updateProject(

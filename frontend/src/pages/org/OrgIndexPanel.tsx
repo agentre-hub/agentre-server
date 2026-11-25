@@ -109,6 +109,18 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
         : undefined)
     );
   };
+  // 手机筛选 chip 写「类型 · 机器名」：同一种后端装在几台机器上时，只写类型会出现几颗
+  // 一模一样的 chip（J2）。机器名与行的第二行同一口径（备注名优先、回落自报名）；
+  // 取不到机器名时不补后缀；一种类型只在一台机器上也照写机器名，与对比稿 B 栏一致
+  // （「Codex · 工作站」）。桌面的筛选菜单不变。
+  const backendLabel = (b: OrgBackendItem): string => {
+    const type = b.name ?? b.sync_id;
+    if (!props.isMobile) return type;
+    const machine =
+      (b.device_id ? deviceNames.get(b.device_id) : undefined) ??
+      (b.device_name ? deviceDisplayName({ name: b.device_name }) : undefined);
+    return machine ? `${type} · ${machine}` : type;
+  };
   const rowDensity = props.isMobile
     ? ({ density: "stacked" } as const)
     : undefined;
@@ -172,8 +184,8 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
     return visible;
   }, [matchedGroups, collapsed]);
 
-  const backendName =
-    backends.find((b) => b.sync_id === backendSyncId)?.name ?? "";
+  const selectedBackend = backends.find((b) => b.sync_id === backendSyncId);
+  const backendName = selectedBackend ? backendLabel(selectedBackend) : "";
   const reportsToName =
     reportsToOptions.find((a) => a.id === reportsToId)?.name ?? "";
 
@@ -331,7 +343,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                   )
                 }
               >
-                {b.name ?? b.sync_id}
+                {backendLabel(b)}
               </FilterChip>
             ))}
           </div>

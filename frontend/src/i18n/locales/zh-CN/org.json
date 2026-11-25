@@ -121,6 +121,10 @@
   },
   "errors": {
     "loadFailed": "没能加载组织架构。",
-    "generic": "出了点问题，请重试。"
+    "generic": "出了点问题，请重试。",
+    "createTimeout": "网络超时，可能已经建好了",
+    "createRefresh": "刷新看看",
+    "createNotFound": "没有找到刚才新建的，可以重新提交。",
+    "createRefreshFailed": "刷新没成功，请稍后再试。"
   }
 }

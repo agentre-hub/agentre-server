@@ -156,3 +156,29 @@ describe("Agent 详情：执行目标与工具的触屏档", () => {
     expect(cls(add)).not.toContain("h-8");
   });
 });
+
+describe("Agent / 部门详情：描述与系统提示词输入 16px（I3、F8）", () => {
+  it("手机上系统提示词与描述都是 16px（iOS 聚焦不放大），桌面仍是 12px", async () => {
+    mockViewport(true);
+    const { unmount } = renderAgent();
+    const prompt = await screen.findByRole("textbox", {
+      name: "System prompt",
+    });
+    expect(cls(prompt)).toContain("text-base");
+    expect(cls(prompt)).not.toContain("text-xs");
+    const description = screen.getByRole("textbox", { name: "Description" });
+    expect(cls(description)).toContain("text-base");
+    unmount();
+
+    mockViewport(false);
+    renderAgent();
+    const desktopPrompt = await screen.findByRole("textbox", {
+      name: "System prompt",
+    });
+    expect(cls(desktopPrompt)).toContain("text-xs");
+    expect(cls(desktopPrompt)).not.toContain("text-base");
+    expect(cls(screen.getByRole("textbox", { name: "Description" }))).toContain(
+      "text-xs",
+    );
+  });
+});

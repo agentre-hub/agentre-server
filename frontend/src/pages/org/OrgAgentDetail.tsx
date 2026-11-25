@@ -18,6 +18,7 @@ import { useFlushOnLeave, useOrgIdentityText } from "./useOrgIdentityText";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
   IdentityFields,
+  cn,
   Button,
   DialogShell,
   DialogShellBody,
@@ -189,6 +190,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
     <IdentityFields
       kind="agent"
       testIdPrefix="org-agent-identity"
+      touch={isMobile}
       {...identityText}
       mark={{
         iconKey: avatarIcon,
@@ -259,7 +261,11 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
         onBlur={() => savePrompt(prompt)}
         placeholder={t("org.detail.systemPromptPlaceholder")}
         aria-label={t("org.detail.systemPrompt")}
-        className="min-h-[232px] bg-transparent font-mono text-xs [overflow-wrap:anywhere]"
+        className={cn(
+          "min-h-[232px] bg-transparent font-mono [overflow-wrap:anywhere]",
+          // 手机 16px：iOS 聚焦字号 < 16px 的输入会放大整页（I3）。
+          isMobile ? "text-base" : "text-xs",
+        )}
       />
     </div>
   );
@@ -366,7 +372,10 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
             value={promptDraft}
             onChange={(e) => setPromptDraft(e.target.value)}
             aria-label={t("org.detail.systemPrompt")}
-            className="h-[50vh] min-h-[320px] bg-transparent font-mono text-xs shadow-none [overflow-wrap:anywhere]"
+            className={cn(
+              "h-[50vh] min-h-[320px] bg-transparent font-mono shadow-none [overflow-wrap:anywhere]",
+              isMobile ? "text-base" : "text-xs",
+            )}
           />
         </DialogShellBody>
         <DialogShellFooter>

@@ -105,6 +105,7 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
     <IdentityFields
       kind="department"
       testIdPrefix="org-department-identity"
+      touch={isMobile}
       {...identityText}
       mark={{
         iconKey: department.icon ?? "",

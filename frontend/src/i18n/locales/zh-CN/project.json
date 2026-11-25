@@ -1,6 +1,8 @@
 {
   "create": {
-    "title": "新建项目"
+    "title": "新建项目",
+    "timeout": "网络超时，可能已经建好了，请先到项目列表看看再重试。",
+    "timeoutNotFound": "网络超时，没有找到刚才的项目，可以重新提交。"
   },
   "settings": {
     "pathsGoDevices": "去添加设备"

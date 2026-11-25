@@ -121,6 +121,10 @@
   },
   "errors": {
     "loadFailed": "Could not load your organization chart.",
-    "generic": "Something went wrong. Please try again."
+    "generic": "Something went wrong. Please try again.",
+    "createTimeout": "The network timed out. It may already have been created.",
+    "createRefresh": "Refresh to check",
+    "createNotFound": "Not found. You can submit it again.",
+    "createRefreshFailed": "Couldn't refresh. Try again in a moment."
   }
 }
