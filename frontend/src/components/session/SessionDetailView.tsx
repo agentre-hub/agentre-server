@@ -21,8 +21,6 @@ import { useTranslation } from "react-i18next";
 import {
   AgentAvatar,
   MESSAGE_AVATAR_CLASS,
-  Alert,
-  AlertDescription,
   createTranscriptProjector,
   indicatorHostMessageId,
   normalizePermissionMode,
@@ -37,10 +35,9 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import AppShell from "@/components/AppShell";
+import { FailureNotice } from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
-import SessionDetailHeader, {
-  SessionPageStateShell,
-} from "@/components/session/SessionDetailHeader";
+import SessionDetailHeader from "@/components/session/SessionDetailHeader";
 import SessionComposerBand, {
   isComposeReadonly,
   pickDockedPermission,
@@ -76,6 +73,7 @@ import {
 } from "@/components/session/sessionModel";
 import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
+import { describeFailure } from "@/lib/describeFailure";
 import { disconnected } from "@/lib/relayClient";
 import {
   decodeAbortSupport,
@@ -607,7 +605,7 @@ export default function SessionDetailView({
   // 目标机器与它的可达性（device / deviceError / machineOnline / meValid）整片
   // 归 useSessionTargetDevice；本组件只读它们。
   const target = useSessionTargetDevice(did);
-  const { device, deviceError, machineOnline, meValid } = target;
+  const { device, deviceError, machineOnline, meValid, retryDevice } = target;
 
   /**
    * 这条通道声明的目标（决策 11 的入口分流）。
@@ -1764,24 +1762,6 @@ export default function SessionDetailView({
     sendMessage: send.sendMessage,
   });
 
-  if (deviceError) {
-    const alert = (
-      <Alert variant="destructive">
-        <AlertDescription>
-          {deviceError instanceof ApiError
-            ? deviceError.message
-            : t("device.manage.loadError")}
-        </AlertDescription>
-      </Alert>
-    );
-    // 页面形态连壳一起报错；嵌入形态直接就地报错（外层容器给尺寸）。
-    return isPage ? (
-      <SessionPageStateShell backTo={backTo}>{alert}</SessionPageStateShell>
-    ) : (
-      alert
-    );
-  }
-
   /**
    * 双写一条会话级设置：承载者（此刻这条连接）+ 发起端（另一台时另借一条）。
    *
@@ -2269,6 +2249,25 @@ export default function SessionDetailView({
       className="flex h-full min-h-0 flex-col"
     >
       {header}
+      {/*
+        设备名单读失败（规格 G1、W8）：只在头带下加一条横幅，转录与输入区原样留着——
+        此前它换掉整页，转录被吞。横幅在滚动区之外，转录上沿的渐隐碰不到它。
+      */}
+      {deviceError ? (
+        <div
+          role="alert"
+          data-testid="session-roster-failure"
+          className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 bg-destructive-soft px-5 py-2 text-xs text-destructive-text"
+        >
+          <FailureNotice
+            failure={describeFailure(deviceError, {
+              t,
+              what: t("device.manage.loadError"),
+            })}
+            onRetry={retryDevice}
+          />
+        </div>
+      ) : null}
       {/*
         分栏切在头带**之下**（设计源 agentre.pen 的 B1）：头带横跨整列，转录与
         输入带一起留在左栏，预览栏定宽 420 贴右。没有当前标签时右栏整个不渲染，

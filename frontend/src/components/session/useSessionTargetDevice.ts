@@ -1,4 +1,10 @@
-import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { ApiError } from "@/lib/api";
@@ -25,6 +31,8 @@ export interface SessionTargetDevice {
   machineOnline: boolean | null;
   /** 浏览器这边的登录会话还有效吗。探测撞上 401 时转 false。 */
   meValid: boolean;
+  /** 名单读失败后的「重试」：作废共享名单、重新取一遍（成功即清掉 deviceError）。 */
+  retryDevice: () => void;
   /** 交给 useReconnectProbe 的把手，调用方只管原样传过去。 */
   probe: ProbeHandle;
 }
@@ -39,6 +47,12 @@ export function useSessionTargetDevice(did: number): SessionTargetDevice {
   const [deviceError, setDeviceError] = useState<unknown>(null);
   const [machineOnline, setMachineOnline] = useState<boolean | null>(null);
   const [meValid, setMeValid] = useState(true);
+  // 「重试」改的是它：effect 只在回调里写状态，重取靠它换依赖。
+  const [round, setRound] = useState(0);
+  const retryDevice = useCallback(() => {
+    deviceRoster.invalidate();
+    setRound((r) => r + 1);
+  }, []);
 
   /*
     换目标机器时先把这一片**清空**，不要等新的取回来再覆盖。
@@ -96,10 +110,11 @@ export function useSessionTargetDevice(did: number): SessionTargetDevice {
           if (alive()) setDeviceError(e);
         });
     },
-    [did],
+    [did, round],
   );
 
   return {
+    retryDevice,
     device,
     deviceError,
     machineOnline,

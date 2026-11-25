@@ -32,6 +32,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 服务端回的不是 JSON（502 的 HTML、门户页、网关错误页）：服务暂时不可用，与「业务上
+ * 被拒」不是一回事。带上状态码（门户页常常是 200），解析报错原文只进 `raw` 给诊断，
+ * 不上屏（规格 2026-11-25 G2）。
+ */
+export class ApiUnavailableError extends Error {
+  constructor(
+    public path: string,
+    public status: number,
+    public raw: string,
+  ) {
+    super(`non-JSON response (${status}): ${path}`);
+    this.name = "ApiUnavailableError";
+  }
+}
+
 /** REST 请求超过这么久没回：按失败处理，不再无限转圈。 */
 export const API_TIMEOUT_MS = 15_000;
 
@@ -80,7 +96,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
     // 先于解析响应体：401 就是 401，代理塞回一页 HTML 也一样。
     if (res.status === 401) unauthorizedHandler?.();
-    envelope = await res.json();
+    try {
+      envelope = await res.json();
+    } catch (parseErr) {
+      // 体没读完是超时/中止，照原样往外抛；只有「读完了却不是 JSON」才归服务不可用。
+      if (timedOut || ctl.signal.aborted) throw parseErr;
+      // 401 保住 401：登录失效比「服务不可用」更准，且全局处理已经喊过。
+      if (res.status === 401) {
+        throw new ApiError(401, "unauthorized", 401);
+      }
+      throw new ApiUnavailableError(
+        path,
+        res.status,
+        parseErr instanceof Error ? parseErr.message : String(parseErr),
+      );
+    }
   } catch (err) {
     throw timedOut ?? err;
   } finally {

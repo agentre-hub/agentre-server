@@ -60,6 +60,13 @@ vi.mock("@/lib/accountChannel", async (importOriginal) => {
   return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
 });
 
+// 「网络不稳定」细条的开关：核对失败时 useMe 报 unstable（外壳与设备页头都读它）。
+let meStatus: "ready" | "unstable" = "ready";
+vi.mock("@/hooks/use-me", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/use-me")>();
+  return { ...actual, useMe: () => ({ ...actual.useMe(), status: meStatus }) };
+});
+
 const mockedApi = vi.mocked(api);
 const mockedList = vi.mocked(listPortForwards);
 
@@ -160,6 +167,7 @@ const originalMatchMedia = window.matchMedia;
 const originalShare = (navigator as { share?: unknown }).share;
 
 beforeEach(async () => {
+  meStatus = "ready";
   await i18n.changeLanguage("en");
   mockedApi.mockReset();
   mockedList.mockReset();
@@ -562,5 +570,40 @@ describe("手机添加设备：整屏三步", () => {
     expect(
       await within(guide).findByText("Enter all six characters."),
     ).toBeTruthy();
+  });
+});
+
+describe("设备页头下的「网络不稳定」细条（任务 10 遗留）", () => {
+  it("列表页：细条紧贴页头下方、只有一条", async () => {
+    meStatus = "unstable";
+    mockConsole();
+    renderAt("/devices");
+    await screen.findByRole("region", { name: "Online" });
+
+    const strips = screen.getAllByTestId("identity-unstable");
+    expect(strips).toHaveLength(1);
+    expect(screen.getByTestId("devices-mobile-header").nextElementSibling).toBe(
+      strips[0],
+    );
+  });
+
+  it("详情页：同样紧贴页头下方、只有一条", async () => {
+    meStatus = "unstable";
+    mockConsole();
+    renderAt("/devices/1");
+    await screen.findByTestId("device-detail-header");
+
+    const strips = screen.getAllByTestId("identity-unstable");
+    expect(strips).toHaveLength(1);
+    expect(screen.getByTestId("device-detail-header").nextElementSibling).toBe(
+      strips[0],
+    );
+  });
+
+  it("网络正常时不画", async () => {
+    mockConsole();
+    renderAt("/devices");
+    await screen.findByRole("region", { name: "Online" });
+    expect(screen.queryByTestId("identity-unstable")).toBeNull();
   });
 });

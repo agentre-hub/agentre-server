@@ -99,7 +99,7 @@
     "share": "Send to computer"
   },
   "manage": {
-    "loadError": "Could not load your devices. Please try again.",
+    "loadError": "Could not load your devices. Please try again",
     "loadFailedWhat": "Could not load your devices",
     "statusOnline": "Online",
     "statusOffline": "Offline",

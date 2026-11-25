@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { api, ApiError, ApiTimeoutError, setCsrfToken } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  ApiTimeoutError,
+  ApiUnavailableError,
+  setCsrfToken,
+  setUnauthorizedHandler,
+} from "@/lib/api";
 
 describe("api()", () => {
   beforeEach(() => {
@@ -25,6 +32,63 @@ describe("api()", () => {
       json: async () => ({ code: 30100, msg: "user not found", data: null }),
     });
     await expect(api("/v1/x")).rejects.toBeInstanceOf(ApiError);
+  });
+
+  describe("响应不是 JSON（规格 2026-11-25 G2）", () => {
+    const notJson = (status: number) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => {
+        throw new SyntaxError(
+          "Unexpected token '<', \"<html>\" is not valid JSON",
+        );
+      },
+    });
+
+    it("502 回 HTML：以 ApiUnavailableError 拒绝并带状态码，不是 SyntaxError", async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        notJson(502),
+      );
+      const err = await api("/v1/x").catch((e) => e);
+      expect(err).toBeInstanceOf(ApiUnavailableError);
+      expect((err as ApiUnavailableError).status).toBe(502);
+    });
+
+    it("门户页以 200 回 HTML：同样是服务不可用，状态码照实带上", async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+        notJson(200),
+      );
+      const err = await api("/v1/x").catch((e) => e);
+      expect(err).toBeInstanceOf(ApiUnavailableError);
+      expect((err as ApiUnavailableError).status).toBe(200);
+    });
+
+    it("401 回 HTML：仍先喊全局 401 处理，并保住 401（ApiError），不被读成服务不可用", async () => {
+      const onUnauthorized = vi.fn();
+      setUnauthorizedHandler(onUnauthorized);
+      try {
+        (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+          notJson(401),
+        );
+        const err = await api("/v1/x").catch((e) => e);
+        expect(onUnauthorized).toHaveBeenCalledTimes(1);
+        expect(err).toBeInstanceOf(ApiError);
+        expect((err as ApiError).status).toBe(401);
+      } finally {
+        setUnauthorizedHandler(null);
+      }
+    });
+
+    it("JSON 错误体仍是 ApiError（不被误归服务不可用）", async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ code: 1, msg: "boom", data: null }),
+      });
+      const err = await api("/v1/x").catch((e) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err).not.toBeInstanceOf(ApiUnavailableError);
+    });
   });
 
   describe("超时", () => {

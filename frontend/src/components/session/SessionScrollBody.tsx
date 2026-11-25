@@ -255,7 +255,9 @@ export default function SessionScrollBody({
       aria-busy={awaitingTranscript || undefined}
       // transcript-fade-top：上沿 18px 渐隐，滚到顶带下面的正文不被一刀切成半行
       // （与桌面端 chat-panel 的转录区同一条，2026-10-20）。
-      className="transcript-fade-top min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-2"
+      // 带吸顶状态横幅（[data-session-status]）时渐隐退场：蒙版会把贴着上沿的横幅
+      // 吃掉一半（W32）。横幅是 sticky 的，渐隐只在没有横幅时才有意义。
+      className="transcript-fade-top has-[[data-session-status]]:[-webkit-mask-image:none] has-[[data-session-status]]:[mask-image:none] min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-2"
     >
       <div
         ref={contentRef}

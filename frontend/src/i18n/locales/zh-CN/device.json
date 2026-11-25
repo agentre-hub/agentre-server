@@ -99,7 +99,7 @@
     "share": "发到电脑上"
   },
   "manage": {
-    "loadError": "无法加载你的设备列表，请重试。",
+    "loadError": "无法加载你的设备列表，请重试",
     "loadFailedWhat": "无法加载你的设备列表",
     "statusOnline": "在线",
     "statusOffline": "离线",

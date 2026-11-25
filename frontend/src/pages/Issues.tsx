@@ -346,19 +346,25 @@ export default function Issues() {
           />
         ) : null}
 
-        <IssueBoard
-          viewModel={board.viewModel}
-          drag={isMobile ? undefined : bindings}
-          layout={isMobile ? "stage" : "columns"}
-          ports={{
-            onEdit: openTask,
-            onDelete: (taskId) => void board.deleteTask(taskId),
-            onMove: (taskId, stage) => void board.moveTask(taskId, stage, 0),
-            onCreateTask: (stage) =>
-              setEditing(initialTaskFormValue({ stage, scope: query.scope })),
-            onClearFilters: () => setQuery(EMPTY_BOARD_QUERY),
-          }}
-        />
+        {/*
+          读失败且手上一张卡都没有：不画看板——它会摆出「还没有任务」，而任务一个没少
+          （规格 G1）。已经读到过的内容照旧留着，上面那行失败提示说明它可能是旧的。
+        */}
+        {board.error && totalTasks === 0 ? null : (
+          <IssueBoard
+            viewModel={board.viewModel}
+            drag={isMobile ? undefined : bindings}
+            layout={isMobile ? "stage" : "columns"}
+            ports={{
+              onEdit: openTask,
+              onDelete: (taskId) => void board.deleteTask(taskId),
+              onMove: (taskId, stage) => void board.moveTask(taskId, stage, 0),
+              onCreateTask: (stage) =>
+                setEditing(initialTaskFormValue({ stage, scope: query.scope })),
+              onClearFilters: () => setQuery(EMPTY_BOARD_QUERY),
+            }}
+          />
+        )}
 
         <TaskFormDialog
           value={editing}

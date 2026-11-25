@@ -14,7 +14,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { ApiError, ApiTimeoutError } from "@/lib/api";
+import { ApiError, ApiTimeoutError, ApiUnavailableError } from "@/lib/api";
 import { describeFailure } from "@/lib/describeFailure";
 import { DispatchConnectionError, DispatchRunError } from "@/lib/dispatch";
 import { loadErrorText } from "@/lib/loadError";
@@ -97,6 +97,31 @@ describe("describeFailure · 离线 / 断网", () => {
   });
 });
 
+describe("describeFailure · 服务暂时不可用（G2）", () => {
+  it("非 JSON 响应：说服务暂时不可用并带状态码，给重试，不露解析报错", () => {
+    const raw = "Unexpected token '<'";
+    const f = describeFailure(
+      new ApiUnavailableError("/v1/x", 502, raw),
+      zhCtx,
+    );
+    expect(f.category).toBe("offline");
+    expect(f.exit).toBe("retry");
+    expect(f.message).toBe("看板没取回来，服务暂时不可用（502）。");
+    expectNoRaw(f.message, raw);
+    expect(f.diagnostic).toContain("502");
+  });
+
+  it("英文界面整句英文", () => {
+    const f = describeFailure(
+      new ApiUnavailableError("/v1/x", 200, "x"),
+      enCtx,
+    );
+    expect(f.message).toBe(
+      "Couldn't load the board — the service is temporarily unavailable (200).",
+    );
+  });
+});
+
 describe("describeFailure · 版本过旧", () => {
   it("那台机器的 agentred 旧：出口是去设备页", () => {
     const detail =
@@ -137,13 +162,22 @@ describe("describeFailure · 版本过旧", () => {
 describe("describeFailure · 权限", () => {
   it.each([
     ["HTTP 403 / Forbidden", new ApiError(30005, "无权限", 403)],
-    ["HTTP 401 / Unauthorized", new ApiError(30004, "未登录", 401)],
     ["那台机器不认凭据", new RelayError(ErrCodeUnauthorized, "unauthorized")],
   ])("%s → 权限，没有出口", (_name, err) => {
     const f = describeFailure(err, zhCtx);
     expect(f.category).toBe("permission");
     expect(f.exit).toBe("none");
     expectNoRaw(f.message, (err as Error).message);
+  });
+});
+
+describe("describeFailure · 登录失效（G1）", () => {
+  it("HTTP 401：出口是「重新登录」，不是没有出口", () => {
+    const err = new ApiError(30004, "未登录", 401);
+    const f = describeFailure(err, zhCtx);
+    expect(f.category).toBe("permission");
+    expect(f.exit).toBe("signIn");
+    expectNoRaw(f.message, err.message);
   });
 });
 

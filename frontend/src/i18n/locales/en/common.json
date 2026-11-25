@@ -24,12 +24,14 @@
     "pageOutdated": "{{what}} — this page is older than the agentred on {{machine}}. Reload the page.",
     "versionMismatch": "{{what}} — this page and the agentred on {{machine}} run different versions.",
     "signedOut": "{{what}} — your session has expired. Sign in again.",
+    "serviceUnavailable": "{{what}} — the service is temporarily unavailable ({{status}}).",
     "denied": "{{what}} — you don't have permission to do this.",
     "unknown": "{{what}}.",
     "thatMachine": "that machine",
     "goDevices": "Go to devices",
     "copyDiagnostics": "Copy diagnostics",
-    "copied": "Diagnostics copied"
+    "copied": "Diagnostics copied",
+    "signIn": "Sign in again"
   },
   "serverUnreachable": {
     "title": "Can't reach the server",

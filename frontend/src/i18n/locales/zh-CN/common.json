@@ -24,12 +24,14 @@
     "pageOutdated": "{{what}}，这个页面比 {{machine}} 上的 agentred 旧，刷新一下页面。",
     "versionMismatch": "{{what}}，这个页面与 {{machine}} 上的 agentred 版本对不上。",
     "signedOut": "{{what}}，登录状态已失效，请重新登录。",
+    "serviceUnavailable": "{{what}}，服务暂时不可用（{{status}}）。",
     "denied": "{{what}}，你没有权限这样做。",
     "unknown": "{{what}}。",
     "thatMachine": "那台机器",
     "goDevices": "去设备页",
     "copyDiagnostics": "复制诊断信息",
-    "copied": "诊断信息已复制"
+    "copied": "诊断信息已复制",
+    "signIn": "重新登录"
   },
   "serverUnreachable": {
     "title": "连不上服务器",
