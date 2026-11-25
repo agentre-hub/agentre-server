@@ -166,6 +166,39 @@ func TestGet_GivenAgent_ThenReferencesAreRowIDsInChainOrder(t *testing.T) {
 	assert.True(t, a.GetPinned())
 }
 
+func TestRead_GivenAgentProjectOrProvider_ThenSyncIDIsTheStoredSyncID(t *testing.T) {
+	h := setup(t)
+	cases := []struct {
+		kind agentrewire.CtlKind
+		id   int64
+		want string
+	}{
+		{agentrewire.CtlKind_CTL_KIND_AGENT, 20, "agent-1"},
+		{agentrewire.CtlKind_CTL_KIND_PROJECT, 60, "proj-1"},
+		{agentrewire.CtlKind_CTL_KIND_PROVIDER, 50, "prov-1"},
+	}
+	for _, c := range cases {
+		resp, err := h.do(t, fromAgentred, get(c.kind, c.id), false)
+		require.NoError(t, err)
+		r := resp.GetGet().GetResource()
+		var got string
+		switch c.kind {
+		case agentrewire.CtlKind_CTL_KIND_AGENT:
+			got = r.GetAgent().GetSyncId()
+		case agentrewire.CtlKind_CTL_KIND_PROJECT:
+			got = r.GetProject().GetSyncId()
+		default:
+			got = r.GetProvider().GetSyncId()
+		}
+		assert.Equal(t, c.want, got, "kind %v get", c.kind)
+	}
+
+	resp, err := h.do(t, fromAgentred, list(agentrewire.CtlKind_CTL_KIND_PROVIDER), false)
+	require.NoError(t, err)
+	require.Len(t, resp.GetList().GetItems(), 1)
+	assert.Equal(t, "prov-1", resp.GetList().GetItems()[0].GetProvider().GetSyncId())
+}
+
 func TestList_GivenModels_ThenIDIsDerivedStablyFromProviderAndKey(t *testing.T) {
 	h := setup(t)
 	resp, err := h.do(t, fromAgentred, list(agentrewire.CtlKind_CTL_KIND_MODEL), false)

@@ -250,6 +250,7 @@ func (st *state) agentDoc(r *sync_entity.SyncObject) *agentrewire.CtlAgent {
 		Id: r.ID, Name: p.Name, Description: p.Description, DepartmentId: st.idOf(p.DepartmentSyncID),
 		BackendIds: st.agentBackendIDs(r.SyncID), Pinned: p.Pinned,
 		AvatarColor: p.AvatarColor, AvatarIcon: p.AvatarIcon, SystemBadge: p.SystemBadge,
+		SyncId: r.SyncID,
 	}
 }
 
@@ -342,6 +343,7 @@ func (st *state) projectDoc(r *sync_entity.SyncObject) *agentrewire.CtlProject {
 	doc := &agentrewire.CtlProject{
 		Id: r.ID, ParentId: st.idOf(p.ParentSyncID), Name: p.Name, Icon: p.Icon, Color: p.Color,
 		Description: p.Description, Path: locationPath(st.locationRow(r.SyncID, st.callerFingerprint())),
+		SyncId: r.SyncID,
 	}
 	for _, m := range st.memberRows(r.SyncID) {
 		if id := st.idOf(memberAgentSyncID(m)); id != 0 {
@@ -382,6 +384,7 @@ func (st *state) providerDoc(r *sync_entity.SyncObject) *agentrewire.CtlProvider
 		Id: r.ID, Name: p.Name, Type: p.Type, BaseUrl: p.BaseURL, Enabled: p.Enabled,
 		ApiKey: "", ApiKeySet: p.APIKey != "", // 只写字段：响应里永不带 key，连掩码也不给。
 		DefaultModelKey: p.DefaultModelKey, BackendRefs: st.backendRefs(r.SyncID, ""),
+		SyncId: r.SyncID,
 	}
 }
 
