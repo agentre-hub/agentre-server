@@ -685,6 +685,7 @@ func TestRelayDaemonClosesWhenDeviceRevokedOnAnotherInstance(t *testing.T) {
 				Fingerprint: "fp-" + strconv.FormatInt(id, 10), Status: status,
 			}, nil
 		}).AnyTimes()
+	devices.EXPECT().ListActiveChildren(gomock.Any(), int64(10)).Return(nil, nil)
 	tokens.EXPECT().RevokeChain(gomock.Any(), int64(10), gomock.Any()).Return(nil)
 	devices.EXPECT().Revoke(gomock.Any(), int64(10), gomock.Any()).DoAndReturn(
 		func(context.Context, int64, int64) error { revoked.Store(true); return nil })
