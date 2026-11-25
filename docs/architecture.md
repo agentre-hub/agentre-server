@@ -178,9 +178,9 @@ middleware groups are the authorization model:
 | Public | — (some endpoints add per-IP rate limits) | healthz, GitHub OAuth authorize/callback, passkey login |
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
 | Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*`, `/v1/port-forwards/links` |
-| Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
+| Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs, personal-token management (`POST`/`GET /v1/personal-tokens`, `POST /v1/personal-tokens/:name/rotate`, `DELETE /v1/personal-tokens/:name`; `personal_token_svc` further limits these to a browser session or a `cli` device and answers 403 to every other caller) |
 | Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot`, `/v1/ctl/resources` and `/v1/ctl/send` (agrctl executor; protojson bodies, `{"error": …}` errors, no mux envelope), `/v1/credentials/introspect` (+ per-account rate limit) |
-| Relay client | `RelayClientJWT(credentials, tickets)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (opaque, recorded in Redis by `credstore`, one connection per ticket) |
+| Relay client | `RelayClientJWT(credentials, tickets)` | `/v1/relay/client`; accepts native device access tokens, personal tokens, and browser session-derived short-lived relay tickets (opaque, recorded in Redis by `credstore`, one connection per ticket) |
 | Port-forward authorize | own session check in `portforward_ctr.Host.Authorize` (redirects to `/login` instead of 401; GET, so no CSRF) | `GET /v1/port-forwards/authorize` |
 | Forward host | `portforward_ctr.Host.Dispatch`, installed with `engine.Use` **before** every other route — forward session, not the console session | every request whose Host is under `server.port_forward.base_domain` |
 
@@ -194,12 +194,30 @@ its tokens at once, and `connguard` closes already-open relay connections on the
 re-checking the device. Unknown, expired and revoked tokens all answer 401; a failure to resolve
 answers 500, and Redis being down changes neither verdict.
 
+Personal tokens are long-lived, scoped credentials for external tools. The plaintext is
+`agr_pat_` followed by 32 random bytes in unpadded base64url; it is returned once, by create or
+rotate, and the server stores only its sha256 digest (`personal_tokens.token_hash`). A token
+resolves through `personal_token_svc.ResolveBearer` (MySQL only) to a principal with kind
+`personal_token`, `DeviceID` 0, handle `pat:<id>`, its scopes (`read`, `chat`, `approve`,
+`resources:write`, `devices:write`), its name, and its own peer fingerprint. That fingerprint is
+generated at creation and kept across rotation; it is not the fingerprint of the device that
+created the token. A token is valid while its row exists (delete is the revocation) and
+`expires_at` is 0 (never) or still in the future; rotation replaces the digest, so the old secret
+stops resolving at once. Only the composite `auth_svc.CredentialResolver` knows personal tokens
+(devices first, then personal tokens, then Redis credentials), so they are accepted by
+`/v1/relay/client` and can be introspected, but `DeviceJWT` and `SessionOrDeviceAuth` still turn
+them away. On the relay `connguard` re-checks a `pat:` handle against the row on every heartbeat
+and closes the connection when the token is deleted, rotated or expired. The server does not
+enforce scopes on relay RPCs; agentred does, from introspection.
+
 `POST /v1/credentials/introspect` lets a caller that already holds its own device access
 token ask the server about a **different** token it was just handed (by the peer it is
-authenticating inbound) — device access token, relay ticket or server-own credential, any
-of the three. It resolves through `auth_svc.CredentialResolver` (the same resolver
-`/v1/relay/client` uses) and answers with account/device/kind/peer-fingerprint/remaining-TTL
-only when that token belongs to the caller's own account; unknown, expired, revoked and
+authenticating inbound): a device access token, a personal token, a relay ticket or a
+server-own credential. It resolves through `auth_svc.CredentialResolver` (the same
+resolver `/v1/relay/client` uses) and answers with `account_id`, `device_id`, `kind`,
+`peer_fingerprint` and `expires_in` (remaining seconds; 0 for a personal token that never
+expires), plus `scopes` and `token_name` for a personal token only, and only when that token
+belongs to the caller's own account; unknown, expired, revoked and
 cross-account answers are all the one `code.CredentialInvalid` (HTTP 400) — deliberately not
 401, so a client can tell "my own credential is bad" from "the token I was asked to vouch
 for is bad". When the credential store itself cannot be read (Redis down), the answer is 503

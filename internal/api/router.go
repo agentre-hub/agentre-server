@@ -20,6 +20,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/engine_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/healthz_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/passkey_ctr"
+	"github.com/agentre-hub/agentre-server/internal/controller/personal_token_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/portforward_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
@@ -35,6 +36,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/ctl_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/personal_token_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
@@ -73,6 +75,9 @@ type RouterDeps struct {
 	Bearer middleware.BearerResolver
 	// Ctl 是 agrctl 资源接口的执行者。留给测试注入；为空时每次请求取 ctl_svc.Default()。
 	Ctl ctl_svc.CtlSvc
+	// PersonalTokens 是个人 token 的管理与解析。留给测试注入；为空时取
+	// personal_token_svc.Default()。
+	PersonalTokens personal_token_svc.PersonalTokenSvc
 
 	// drainer 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
 	// 长连接逐条礼貌关掉(见 DrainRelays)。
@@ -184,10 +189,16 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if redisClient == nil {
 		redisClient = redis.Default()
 	}
-	relayBearer := auth_svc.NewCredentialResolver(bearer, auth_svc.Default())
+	// 个人 token 只进这个组合解析方（中继客户端入口与核验端点），不进上面那个设备解析方：
+	// DeviceJWT 与 SessionOrDeviceAuth 因此照旧只认设备 access token。
+	personalTokens := r.PersonalTokens
+	if personalTokens == nil {
+		personalTokens = personal_token_svc.Default()
+	}
+	relayBearer := auth_svc.NewCredentialResolver(bearer, auth_svc.Default()).WithPersonalTokens(personalTokens)
 	relayTickets := credstore.New(redisClient)
 	// 核验端点认得 server 签发的全部 Bearer 凭据——待核验的那一枚可能是设备 access
-	// token、中继票据或 server 自用凭据，与 /v1/relay/client 用的是同一个解析方
+	// token、个人 token、中继票据或 server 自用凭据，与 /v1/relay/client 用的是同一个解析方
 	// （规格 2026-09-11-opaque-credentials-auto-direct，S5）。
 	credentialsCtr := credentials_ctr.New(relayBearer)
 	// 账号信号没有自己的端点了（决策 13）：它跑在中继客户端连接的保留通道上，
@@ -203,6 +214,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	sessionImportCtr := sessionimport_ctr.New()
 	statsCtr := stats_ctr.New()
 	releaseCtr := release_ctr.New()
+	personalTokenCtr := personal_token_ctr.New(r.PersonalTokens)
 	// 端口转发子域链接（spec 2026-09-21-port-forward-subdomain「地址与路由」）：
 	// 归属判定复用 device_svc.Default()（与 portforward_ctr.New 那一份同一个
 	// DeviceLookup 口径），分配器留给测试注入；为空时取本进程那份
@@ -409,6 +421,14 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		sessionImportCtr.Candidates,
 		sessionImportCtr.Preview,
 		sessionImportCtr.Run,
+		// 个人 token 管理（规格 2026-11-25「个人 token 与范围」）：只有人能管——浏览器会话
+		// 或 cli 设备（agrctl 登录态）；桌面、agentred 与个人 token 自己由 personal_token_svc
+		// 判 403。个人 token 本来也解析不进本组（bearer 只认设备 access token）。写方法的
+		// 会话分支照常强制 CSRF。
+		personalTokenCtr.Create,
+		personalTokenCtr.List,
+		personalTokenCtr.Rotate,
+		personalTokenCtr.Delete,
 	)
 
 	// 设备 access token
@@ -437,7 +457,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		middleware.CredentialsIntrospectPerAccountLimit(r.Cfg.RateLimit.CredentialsIntrospectPerAccountPerMin),
 	).Bind(credentialsCtr.Introspect)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受设备
-	// access token；client 同时接受原生端设备 access token 与浏览器短效 relay ticket。
+	// access token；client 接受原生端设备 access token、个人 token 与浏览器短效 relay ticket。
 	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
 	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(relayBearer, relayTickets))

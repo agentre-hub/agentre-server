@@ -52,11 +52,13 @@ type introspectEnvelope struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		AccountID       string `json:"account_id"`
-		DeviceID        int64  `json:"device_id"`
-		Kind            string `json:"kind"`
-		PeerFingerprint string `json:"peer_fingerprint"`
-		ExpiresIn       int64  `json:"expires_in"`
+		AccountID       string   `json:"account_id"`
+		DeviceID        int64    `json:"device_id"`
+		Kind            string   `json:"kind"`
+		PeerFingerprint string   `json:"peer_fingerprint"`
+		ExpiresIn       int64    `json:"expires_in"`
+		Scopes          []string `json:"scopes"`
+		TokenName       string   `json:"token_name"`
 	} `json:"data"`
 }
 
@@ -131,6 +133,46 @@ func TestIntrospect_DeviceToken_SameAccount_ReturnsIdentity(t *testing.T) {
 	assert.Equal(t, "agentred", envelope.Data.Kind)
 	assert.Equal(t, "peer-pfp", envelope.Data.PeerFingerprint)
 	assert.InDelta(t, 3600, envelope.Data.ExpiresIn, 5)
+}
+
+// 个人 token 核验出 personal_token 形态、它被授予的范围、名字与它自己的对端指纹（不是
+// 创建它的那台设备的）：agentred 据此在 relay RPC 上按范围裁决（规格 2026-11-25 决策 16）。
+func TestIntrospect_PersonalToken_ReturnsKindScopesAndName(t *testing.T) {
+	server := newIntrospectServer(t, 100)
+	caller := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 1, Kind: "agentred", PeerFingerprint: "caller-pfp", Handle: "1"})
+	target := bearertest.Issue(device_svc.Principal{
+		AccountID: 7, Kind: device_svc.KindPersonalToken, PeerFingerprint: "pat:own",
+		ExpiresAt: time.Now().Add(time.Hour).UnixMilli(), Handle: "pat:11",
+		Scopes: []string{"read", "chat"}, TokenName: "ci",
+	})
+
+	resp := introspect(t, server, caller, target)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	envelope := decodeIntrospect(t, resp)
+	assert.Equal(t, "7", envelope.Data.AccountID)
+	assert.Zero(t, envelope.Data.DeviceID)
+	assert.Equal(t, device_svc.KindPersonalToken, envelope.Data.Kind)
+	assert.Equal(t, "pat:own", envelope.Data.PeerFingerprint)
+	assert.Equal(t, []string{"read", "chat"}, envelope.Data.Scopes)
+	assert.Equal(t, "ci", envelope.Data.TokenName)
+	assert.InDelta(t, 3600, envelope.Data.ExpiresIn, 5)
+}
+
+// 永不过期的个人 token 答 expires_in=0（「没说剩多久」）：接收方按自己的缓存时长（agentred
+// 60 秒）复查，吊销因此仍在 60 秒内落到 relay 上。
+func TestIntrospect_NeverExpiringPersonalToken_ReportsZeroExpiresIn(t *testing.T) {
+	server := newIntrospectServer(t, 100)
+	caller := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 1, Kind: "agentred", Handle: "1"})
+	target := bearertest.Issue(device_svc.Principal{
+		AccountID: 7, Kind: device_svc.KindPersonalToken, PeerFingerprint: "pat:own", Handle: "pat:12",
+		Scopes: []string{"read"}, TokenName: "forever",
+	})
+
+	resp := introspect(t, server, caller, target)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	envelope := decodeIntrospect(t, resp)
+	assert.Equal(t, device_svc.KindPersonalToken, envelope.Data.Kind)
+	assert.Zero(t, envelope.Data.ExpiresIn)
 }
 
 // 剩余不足一秒的有效令牌答 expires_in=1 而不是 0：接收方把 0 读作「没说剩多久」，会按

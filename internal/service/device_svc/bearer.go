@@ -29,7 +29,16 @@ type Principal struct {
 	// Handle 是这枚凭据在 server 上的非机密标识：可以记日志、可以交给长连接复查，从它
 	// 推不回凭据本身。设备 access token 取 device_tokens.id。
 	Handle string
+	// Scopes 是这枚凭据被授予的范围，只有个人 token 有（personal_token_entity.Scope*）。
+	// 其余凭据为空：它们的能力由 Kind 决定，不按范围裁。
+	Scopes []string
+	// TokenName 是个人 token 在账号里的名字；其余凭据为空。
+	TokenName string
 }
+
+// KindPersonalToken 是个人 token 解析出的 Principal.Kind。它不属于任何设备（DeviceID 为 0）：
+// 能做什么由 Scopes 决定，对端身份是 token 自己的 PeerFingerprint。
+const KindPersonalToken = "personal_token"
 
 // ErrBearerInvalid 表示凭据未知、已过期或所属设备已撤销。三种情形刻意不区分：
 // 对调用方都是「这枚凭据不能用」，区分它们等于告诉持有者这串东西曾经有效。

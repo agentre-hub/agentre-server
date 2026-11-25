@@ -3,6 +3,7 @@ package connguard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/cago-frame/cago/pkg/i18n"
@@ -14,6 +15,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/personal_token_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
@@ -107,4 +109,38 @@ func TestWatch_DeviceCredentialFollowsTheDevice(t *testing.T) {
 
 	device_svc.SetDefault(ownedDevices{err: errors.New("database unavailable")})
 	assert.False(t, watch(ctx, 7, 42, "11")(ctx), "判不出来不断开")
+}
+
+// personalTokens 只回答个人 token 连接的撤销判定，并记下被问到的账号与句柄。
+type personalTokens struct {
+	personal_token_svc.PersonalTokenSvc
+	revoked bool
+	asked   *[]string
+}
+
+func (p personalTokens) WatchRelayCredential(_ context.Context, accountID int64, handle string) func(context.Context) bool {
+	*p.asked = append(*p.asked, fmt.Sprintf("%d/%s", accountID, handle))
+	return func(context.Context) bool { return p.revoked }
+}
+
+// 个人 token 背后的连接跟着那枚 token 走：句柄是 pat:<id>，复查交给个人 token 服务
+// （吊销、轮换、到期都断开），而不是去 Redis 里找一张根本不存在的票据——那会把每条
+// 个人 token 连接在第一次心跳就当成已撤销。
+func TestWatch_PersonalTokenCredentialFollowsTheToken(t *testing.T) {
+	auth_svc.SetDefault(nil)
+	t.Cleanup(func() { personal_token_svc.SetDefault(personal_token_svc.New()) })
+	ctx := context.Background()
+	var asked []string
+
+	personal_token_svc.SetDefault(personalTokens{asked: &asked})
+	w := watch(ctx, 7, 0, "pat:11")
+	require.NotNil(t, w)
+	assert.False(t, w(ctx), "token 仍有效")
+	assert.Equal(t, []string{"7/pat:11"}, asked)
+
+	personal_token_svc.SetDefault(personalTokens{revoked: true, asked: &asked})
+	assert.True(t, watch(ctx, 7, 0, "pat:11")(ctx), "token 已吊销、轮换或到期")
+
+	personal_token_svc.SetDefault(nil)
+	assert.Nil(t, watch(ctx, 7, 0, "pat:11"), "personal_token_svc 未装配")
 }

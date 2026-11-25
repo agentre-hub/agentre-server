@@ -38,17 +38,19 @@ type RelayTicketClaimer interface {
 	ClaimRelayConnect(ctx context.Context, handle string) (bool, error)
 }
 
-// RelayClientJWT accepts native clients' device access tokens and the browser's
-// short-lived relay_client ticket. The latter is deliberately rejected by DeviceJWT.
+// RelayClientJWT accepts native clients' device access tokens, personal tokens and the
+// browser's short-lived relay_client ticket. The latter two are deliberately rejected by
+// DeviceJWT.
 //
 // tokens 在生产上是 auth_svc.CredentialResolver：设备 access token 与 DeviceJWT 走同一条
-// 摘要解析、判据逐条相同；不属于任何设备的身份只有浏览器票据进得来，server 自用凭据
-// （server_mirror）进不来。
+// 摘要解析、判据逐条相同；不属于任何设备的身份只有个人 token 与浏览器票据进得来，server
+// 自用凭据（server_mirror）进不来。个人 token 的范围不在这里判：relay 上的 RPC 内容 server
+// 看不到，范围由 agentred 经凭据自省拿到后自己判（规格 2026-11-25 决策 16）。
 func RelayClientJWT(tokens BearerResolver, tickets RelayTicketClaimer) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, _ := bearerToken(c)
 		p, status, businessCode, ok := resolvePrincipal(c, tokens, token)
-		if ok && p.DeviceID == 0 && !admitRelayTicket(c, tickets, p) {
+		if ok && p.DeviceID == 0 && !admitDeviceless(c, tickets, p) {
 			ok, status, businessCode = false, http.StatusUnauthorized, code.Unauthorized
 		}
 		if !ok {
@@ -63,8 +65,18 @@ func RelayClientJWT(tokens BearerResolver, tickets RelayTicketClaimer) gin.Handl
 	}
 }
 
-// admitRelayTicket 判一枚不属于任何设备的身份能不能连中继：必须是浏览器票据，且这是它
-// 第一次连。
+// admitDeviceless 判一枚不属于任何设备的身份能不能连中继：个人 token 可以（它和设备
+// access token 一样是长期凭据，本来就要反复连；已建好的连接由 connguard 按 token 复查），
+// 其余只剩浏览器票据。
+func admitDeviceless(c *gin.Context, tickets RelayTicketClaimer, p *device_svc.Principal) bool {
+	if p.Kind == device_svc.KindPersonalToken {
+		return true
+	}
+	return admitRelayTicket(c, tickets, p)
+}
+
+// admitRelayTicket 判一枚不属于任何设备的身份能不能作为浏览器票据连中继：必须是浏览器票据，
+// 且这是它第一次连。
 //
 // 一张票只换一条连接（票经子协议传输，可能落进反代日志；日志里那份因此是废票）。认领判不
 // 出来（Redis 不可用）同样拒绝（fail-closed）。原生端的设备 access token 不在此列：它是长期

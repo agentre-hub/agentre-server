@@ -49,6 +49,8 @@ func (h *Credentials) Introspect(c *gin.Context, req *api.IntrospectRequest) (*a
 			Kind:            p.Kind,
 			PeerFingerprint: p.PeerFingerprint,
 			ExpiresIn:       remainingSeconds(p.ExpiresAt),
+			Scopes:          p.Scopes,
+			TokenName:       p.TokenName,
 		}, nil
 	case err == nil, errors.Is(err, device_svc.ErrBearerInvalid):
 		// err == nil 落到这一支时，是核验出了身份但账号与调用方不同（跨账号）。
