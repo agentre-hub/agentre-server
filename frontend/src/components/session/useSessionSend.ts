@@ -1,4 +1,4 @@
-import { rpcMethods } from "@agentre-hub/agentre-wire";
+import { ErrCodeSessionRunning, rpcMethods } from "@agentre-hub/agentre-wire";
 import type { SessionSummary } from "@agentre-hub/agentre-wire";
 import {
   useCallback,
@@ -38,7 +38,11 @@ import {
 } from "@/lib/outbox";
 import { randomId } from "@/lib/randomId";
 import { encodeUserBlocks } from "@/lib/userBlocks";
-import type { RelayClient, UploadProgress } from "@/lib/relayClient";
+import {
+  RelayError,
+  type RelayClient,
+  type UploadProgress,
+} from "@/lib/relayClient";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 
 import { classifySendFailure, type SessionViewStatus } from "@/lib/sessionView";
@@ -788,7 +792,14 @@ export function useSessionSend({
       } =
         err instanceof ImagesCannotSteer
           ? { kind: "imageWhileRunning" }
-          : classifySendFailure(err);
+          : /*
+              agentred 明说「会话运行中」（-32016）：这条会话上已经有一轮在跑，回落的插话也没
+              被收下（`sendRouted` 抛的是第一条的原话）。一次请求都没落地，重发是干净的 —— 要
+              等那一轮跑完。认专属码，不按 message 文本判。
+            */
+            err instanceof RelayError && err.code === ErrCodeSessionRunning
+            ? { kind: "sessionRunning" }
+            : classifySendFailure(err);
       const failed: FailedSend | undefined =
         failure.kind === "executionUnavailable"
           ? undefined

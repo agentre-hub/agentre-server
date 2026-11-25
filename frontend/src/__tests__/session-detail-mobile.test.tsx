@@ -934,7 +934,6 @@ describe("移动端会话详情：轮末插话放回", () => {
         return { toolPermissions: [], askUserQuestions: [] };
       if (method === rpcMethods.runtimeSteer)
         return { queuedId: "q-1", cancellable: true };
-      if (method === rpcMethods.runtimeDrainPending) return { steers: [] };
       if (method === rpcMethods.runtimeSubmitToolPermission) return {};
       if (method === rpcMethods.runtimeAbort) return {};
       throw new Error("unexpected: " + method);
@@ -1039,15 +1038,14 @@ describe("移动端会话详情：轮末插话放回", () => {
       await screen.findByTestId("tool-permission-dock");
     });
 
-    // 执行端的信箱问完了、没送到的那几条已经落进 dropped，输入框还被停靠占着。
-    await waitFor(() =>
-      expect(
-        fakeClient.request.mock.calls.some(
-          (c) => c[0] === rpcMethods.runtimeDrainPending,
-        ),
-      ).toBe(true),
-    );
+    // 没送到的那几条已经落进 dropped，输入框还被停靠占着。
     await act(async () => {});
+    // 浏览器不再问执行端取回插话（agentred 自己补发）：没被补发的就是已经落进 dropped 的。
+    expect(
+      fakeClient.request.mock.calls.some(
+        (c) => c[0] === rpcMethods.runtimeDrainPending,
+      ),
+    ).toBe(false);
     // 停靠占着输入框：没有输入框可放，说明不能谎称「已放回」。
     expect(screen.queryByText(NOTICE)).toBeNull();
     act(() =>
@@ -1130,14 +1128,13 @@ describe("移动端会话详情：轮末插话放回", () => {
       );
       await screen.findByTestId("tool-permission-dock");
     });
-    await waitFor(() =>
-      expect(
-        fakeClient.request.mock.calls.some(
-          (c) => c[0] === rpcMethods.runtimeDrainPending,
-        ),
-      ).toBe(true),
-    );
     await act(async () => {});
+    // 浏览器不再问执行端取回插话（agentred 自己补发）：没被补发的就是已经落进 dropped 的。
+    expect(
+      fakeClient.request.mock.calls.some(
+        (c) => c[0] === rpcMethods.runtimeDrainPending,
+      ),
+    ).toBe(false);
 
     const other = "22222222-2222-7222-8222-222222222222";
     view.rerender(
