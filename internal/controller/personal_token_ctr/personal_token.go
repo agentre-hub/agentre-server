@@ -40,9 +40,7 @@ func caller(c *gin.Context) (personal_token_svc.Caller, error) {
 	if err != nil {
 		return personal_token_svc.Caller{}, err
 	}
-	return personal_token_svc.Caller{
-		AccountID: userID, DeviceID: ginctx.DeviceID(c), Kind: ginctx.DeviceKind(c), Handle: ginctx.CredentialHandle(c),
-	}, nil
+	return personal_token_svc.Caller{AccountID: userID, DeviceID: ginctx.DeviceID(c), Kind: ginctx.DeviceKind(c)}, nil
 }
 
 func (h *PersonalToken) Create(c *gin.Context, req *api.CreateRequest) (*api.IssueResponse, error) {
@@ -81,6 +79,8 @@ func (h *PersonalToken) Self(c *gin.Context, _ *api.SelfRequest) (*api.SelfRespo
 	if err != nil {
 		return nil, err
 	}
+	// 只有「查自己」要认出是哪一枚凭据；管理接口不需要句柄。
+	who.Handle = ginctx.CredentialHandle(c)
 	view, err := h.selfService().Self(c.Request.Context(), who)
 	if err != nil {
 		return nil, err
