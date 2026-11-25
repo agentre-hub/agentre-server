@@ -13,6 +13,8 @@
   "planFailed": "Could not check for an execution target.",
   "planFailedWhat": "Could not check for an execution target",
   "startFailedWhat": "{{machine}} couldn't start the agent",
+  "startMaybeStarted": "No reply came back. This conversation may have already started. Check the list before sending again.",
+  "startMaybeStartedAction": "Check the list",
   "cancel": "Cancel",
   "back": "Back",
   "searchSessions": "Search conversations",

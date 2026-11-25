@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 
 import {
   AgentAvatar,
+  DecisionCardEnvProvider,
   MESSAGE_AVATAR_CLASS,
   createTranscriptProjector,
   indicatorHostMessageId,
@@ -2637,6 +2638,16 @@ export default function SessionDetailView({
     </div>
   );
 
+  // 手机：提问卡用触屏档，连接没就绪时提交禁用并说明（审批停靠条的同一件事由输入带
+  // 直接传 connecting）。桌面不套，卡片原样。
+  const decisionEnv = isMobile ? (
+    <DecisionCardEnvProvider touch connecting={status !== "connected"}>
+      {bands}
+    </DecisionCardEnvProvider>
+  ) : (
+    bands
+  );
+
   // 路由页形态：壳交出整块主区（flush），三带自己铺满它。
   if (isPage) {
     return (
@@ -2646,11 +2657,11 @@ export default function SessionDetailView({
         immersive={immersive}
         ownStrip={immersive}
       >
-        {bands}
+        {decisionEnv}
       </AppShell>
     );
   }
 
   // 嵌入形态（桌面 Chat 右栏）：无壳，垂直填满外层容器。
-  return bands;
+  return decisionEnv;
 }

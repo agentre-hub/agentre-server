@@ -19,10 +19,20 @@
  * 决策 8（提交失败走 toast，不在版面里长红字）也因此留在宿主那一侧：注入的端口
  * 吞掉异常、不再抛给卡片，否则同一次失败会被说两遍，其中一遍正是要去掉的那行。
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { rpcMethods } from "@agentre-hub/agentre-wire";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import "@/i18n";
+import i18n from "@/i18n";
+import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
+import { RelayError } from "@/lib/relayClient";
 import DecisionPanel from "@/components/session/DecisionPanel";
 import { edgeClasses } from "./helpers/edge-classes";
 import { waiterBlocks } from "@/lib/waiterBlocks";
@@ -237,5 +247,110 @@ describe("DecisionPanel：手机上不画 ↵ / Esc 键帽", () => {
     expect([...card.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(
       ["↵", "Esc"],
     );
+  });
+});
+
+/**
+ * 审批提交失败的回执（规格 F1、W20）：超时说「没收到确认，可能已经生效」而不是「什么都
+ * 没发出」（请求可能已经送达，说没发出会诱导用户重发），同一条审批的提示不叠加。
+ */
+describe("面板审批提交失败：toast 文案与不叠加", () => {
+  function setup(submit: () => Promise<unknown>) {
+    const request = vi.fn(async (method: unknown) => {
+      if (method === rpcMethods.sessionPendingWaiters)
+        return {
+          toolPermissions: [
+            { RequestID: "tp-1", ToolName: "Bash" },
+            { RequestID: "tp-2", ToolName: "Bash" },
+          ],
+          askUserQuestions: [],
+        };
+      return submit();
+    });
+    const clientRef = { current: { request } as never };
+    const originRef = { current: undefined };
+    return renderHook(() =>
+      useSessionDecisionPorts({ sid: "s-1", clientRef, originRef }),
+    );
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("Given 提交超时, When 失败, Then toast 说没收到确认、可能已经生效，不说什么都没发出", async () => {
+    await i18n.changeLanguage("zh-CN");
+    const errored = vi.spyOn(toast, "error");
+    const { result } = setup(async () => {
+      throw new RelayError(-1, "relay: 请求超时", null);
+    });
+    await result.current.panelPorts.answerToolPermission({
+      sessionId: 7,
+      requestId: "tp-1",
+      allow: true,
+    });
+    expect(errored).toHaveBeenCalledTimes(1);
+    expect(errored.mock.calls[0][0]).toBe("没收到确认，可能已经生效");
+    expect(errored.mock.calls[0][0]).not.toContain("什么都没发出");
+    await i18n.changeLanguage("en");
+  });
+
+  it("Given 同一条审批连失败两次, When 弹 toast, Then 两次用同一个 id（后一条顶替前一条）；另一条审批用另一个 id", async () => {
+    const errored = vi.spyOn(toast, "error");
+    const { result } = setup(async () => {
+      throw new Error("relay: 连接未就绪");
+    });
+    const { answerToolPermission } = result.current.panelPorts;
+    await answerToolPermission({
+      sessionId: 7,
+      requestId: "tp-1",
+      allow: true,
+    });
+    await answerToolPermission({
+      sessionId: 7,
+      requestId: "tp-1",
+      allow: false,
+    });
+    await answerToolPermission({
+      sessionId: 7,
+      requestId: "tp-2",
+      allow: true,
+    });
+    const ids = errored.mock.calls.map(
+      (c) => (c[1] as { id?: unknown } | undefined)?.id,
+    );
+    expect(ids[0]).toBeTruthy();
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).toBeTruthy();
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it("Given 不是超时的失败, When 失败, Then 仍是「没能提交出去」那句", async () => {
+    const errored = vi.spyOn(toast, "error");
+    const { result } = setup(async () => {
+      throw new Error("relay: 连接未就绪");
+    });
+    await result.current.panelPorts.answerToolPermission({
+      sessionId: 7,
+      requestId: "tp-1",
+      allow: true,
+    });
+    expect(errored.mock.calls[0][0]).toBe(
+      i18n.t("session.decision.submitFailed"),
+    );
+  });
+
+  it("Given 转录里的卡提交超时, When 失败, Then 抛出的错误带超时名，共享包据此写「没收到确认」", async () => {
+    const { result } = setup(async () => {
+      throw new RelayError(-1, "relay: 请求超时", null);
+    });
+    const err = await result.current.transcriptPorts
+      .answerToolPermission({
+        sessionId: 7,
+        requestId: "tp-1",
+        allow: true,
+        alwaysAllowSession: false,
+      })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toMatch(/timeout/i);
   });
 });

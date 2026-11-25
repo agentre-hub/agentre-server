@@ -121,6 +121,7 @@
   "decision": {
     "alreadyHandled": "该请求已被处理。",
     "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。",
+    "timedOut": "没收到确认，可能已经生效",
     "retry": "重试",
     "confirmingWaiting": "正在确认是否还在等你"
   },

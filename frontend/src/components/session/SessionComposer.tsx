@@ -52,6 +52,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useKeyboardViewport } from "@/components/use-keyboard-viewport";
 import { useDeviceMentions } from "@/hooks/use-device-mentions";
 import { useSessionSkillCommands } from "@/hooks/use-session-skill-commands";
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
@@ -214,6 +215,11 @@ export default function SessionComposer({
   onDraftChange?: (draft: Draft) => void;
 }) {
   const { t } = useTranslation();
+  // 手机键盘升起时可视区只剩一小块：输入框最高约 1/3，剩下的留给转录与发送键
+  // （规格 H4）。键盘没弹（或桌面）时不传，沿用包的默认上限。
+  const keyboard = useKeyboardViewport();
+  const maxHeight =
+    touch && keyboard ? Math.floor(keyboard.height / 3) : undefined;
   const contextDraftKey = useDraftKey();
   const draftKey = draftKeyProp ?? contextDraftKey;
   // 草稿要够得着输入框的句柄，而宿主那只是可选的：自己持有一只，再把它同步给宿主。
@@ -286,6 +292,7 @@ export default function SessionComposer({
           supportsImageInput
           sendButtonTestId="session-detail-send"
           inputMode={touch ? "touch" : undefined}
+          maxHeight={maxHeight}
           onAppendEdited={onAppendEdited}
           enterKeyHint={touch ? "enter" : undefined}
           slashCommands={slashCommands}

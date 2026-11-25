@@ -40,6 +40,7 @@ import { ApiError, api } from "@/lib/api";
 import { listCLIModelsOn } from "@/lib/cliModels";
 import {
   DispatchRunError,
+  DispatchTimeoutError,
   dispatchNewConversation,
   fetchDispatchPlan,
   type DispatchPlan,
@@ -3147,6 +3148,18 @@ describe("手机上的新对话", () => {
     expect(draftEditable().getAttribute("enterkeyhint")).toBe("enter");
   });
 
+  it("输入框还空着（胶囊）时点「模型」那一行：直接开模型选择 sheet", async () => {
+    await openPhoneDraft();
+    await screen.findByTestId("draft-phone-empty");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("draft-fact-model").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("draft-fact-model"));
+    expect(await screen.findByTestId("model-target-sheet")).toBeTruthy();
+  });
+
   it("接着最近的对话：回到列表并按这个 Agent 收窄", async () => {
     await openPhoneDraft();
     fireEvent.click(await screen.findByTestId("draft-continue-recent"));
@@ -3347,5 +3360,62 @@ describe("手机上新对话各步骤进历史", () => {
     await screen.findByTestId("draft-session");
     systemBack();
     expect(historyPath()).toBe("/prev");
+  });
+});
+
+/**
+ * 新对话派发超时（规格 F5、W11）：请求可能已经送达，那条对话也许已经在那台机器上开了。
+ * 此时说「可能已经开始了」、引导去列表看，而不是给「重试」——重试会铸一个新编号，
+ * 一条变两条。
+ */
+describe("新对话派发超时：可能已经开始了", () => {
+  it("派发等应答超时：抛 DispatchTimeoutError（带原因），而不是「连不上」", async () => {
+    const actual =
+      await vi.importActual<typeof import("@/lib/dispatch")>("@/lib/dispatch");
+    const client = {
+      request: vi
+        .fn()
+        .mockRejectedValue(new RelayError(-1, "relay: 请求超时", null)),
+      close: vi.fn(),
+    };
+    await expect(
+      actual.dispatchNewConversation({
+        plan: availablePlan,
+        message: "hi",
+        sourceClient: relayTicket,
+        client: client as never,
+      }),
+    ).rejects.toBeInstanceOf(actual.DispatchTimeoutError);
+    expect(client.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("草稿页：说「可能已经开始了」，给「去列表看看」，没有「重试」，不再派发第二次", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(
+      new DispatchTimeoutError(new RelayError(-1, "relay: 请求超时", null)),
+    );
+    renderChat();
+    await openDraft();
+    await typeInDraft("检查一下");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("may have already started");
+    expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull();
+    // 字还回输入框：不丢。
+    await waitFor(() =>
+      expect(draftEditable().textContent).toContain("检查一下"),
+    );
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Check the list" }),
+    );
+    await waitFor(() => expect(currentSearch()).toContain("agent=agent-1"));
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
   });
 });

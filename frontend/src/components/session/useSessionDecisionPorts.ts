@@ -21,7 +21,25 @@ import type {
   PendingToolPermissionShape,
 } from "@/lib/waiterBlocks";
 import type { RelayClient } from "@/lib/relayClient";
+import { isRelayRequestTimeout } from "@/lib/dispatch";
 import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
+
+/**
+ * 把中继的「等应答超时」改写成共享包认得的超时错误（名字带 Timeout）：包据此在审批卡 /
+ * 停靠条上写「没收到确认，可能已经生效」，而不是「没成功」。别的失败原样冒泡。
+ */
+async function withTimeoutName<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (isRelayRequestTimeout(error)) {
+      const timeout = new Error(error.message, { cause: error });
+      timeout.name = "RequestTimeoutError";
+      throw timeout;
+    }
+    throw error;
+  }
+}
 
 export interface SessionDecisionPortsParams {
   sid: string;
@@ -164,7 +182,7 @@ export function useSessionDecisionPorts({
     }
     try {
       await doSubmit();
-    } catch {
+    } catch (error) {
       /*
         提交没发出去（socket 刚断等）：**要出声**——按钮点下去什么都不发生会让用户
         以为批准生效了，而工具还阻塞在那台机器上。
@@ -176,12 +194,22 @@ export function useSessionDecisionPorts({
         吞掉而不是继续抛：抛上去卡片会**再**把同一件事印在自己的错误态里，
         同一次失败说两遍，其中一遍正是决策 8 要去掉的那一行。
       */
-      toast.error(t("session.decision.submitFailed"), {
-        action: {
-          label: t("session.decision.retry"),
-          onClick: () => void runPanelDecision(requestId, doSubmit),
+      // 超时是「没收到确认」，请求可能已经送达：说「什么都没发出」会诱导用户重发。
+      // id 按请求号定：同一条审批连续失败只留一条提示，后来的顶替前面的，不叠加。
+      toast.error(
+        t(
+          isRelayRequestTimeout(error)
+            ? "session.decision.timedOut"
+            : "session.decision.submitFailed",
+        ),
+        {
+          id: `decision-failed:${requestId}`,
+          action: {
+            label: t("session.decision.retry"),
+            onClick: () => void runPanelDecision(requestId, doSubmit),
+          },
         },
-      });
+      );
     } finally {
       await refreshWaiters();
     }
@@ -253,16 +281,15 @@ export function useSessionDecisionPorts({
     alwaysAllowSession?: boolean;
     denyReason?: string;
   }) {
-    const res = await clientRef.current!.request(
-      rpcMethods.runtimeSubmitToolPermission,
-      {
+    const res = await withTimeoutName(() =>
+      clientRef.current!.request(rpcMethods.runtimeSubmitToolPermission, {
         conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId: input.requestId,
         allow: input.allow,
         alwaysAllowSession: input.alwaysAllowSession,
         denyReason: input.denyReason,
-      },
+      }),
     );
     void refreshWaiters();
     return res;
@@ -273,9 +300,8 @@ export function useSessionDecisionPorts({
     answers?: { questionIndex: number; labels: string[]; otherText?: string }[];
     skipped?: boolean;
   }) {
-    const res = await clientRef.current!.request(
-      rpcMethods.runtimeSubmitAnswer,
-      {
+    const res = await withTimeoutName(() =>
+      clientRef.current!.request(rpcMethods.runtimeSubmitAnswer, {
         conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId: input.requestId,
@@ -289,7 +315,7 @@ export function useSessionDecisionPorts({
           otherText: a.otherText ?? "",
         })),
         skipped: input.skipped ?? false,
-      },
+      }),
     );
     void refreshWaiters();
     return res;

@@ -360,6 +360,10 @@ export default function SessionComposerBand({
                 sessionId={TranscriptSessionId}
                 cwd={cwd}
                 className={dockConfirming ? DOCK_CONFIRMING_ORDER : undefined}
+                // 连接没就绪：三键禁用、点下的那颗单独转圈、失败写原因 + 重试、超时说
+                // 「没收到确认」（共享包的宿主级反馈，传了就打开）。确认期间由 dockConfirming
+                // 那一行说话，不再叠一行「正在连接」。
+                connecting={!dockConfirming && status !== "connected"}
                 // 「■ 停止」与输入框提交位那颗同一份停止中状态（useTurnStop）。
                 stop={
                   <>

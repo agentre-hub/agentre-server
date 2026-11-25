@@ -43,10 +43,12 @@ import {
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
+import SessionModelControl from "@/components/session/SessionModelControl";
 import ResolvedSessionDetail from "@/components/session/ResolvedSessionDetail";
 import { FILE_PREVIEW_LAYER_STATE_KEY } from "@/components/session/useFilePreviewTabs";
 import { toTranscriptFrame } from "@/components/session/transcriptFrame";
 import { bindAccount } from "@/lib/localStore";
+import { RelayError } from "@/lib/relayClient";
 import { transcriptCache } from "@/lib/transcriptCache";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
@@ -680,6 +682,114 @@ describe("移动端会话详情：底部停靠区", () => {
     await waitFor(() =>
       expect(band.querySelector(".ProseMirror")).toBeTruthy(),
     );
+  });
+
+  it("审批：连接未就绪时三键禁用、上方写「正在连接」；连上的那条没有", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    renderPage({ relayState: "reconnecting" });
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    expect(
+      within(dock).getByTestId("tool-permission-dock-connecting"),
+    ).toBeTruthy();
+    for (const name of ["Allow", "Always Allow This Session", "Reject"]) {
+      expect(
+        (within(dock).getByRole("button", { name }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+    }
+  });
+
+  it("审批：连上之后没有「正在连接」，三键可点", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    renderPage({ relayState: "connected" });
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    expect(
+      within(dock).queryByTestId("tool-permission-dock-connecting"),
+    ).toBeNull();
+    expect(
+      (within(dock).getByRole("button", { name: "Allow" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("审批：提交超时写「没收到确认，可能已经生效」并给重试，重试再发一次", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    const base = fakeClient.request.getMockImplementation()!;
+    let submits = 0;
+    fakeClient.request.mockImplementation(async (method: unknown, ...rest) => {
+      if (method === rpcMethods.runtimeSubmitToolPermission) {
+        submits += 1;
+        if (submits === 1) throw new RelayError(-1, "relay: 请求超时", null);
+        return {};
+      }
+      return (base as (...a: unknown[]) => unknown)(method, ...rest);
+    });
+    renderPage();
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    fireEvent.click(within(dock).getByRole("button", { name: "Allow" }));
+    expect(
+      await within(dock).findByText(
+        "No confirmation received. It may already have taken effect",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(within(dock).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(submits).toBe(2));
+  });
+
+  it("提问卡用触屏档：标题「Agent is asking you」；连上时可作答，掉线后提交禁用并说明", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    const view = renderPage({ relayState: "connected" });
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([
+      { kind: "user_message", text: "选个库" },
+      {
+        kind: "ask_user_question",
+        requestId: "aq-1",
+        questions: [
+          {
+            id: "q1",
+            question: "Which database?",
+            header: "Storage",
+            multiSelect: false,
+            options: [{ label: "Postgres" }, { label: "Redis" }],
+          },
+        ],
+      },
+    ]);
+    expect(await screen.findByText("Which database?")).toBeTruthy();
+    expect(await screen.findByText("Agent is asking you")).toBeTruthy();
+    expect(screen.queryByTestId("user-ask-connecting")).toBeNull();
+
+    // 连接掉了：同一张卡，提交 / 跳过禁用，卡上说明。
+    const impl = mockUseRelay.getMockImplementation()!;
+    mockUseRelay.mockImplementation(
+      (fp, o) => ({ ...impl(fp, o), relayState: "reconnecting" }) as never,
+    );
+    view.rerender(
+      <MemoryRouter initialEntries={[`/chat/${CID}`]}>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId={CID} form="page" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("user-ask-connecting")).toBeTruthy();
   });
 
   it("机器离线：只读带写「{机器} 回来后可以继续发消息 · 查看设备」，转录顶部没有离线横幅", async () => {
@@ -2077,5 +2187,159 @@ describe("移动端会话详情：本地先画（A1、A5、d9）", () => {
     );
     expect(await screen.findByText("桌面上的缓存")).toBeTruthy();
     expect(screen.queryByText("Syncing")).toBeNull();
+  });
+});
+
+/**
+ * 手机上的输入框与模型选择（规格 H2、H4）：模型选择是底部 sheet、打开不聚焦搜索框、
+ * 系统返回先关它；工具条上模型以短名代替人形图标；键盘升起时输入框最高约可视高度的 1/3。
+ * 桌面一律不变。
+ */
+describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
+  const catalog = [
+    {
+      providerKey: "k-anthropic",
+      id: 1,
+      name: "Anthropic",
+      type: "anthropic",
+      enabled: true,
+      defaultModel: {
+        modelKey: "mk-1",
+        modelId: "claude-sonnet-4-6",
+        enabled: true,
+      },
+      models: [
+        { modelKey: "mk-1", modelId: "claude-sonnet-4-6", enabled: true },
+      ],
+    },
+  ];
+
+  function Probe() {
+    const location = useLocation();
+    const navigate = useNavigate();
+    return (
+      <div>
+        <span data-testid="probe-path">{location.pathname}</span>
+        <button onClick={() => navigate(-1)}>system-back</button>
+      </div>
+    );
+  }
+
+  function renderControl(target = { providerKey: "", modelKey: "" }) {
+    return render(
+      <MemoryRouter initialEntries={["/prev", "/chat/x"]} initialIndex={1}>
+        <ThemeProvider>
+          <Probe />
+          <SessionModelControl
+            backendType="claudecode"
+            catalog={catalog}
+            boundProviderKey="k-anthropic"
+            boundModelKey="mk-1"
+            target={target}
+            onChange={() => {}}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("手机：点模型 pill 开底部 sheet，搜索框不聚焦", async () => {
+    mockMobileViewport();
+    renderControl();
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    const sheet = await screen.findByTestId("model-target-sheet");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(document.activeElement).not.toBe(
+      within(sheet).getByPlaceholderText("Search providers or models…"),
+    );
+  });
+
+  it("手机：系统返回先关 sheet，停在原页", async () => {
+    mockMobileViewport();
+    renderControl();
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    await screen.findByTestId("model-target-sheet");
+    fireEvent.click(screen.getByText("system-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("model-target-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("probe-path").textContent).toBe("/chat/x");
+  });
+
+  it("桌面：仍是浮层，不是 sheet", async () => {
+    renderControl();
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    await screen.findByTestId("model-target-popover");
+    expect(screen.queryByTestId("model-target-sheet")).toBeNull();
+  });
+
+  it("手机：钉了模型时 pill 脸上是模型短名；桌面不画短名", () => {
+    mockMobileViewport();
+    const { unmount } = renderControl({
+      providerKey: "k-anthropic",
+      modelKey: "mk-1",
+    });
+    expect(screen.getByTestId("provider-pill-short-name").textContent).toBe(
+      "Sonnet",
+    );
+    unmount();
+    window.matchMedia = originalMatchMedia;
+    renderControl({ providerKey: "k-anthropic", modelKey: "mk-1" });
+    expect(screen.queryByTestId("provider-pill-short-name")).toBeNull();
+  });
+
+  describe("键盘升起时限高", () => {
+    const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    function setKeyboard(height: number | null) {
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value:
+          height === null
+            ? undefined
+            : {
+                height,
+                offsetTop: 0,
+                scale: 1,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+              },
+      });
+    }
+    afterEach(() => {
+      if (original) Object.defineProperty(window, "visualViewport", original);
+      else Reflect.deleteProperty(window, "visualViewport");
+    });
+
+    async function composerStyle() {
+      mockMobileViewport();
+      stubApi();
+      fakeClient.request.mockImplementation(async (method: unknown) => {
+        if (method === rpcMethods.sessionList) return { sessions: [summary] };
+        if (method === rpcMethods.sessionPendingWaiters)
+          return { toolPermissions: [], askUserQuestions: [] };
+        throw new Error("unexpected: " + method);
+      });
+      renderPage();
+      const band = await screen.findByTestId("session-composer-band");
+      await waitFor(() =>
+        expect(band.querySelector(".ProseMirror")).toBeTruthy(),
+      );
+      return band.querySelector<HTMLElement>(
+        '[style*="--chat-composer-max-h"]',
+      );
+    }
+
+    it("键盘弹着（可视区 300px）：输入框最高 100px", async () => {
+      setKeyboard(300);
+      const el = await composerStyle();
+      expect(el?.getAttribute("style")).toContain(
+        "--chat-composer-max-h: 100px",
+      );
+    });
+
+    it("键盘没弹：不限高，沿用包的默认", async () => {
+      setKeyboard(null);
+      expect(await composerStyle()).toBeNull();
+    });
   });
 });

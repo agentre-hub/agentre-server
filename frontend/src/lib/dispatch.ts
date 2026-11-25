@@ -226,6 +226,31 @@ export class DispatchConnectionError extends Error {
   }
 }
 
+/**
+ * 等 runtime.run 的应答超时：请求可能已经送达，那条对话也许已经在那台机器上开起来了。
+ * 与「连不上」分开成一类——界面据此说「可能已经开始了」并引导去列表看，而不是给「重试」
+ * （重试会铸一个新编号，一条变两条）。
+ */
+export class DispatchTimeoutError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "DispatchTimeoutError";
+  }
+}
+
+/**
+ * 这是中继客户端的「等应答超时」（码 -1、帧已交出去、文案是客户端自己写的那句）。
+ * 码 -1 还被未就绪 / 断开共用，只有这一种既「可能已送达」又有人在等它的回执。
+ */
+export function isRelayRequestTimeout(error: unknown): error is RelayError {
+  return (
+    error instanceof RelayError &&
+    error.code === -1 &&
+    !error.notSent &&
+    /请求超时/.test(error.message)
+  );
+}
+
 export class DispatchRunError extends Error {
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
@@ -326,6 +351,9 @@ export async function dispatchNewConversation(
           agentId: BigInt(runParams.agentId),
         } as never);
       } catch (error: unknown) {
+        if (isRelayRequestTimeout(error)) {
+          throw new DispatchTimeoutError(error);
+        }
         if (error instanceof RelayError && error.code === -1) {
           throw new DispatchConnectionError(error);
         }

@@ -121,6 +121,7 @@
   "decision": {
     "alreadyHandled": "This request has already been handled.",
     "submitFailed": "That decision could not be submitted. Nothing was sent — try again.",
+    "timedOut": "No confirmation received. It may already have taken effect.",
     "retry": "Retry",
     "confirmingWaiting": "Checking whether it's still waiting for you"
   },

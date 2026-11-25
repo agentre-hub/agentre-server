@@ -13,6 +13,8 @@
   "planFailed": "这次没问到执行目标。",
   "planFailedWhat": "这次没问到执行目标",
   "startFailedWhat": "{{machine}} 没能启动这个 Agent",
+  "startMaybeStarted": "网络超时，这条对话可能已经开始了。先去列表看看，再决定要不要重发。",
+  "startMaybeStartedAction": "去列表看看",
   "cancel": "取消",
   "back": "返回",
   "searchSessions": "搜索对话",
