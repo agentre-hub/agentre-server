@@ -45,6 +45,7 @@ import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import ResolvedSessionDetail from "@/components/session/ResolvedSessionDetail";
+import { backDismissLayerOf } from "@/hooks/use-back-dismiss";
 import { FILE_PREVIEW_LAYER_STATE_KEY } from "@/components/session/useFilePreviewTabs";
 import { toTranscriptFrame } from "@/components/session/transcriptFrame";
 import { bindAccount } from "@/lib/localStore";
@@ -2220,10 +2221,20 @@ describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
     return (
       <div>
         <span data-testid="probe-path">{location.pathname}</span>
+        <span data-testid="probe-layer">
+          {backDismissLayerOf(location.state)}
+        </span>
         <button onClick={() => navigate(-1)}>system-back</button>
       </div>
     );
   }
+
+  // sheet 画出来比历史记号落地早一拍；系统返回要等记号落地才退得掉它，
+  // 否则这一下返回会直接离开页面。等的是记号，不是时间。
+  const markerLanded = () =>
+    waitFor(() =>
+      expect(screen.getByTestId("probe-layer").textContent).toBe("1"),
+    );
 
   function renderControl(
     target = { providerKey: "", modelKey: "" },
@@ -2263,6 +2274,7 @@ describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
     renderControl();
     fireEvent.click(screen.getByTestId("composer-model-target"));
     await screen.findByTestId("model-target-sheet");
+    await markerLanded();
     fireEvent.click(screen.getByText("system-back"));
     await waitFor(() =>
       expect(screen.queryByTestId("model-target-sheet")).toBeNull(),
@@ -2283,6 +2295,7 @@ describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
       within(sheet).getByPlaceholderText("Search providers or models…"),
       { target: { value: "son" } },
     );
+    await markerLanded();
     fireEvent.click(screen.getByText("system-back"));
     await waitFor(() =>
       expect(screen.queryByTestId("model-target-sheet")).toBeNull(),
