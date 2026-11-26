@@ -129,6 +129,20 @@ func (mr *MockDeviceRepoMockRecorder) Touch(ctx, id, nowMs any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Touch", reflect.TypeOf((*MockDeviceRepo)(nil).Touch), ctx, id, nowMs)
 }
 
+// TouchLastSeen mocks base method.
+func (m *MockDeviceRepo) TouchLastSeen(ctx context.Context, id, nowMs int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TouchLastSeen", ctx, id, nowMs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TouchLastSeen indicates an expected call of TouchLastSeen.
+func (mr *MockDeviceRepoMockRecorder) TouchLastSeen(ctx, id, nowMs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TouchLastSeen", reflect.TypeOf((*MockDeviceRepo)(nil).TouchLastSeen), ctx, id, nowMs)
+}
+
 // UpdateDisplayName mocks base method.
 func (m *MockDeviceRepo) UpdateDisplayName(ctx context.Context, id int64, displayName string, nowMs int64) error {
 	m.ctrl.T.Helper()

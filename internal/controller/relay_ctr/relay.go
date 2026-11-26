@@ -129,6 +129,7 @@ func (r *Relay) Daemon(c *gin.Context) {
 	// 记在登记之后而不是 upgrade 之后:在此之前这条连接还不算在线,提前记一行
 	// 「已连接」会把上面两个失败分支盖过去。
 	logger.Ctx(ctx).Info("relay daemon connected", peer()...)
+	r.touchLastSeen(ctx, deviceID, peer)
 
 	// exit 是读循环的收场,由下面每个 return 点填上;defer 据它决定这次断开
 	// 记 Info 还是 Warn。
@@ -136,6 +137,8 @@ func (r *Relay) Daemon(c *gin.Context) {
 	defer func() {
 		logRelayDisconnect(ctx, "relay daemon disconnected",
 			"relay daemon disconnected unexpectedly", exit, peer()...)
+		// 断开那一刻的时间才是「最后在线」：正常 / 异常关闭都走这里。
+		r.touchLastSeen(ctx, deviceID, peer)
 	}()
 
 	// 登记这一步刚把在线态 TTL 写满,所以从现在开始计时。
@@ -164,6 +167,19 @@ func (r *Relay) Daemon(c *gin.Context) {
 		}
 	}
 }
+
+// touchLastSeen 刷新设备的 last_seen_at（连上与断开各一次，见 RelaySvc.TouchDaemonSeen）。
+// 失败只记 Warn：「最后在线」是展示用的尽力而为，不能因此动这条连接。ctx 脱离请求
+// 取消并设上限：断开时请求上下文可能已经取消，写库不该因此落空，也不该无限挂住 handler。
+func (r *Relay) touchLastSeen(ctx context.Context, deviceID int64, peer func(...zap.Field) []zap.Field) {
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lastSeenWriteTimeout)
+	defer cancel()
+	if err := r.svc.TouchDaemonSeen(wctx, deviceID); err != nil {
+		logger.Ctx(ctx).Warn("relay daemon last_seen refresh failed", peer(zap.Error(err))...)
+	}
+}
+
+const lastSeenWriteTimeout = 5 * time.Second
 
 // logRelayDisconnect 把一条中继连接的收场记成一行。
 //

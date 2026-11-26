@@ -74,6 +74,16 @@ type relayStub struct {
 	clientDetached    chan struct{}
 	clientAccounts    chan int64
 	clientTargets     chan string
+	// touched 收每次「刷新这台设备最后在线时间」的调用（设备 ID）；touchErr 非空时调用失败。
+	touched  chan int64
+	touchErr error
+}
+
+func (s *relayStub) TouchDaemonSeen(_ context.Context, deviceID int64) error {
+	if s.touched != nil {
+		s.touched <- deviceID
+	}
+	return s.touchErr
 }
 
 func (s *relayStub) PrepareDaemon(context.Context, int64, int64, string) (relay_svc.Route, error) {
@@ -306,6 +316,7 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 
 	controller := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(controller)
+	devices.EXPECT().TouchLastSeen(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // 中继连上 / 断开会刷新最后在线
 	desktop := &device_entity.Device{
 		ID: 10, UserID: 7, Kind: device_entity.KindDesktop, Fingerprint: "fp-desktop", Status: 1,
 	}
@@ -544,7 +555,9 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 
 	controllers := gomock.NewController(t)
 	daemonDevices := mock_device_repo.NewMockDeviceRepo(controllers)
+	daemonDevices.EXPECT().TouchLastSeen(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // 中继连上 / 断开会刷新最后在线
 	clientDevices := mock_device_repo.NewMockDeviceRepo(controllers)
+	clientDevices.EXPECT().TouchLastSeen(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // 中继连上 / 断开会刷新最后在线
 	daemon := activeRelayDaemon()
 	daemonDevices.EXPECT().Find(gomock.Any(), int64(9)).Return(daemon, nil)
 	clientDevices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), daemon.Fingerprint).Return(daemon, nil).Times(2)
@@ -659,6 +672,7 @@ func TestRelayDaemonClosesWhenDeviceRevokedOnAnotherInstance(t *testing.T) {
 	var revoked atomic.Bool
 	controller := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(controller)
+	devices.EXPECT().TouchLastSeen(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // 中继连上 / 断开会刷新最后在线
 	tokens := mock_device_token_repo.NewMockDeviceTokenRepo(controller)
 	devices.EXPECT().Find(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, id int64) (*device_entity.Device, error) {

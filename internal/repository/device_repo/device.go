@@ -19,6 +19,10 @@ type DeviceRepo interface {
 	FindByFingerprint(ctx context.Context, userID int64, fingerprint string) (*device_entity.Device, error)
 	Upsert(ctx context.Context, d *device_entity.Device) error
 	Touch(ctx context.Context, id, nowMs int64) error
+	// TouchLastSeen 把 last_seen_at 推进到 nowMs，只进不退（WHERE last_seen_at < nowMs）：
+	// 多副本各自在连接连上 / 断开时写，迟到的旧时间戳不会把较新的值写回去。命中 0 行
+	// （护栏挡下、或设备已不存在）不是错误。
+	TouchLastSeen(ctx context.Context, id, nowMs int64) error
 	// UpdateVersion 按新值刷新这台设备的 version。调用方（mirror_svc，镜像握手成功后）
 	// 自己先比过当前值才决定要不要调它——这条方法本身不做条件判断，直接写。
 	UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error
@@ -86,6 +90,11 @@ func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
 
 func (r *repo) Touch(ctx context.Context, id, nowMs int64) error {
 	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=?", id).
+		Updates(map[string]interface{}{"last_seen_at": nowMs, "updatetime": nowMs}).Error
+}
+
+func (r *repo) TouchLastSeen(ctx context.Context, id, nowMs int64) error {
+	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=? AND last_seen_at < ?", id, nowMs).
 		Updates(map[string]interface{}{"last_seen_at": nowMs, "updatetime": nowMs}).Error
 }
 

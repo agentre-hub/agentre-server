@@ -52,6 +52,7 @@ func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanS
 
 	controller := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(controller)
+	devices.EXPECT().TouchLastSeen(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // 中继连上 / 断开会刷新最后在线
 	saves := mock_agent_session_repo.NewMockSaveRepo(controller)
 	config := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Minute}
 	redisClient := newRelayRedisClient(t, mini)
