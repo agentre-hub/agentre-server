@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/stats"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/activitystats"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/service/activity_svc"
@@ -36,8 +37,15 @@ func (s *Stats) Overview(c *gin.Context, req *api.OverviewRequest) (*api.Overvie
 	if err != nil {
 		return nil, err
 	}
+	// 「设备在线 n/m」只数能跑会话的机器（desktop / agentred）；cli 是 agrctl 对端，
+	// 不连中继，既不算在线也不算台数。
+	runners := make([]device_svc.DeviceView, 0, len(devices))
 	online := 0
 	for _, d := range devices {
+		if !runsSessions(d) {
+			continue
+		}
+		runners = append(runners, d)
 		if d.Online {
 			online++
 		}
@@ -54,7 +62,7 @@ func (s *Stats) Overview(c *gin.Context, req *api.OverviewRequest) (*api.Overvie
 			ActiveDays:         view.Summary.ActiveDays,
 			WindowDays:         view.Summary.WindowDays,
 			DevicesOnline:      online,
-			DevicesTotal:       len(devices),
+			DevicesTotal:       len(runners),
 		},
 		Heatmap:  heatmap(view.Heatmap),
 		Agents:   agents(view.Agents),
@@ -181,4 +189,10 @@ func projects(in []activity_svc.ProjectCount) []api.ProjectRow {
 		out = append(out, api.ProjectRow{SyncID: r.SyncID, Count: r.Count})
 	}
 	return out
+}
+
+// runsSessions 判定一台设备是不是能跑会话的机器。与中继的可寻址判据同一组 kind，但
+// relay_svc 的那份是私有的，这里不为它引入反向依赖。
+func runsSessions(d device_svc.DeviceView) bool {
+	return d.Kind == device_entity.KindAgentred || d.Kind == device_entity.KindDesktop
 }

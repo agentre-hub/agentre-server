@@ -19,6 +19,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/activity_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
@@ -174,7 +175,30 @@ func requireRejected(t *testing.T, resp *http.Response) {
 }
 
 func device(id int64, name, fingerprint string, online bool) device_svc.DeviceView {
-	return device_svc.DeviceView{ID: id, Name: name, Fingerprint: fingerprint, Online: online, Status: 1}
+	return device_svc.DeviceView{ID: id, Name: name, Kind: device_entity.KindAgentred, Fingerprint: fingerprint, Online: online, Status: 1}
+}
+
+func kindDevice(id int64, kind string, online bool) device_svc.DeviceView {
+	return device_svc.DeviceView{ID: id, Name: kind, Kind: kind, Fingerprint: "fp-" + kind, Online: online, Status: 1}
+}
+
+// agrctl 的 cli 设备不连中继、不是执行机，离线不算「设备在线」，总台数也不把它算进去。
+func TestOverview_CLIDevicesAreNotCountedAsOnlineOrTotal(t *testing.T) {
+	act := &stubActivity{overview: activity_svc.OverviewView{
+		Heatmap: activity_svc.HeatmapView{From: "2025-09-01", To: "2026-08-28"},
+	}}
+	dev := &stubDevices{items: []device_svc.DeviceView{
+		device(1, "mac-mini", "fp-a", true),
+		kindDevice(2, device_entity.KindDesktop, false),
+		kindDevice(3, device_entity.KindCLI, true),
+		kindDevice(4, device_entity.KindCLI, false),
+	}}
+	server, sid, csrf := serve(t, act, dev)
+
+	body := data(t, do(t, http.MethodGet, server.URL+"/v1/stats/overview", sid, csrf, ""))
+
+	assert.Contains(t, body, `"devices_online":1`)
+	assert.Contains(t, body, `"devices_total":2`)
 }
 
 // 在线台数与总台数是**设备域**的事实，服务层刻意不给；控制器从设备清单上数出来。
