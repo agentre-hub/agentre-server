@@ -96,12 +96,14 @@ function sessionTimesLine(t: Translate, s: SessionRow): string {
   return " · " + sessionTimes(t, s).join(" · ");
 }
 
-/** 登录记录的主文案：能认出「设备 · 浏览器」就用它，认不出回退原文（截断由调用方给）。 */
+/**
+ * 登录记录的主文案：能认出「设备 · 浏览器」就用它，认不出给兜底名称（规格 2026-11-25
+ * K6）。原始 UA 不上折叠行——它在展开的详情里；为空时回退原文还会让行首只剩「·」。
+ */
 function sessionLabel(t: Translate, s: SessionRow): string {
   const parsed = parseUserAgent(s.user_agent);
   if (parsed) return `${parsed.device} · ${parsed.browser}`;
-  // UA 为空（或只有空白）时回退原文会得到一个空标签，行首只剩「·」：给个兜底名。
-  return s.user_agent.trim() || t("account.signins.unknownBrowser");
+  return t("account.signins.unknownBrowser");
 }
 
 /** 登录记录的图标：按设备类型认，认不出来（或是桌面系统）退回显示器。 */

@@ -965,7 +965,8 @@ describe("Account page (phone): sessions read as device · browser with relative
     expect(screen.queryByText(UA_MOBILE)).toBeNull();
   });
 
-  it("falls back to the truncated raw UA when the parser cannot name the session", async () => {
+  // 规格 2026-11-25 K6：认不出设备 / 浏览器时折叠行给兜底名称，原始 UA 只在展开的详情里。
+  it("names an unrecognised UA with the fallback name and keeps the raw UA for the expanded detail", async () => {
     markWebauthnSupported();
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return ME;
@@ -986,8 +987,15 @@ describe("Account page (phone): sessions read as device · browser with relative
     });
     renderAccount();
 
-    const raw = await screen.findByText("curl/8.4.0");
-    expect(raw.className).toContain("truncate");
+    const label = await screen.findByText("Unknown browser");
+    expect(label.className).toContain("truncate");
+    expect(screen.queryByText("curl/8.4.0")).toBeNull();
+
+    const row = label.closest("button") as HTMLElement;
+    fireEvent.click(row);
+    expect(within(row).getByText("curl/8.4.0").className).toContain(
+      "break-all",
+    );
   });
 
   it("shows last activity as a relative phrase next to the IP", async () => {
