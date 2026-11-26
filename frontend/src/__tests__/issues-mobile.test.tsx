@@ -439,4 +439,57 @@ describe("看板手机浮层：系统返回先关浮层（D1）", () => {
     );
     expect(screen.getByTestId("path").textContent).toBe("/issues");
   });
+
+  it("筛选弹层：返回只关它，停在看板；选项里改的不会留下多余历史", async () => {
+    await renderPhoneBoard();
+    fireEvent.click(screen.getByTestId("filter-trigger"));
+    await screen.findByTestId("filter-sheet");
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("filter-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+    // 记号已被返回键退掉：再返回才离开看板。
+    systemBack();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/prev"),
+    );
+  });
+
+  it("项目范围弹层：返回只关它，停在看板", async () => {
+    await renderPhoneBoard();
+    fireEvent.click(screen.getByTestId("scope-trigger"));
+    await screen.findByTestId("scope-sheet");
+    systemBack();
+    await waitFor(() => expect(screen.queryByTestId("scope-sheet")).toBeNull());
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+  });
+
+  it("卡片 ⋯ 菜单：返回只关菜单，停在看板", async () => {
+    await renderPhoneBoard();
+    fireEvent.click(screen.getAllByTestId(/^board-card-menu-/)[0]);
+    await screen.findByTestId(/^board-card-sheet-/);
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId(/^board-card-sheet-/)).toBeNull(),
+    );
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+  });
+
+  it("任务页的 ⋯ 菜单：返回只关菜单，任务页与看板都还在", async () => {
+    await renderPhoneBoard();
+    fireEvent.click(screen.getAllByTestId(/^board-card-body-/)[0]);
+    await screen.findByTestId("task-form");
+    fireEvent.pointerDown(screen.getByTestId("task-form-more"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    await screen.findByTestId("task-form-delete");
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("task-form-delete")).toBeNull(),
+    );
+    expect(screen.getByTestId("task-form")).toBeTruthy();
+    expect(screen.getByTestId("path").textContent).toBe("/issues");
+  });
 });

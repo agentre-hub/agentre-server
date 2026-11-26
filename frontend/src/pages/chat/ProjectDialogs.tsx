@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -26,8 +27,12 @@ export interface ProjectCreateDialogState {
   parent: { syncId: string; name: string } | null | false;
   parentOptions: ParentOption[];
   ports: ProjectCreatePorts;
+  /** 新建超时后的「刷新看看」：找到返回项目 id，确定没有返回 null（F5）。 */
+  onTimeoutRecheck?: React.ComponentProps<
+    typeof ProjectCreateDialog
+  >["onTimeoutRecheck"];
   close: () => void;
-  onCreated: () => void;
+  onCreated: (projectId?: string) => void;
 }
 
 export interface ProjectSettingsDialogState {
@@ -82,7 +87,8 @@ export function ProjectDialogs({
           initialParentId={create.parent?.syncId}
           parentName={create.parent?.name}
           ports={create.ports}
-          onCreated={() => create.onCreated()}
+          onTimeoutRecheck={create.onTimeoutRecheck}
+          onCreated={(id) => create.onCreated(id)}
         />
       )}
 

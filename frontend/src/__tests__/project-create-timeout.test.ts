@@ -56,62 +56,44 @@ describe("新建项目超时（F5、W13）", () => {
     expect(order).toContain("POST");
   });
 
-  it("超时后重读，认出新的同名项目就当作建成（返回它的标识），旧的同名不会被认错", async () => {
+  it("超时后不自动重读：只抛出超时，读留给「刷新看看」", async () => {
     await projectRoster.get(); // 提交前名单里只有 old-x
     server.push(wire("made-x", "X"));
-    const res = await createProject({ name: "X" });
-    expect(res.sync_id).toBe("made-x");
+    const listReads = () =>
+      mockedApi.mock.calls.filter(([p, init]) => !init?.method && p).length;
+    const before = listReads();
+    await expect(createProject({ name: "X" })).rejects.toThrow(/timed out/);
+    expect(listReads()).toBe(before);
     expect(postCount).toBe(1);
   });
 
-  it("认不出：经端口说一句中文「没找到、可以再提交」，不含英文原文", async () => {
+  it("端口失败带超时标记（包据此换成「刷新看看」），不自带中文也不自动认", async () => {
     await projectRoster.get();
     const ports = createProjectCreatePorts(createProjectFsPort());
     const out = await ports.create({ name: "X" } as never);
     expect(out.ok).toBe(false);
     if (out.ok) return;
-    expect(out.failure.message).toContain("网络超时");
-    expect(out.failure.message).toContain("重新提交");
-    expect(out.failure.message).not.toMatch(/timed out after/);
+    // 包认超时的规则：消息里有 timed out（它自己说那句中文，这段不上屏）。
+    expect(out.failure.message).toMatch(/timed?[ -]?out/i);
   });
 
-  it("重读也失败：说「可能已经建好了」，请先去列表看看", async () => {
+  it("刷新看看：认出新的同名项目就返回它的标识，旧的同名不会被认错", async () => {
     await projectRoster.get();
-    readsFail = true;
     const ports = createProjectCreatePorts(createProjectFsPort());
-    const out = await ports.create({ name: "X" } as never);
-    expect(out.ok).toBe(false);
-    if (out.ok) return;
-    expect(out.failure.message).toContain("可能已经建好了");
-  });
-
-  it("重读失败后再提交：先核实；读仍失败就不发第二个 POST（找不到才允许再提交）", async () => {
-    await projectRoster.get();
-    readsFail = true;
-    const ports = createProjectCreatePorts(createProjectFsPort());
-    const first = await ports.create({ name: "X" } as never);
-    expect(first.ok).toBe(false);
-    expect(postCount).toBe(1);
-    // 再提交一次：核实的读仍失败 → 不 POST，仍说「可能已经建好了」。
-    const again = await ports.create({ name: "X" } as never);
-    expect(again.ok).toBe(false);
-    if (!again.ok) expect(again.failure.message).toContain("可能已经建好了");
-    expect(postCount).toBe(1);
-    // 读恢复了，认出那一条：当作建成，仍不 POST。
-    readsFail = false;
+    await ports.create({ name: "X" } as never);
+    // 还没建好：只有旧的同名项目。
+    expect(await ports.recheckCreate({ name: "X" } as never)).toBeNull();
     server.push(wire("made-x", "X"));
-    const res = await ports.create({ name: "X" } as never);
-    expect(res).toEqual({ ok: true, id: "made-x" });
+    expect(await ports.recheckCreate({ name: "X" } as never)).toBe("made-x");
     expect(postCount).toBe(1);
   });
 
-  it("重读失败后再提交、核实确实没有：这才发第二个 POST", async () => {
+  it("刷新看看读失败：不当作没建（抛出，包按「没找到」处理但不会替用户再发 POST）", async () => {
     await projectRoster.get();
-    readsFail = true;
     const ports = createProjectCreatePorts(createProjectFsPort());
     await ports.create({ name: "X" } as never);
-    readsFail = false;
-    await ports.create({ name: "X" } as never);
-    expect(postCount).toBe(2);
+    readsFail = true;
+    await expect(ports.recheckCreate({ name: "X" } as never)).rejects.toThrow();
+    expect(postCount).toBe(1);
   });
 });

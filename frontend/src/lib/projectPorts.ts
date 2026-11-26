@@ -191,40 +191,47 @@ function writeMachinePath(
     : relay(() => setLocalPathOnMachine(machine.id, projectId, path));
 }
 
+type ProjectCreateDraft = Parameters<ProjectCreatePorts["create"]>[0];
+
 export function createProjectCreatePorts(
   fs: DisposableProjectFsPort,
-): ProjectCreatePorts {
-  /**
-   * 上一次新建超时、连重读都失败了：那一次可能已经建好。再提交前先拿它的基线核实——
-   * 认出来就当作建成，确定没有才发新的 POST，读仍失败就不发（规格 F5「找不到才允许
-   * 再提交」）。
-   */
-  let unverified: ReadonlySet<string> | null = null;
+): ProjectCreatePorts & {
+  /** 「刷新看看」：认出上一次超时的那次新建就返回项目 id，确定没有返回 null。 */
+  recheckCreate: (draft: ProjectCreateDraft) => Promise<string | null>;
+} {
+  /** 上一次超时的那次新建的基线：核实要拿它认「提交前没见过」。 */
+  let lastKnown: ReadonlySet<string> | null = null;
+  const toFields = (draft: ProjectCreateDraft): ProjectFields => {
+    // 指针语义：**只送这次真的填了的键**，没填的不翻成空串送下去。
+    const fields: ProjectFields = { name: draft.name };
+    if (draft.description) fields.description = draft.description;
+    if (draft.icon) fields.icon = draft.icon;
+    if (draft.color) fields.color = draft.color;
+    if (draft.parentId) fields.parent_sync_id = draft.parentId;
+    return fields;
+  };
   return {
     create: async (draft) => {
-      // 指针语义：**只送这次真的填了的键**，没填的不翻成空串送下去。
-      const fields: ProjectFields = { name: draft.name };
-      if (draft.description) fields.description = draft.description;
-      if (draft.icon) fields.icon = draft.icon;
-      if (draft.color) fields.color = draft.color;
-      if (draft.parentId) fields.parent_sync_id = draft.parentId;
       try {
-        if (unverified) {
-          const found = await verifyProjectCreate(fields, unverified);
-          unverified = null;
-          if (found) return { ok: true, id: found.sync_id };
-        }
-        const created = await createProject(fields);
+        const created = await createProject(toFields(draft));
         return { ok: true, id: created.sync_id };
       } catch (err) {
-        if (
-          err instanceof ProjectCreateTimeoutError &&
-          !err.checked &&
-          err.knownBefore
-        )
-          unverified = err.knownBefore;
+        if (err instanceof ProjectCreateTimeoutError) {
+          lastKnown = err.knownBefore;
+          // 超时标记交给包认：它换成自己那句中文 + 「刷新看看」，这段原文不上屏。
+          return {
+            ok: false,
+            failure: { kind: "unknown", message: err.message },
+          };
+        }
         return { ok: false, failure: restFailure(err) };
       }
+    },
+    recheckCreate: async (draft) => {
+      // 没有基线就认不出「新的」：同名旧项目会被认错，宁可说没找到。
+      if (!lastKnown) return null;
+      const found = await verifyProjectCreate(toFields(draft), lastKnown);
+      return found ? found.sync_id : null;
     },
     // 本机路径与 git 探测都是「摸得到本机文件系统」才有的能力，浏览器上没有。
     // 路径不必填是两端共同的规则（决策 9），不是这一端的特例。

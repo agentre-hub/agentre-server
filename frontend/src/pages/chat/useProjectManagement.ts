@@ -226,6 +226,7 @@ export function useProjectManagement({
         parent: createParent,
         parentOptions,
         ports: createPorts,
+        onTimeoutRecheck: createPorts.recheckCreate,
         close: () => setCreateParent(false),
         onCreated: () => {
           setCreateParent(false);

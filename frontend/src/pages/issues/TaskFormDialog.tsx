@@ -173,6 +173,9 @@ function TaskForm({
   /** 外层问「有没有未保存的改动」的口子：整屏页关闭 / 返回前先问（F4）。 */
   dirtyRef: React.MutableRefObject<() => boolean>;
 }) {
+  // 任务页的 ⋯ 菜单在手机上是浮层：系统返回先关它、任务页留着（D1）。
+  const [moreOpen, setMoreOpen] = React.useState(false);
+  useBackDismiss(moreOpen, () => setMoreOpen(false));
   const [exec, setExec] = React.useState<ExecSelection>(() => ({
     agentBackendSyncId: ids.syncIdOf(value.agentBackendId ?? 0),
     llmProviderKey: value.llmProviderKey,
@@ -331,6 +334,8 @@ function TaskForm({
       agentOptions={agentOptions}
       execTargetPort={execTargetPort}
       modelTargetPort={modelTargetPort}
+      moreMenuOpen={moreOpen}
+      onMoreMenuOpenChange={setMoreOpen}
       onClose={onClose}
       onDelete={value.id ? () => void onDelete(value.id as number) : undefined}
       // 没有 Agent 时机器与模型两颗 pill 是禁用态、端口根本没被调用，此刻的

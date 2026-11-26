@@ -120,13 +120,13 @@ export const projectRoster = createRoster(
 );
 
 /**
- * 新建超时（F5）后，重读也没能确认：`checked` 为假 = 连重读都失败了，项目可能已经建好；
- * 为真 = 重读了、没找到，可以再提交。文案由 `projectFailureText` 按它说。
+ * 新建超时（F5）：请求发出去了，可能已经建好。**不自动重读**——抛这个，界面上是一行
+ * 「网络超时，可能已经建好了」+「刷新看看」，由按钮经 `verifyProjectCreate` 去核实。
+ * 消息里的 timed out 是包认超时的标记，不上屏。
  */
 export class ProjectCreateTimeoutError extends Error {
   constructor(
-    public checked: boolean,
-    /** 提交前的基线（有才能事后核实）；重读失败时带上，再提交前据此先核实一次。 */
+    /** 提交前的基线（有才能事后核实）；基线没取到为 null。 */
     public knownBefore: ReadonlySet<string> | null = null,
   ) {
     super("project create timed out");
@@ -150,11 +150,11 @@ export function findCreatedProject(
 }
 
 /**
- * 建项目。POST 超时时请求可能已经写进去了：重读整份名单（不带任何筛选）认出新的那个，
- * 认出就当作建成（调用方照常打开它）；认不出抛 `ProjectCreateTimeoutError`。
+ * 建项目。POST 超时时请求可能已经写进去了：抛 `ProjectCreateTimeoutError` 并带上提交前的
+ * 基线，由「刷新看看」据此核实（`verifyProjectCreate`）。
  *
  * 「提交前」的基线取共享名单（在飞就共用、10 秒内复用）且**与 POST 同时发出、不等它**，
- * 创建不会被基线拖慢；基线取不到时不敢认（否则同名旧项目会被认错），按「没核实」报。
+ * 创建不会被基线拖慢；基线取不到时不敢认（否则同名旧项目会被认错）。
  */
 export async function createProject(
   fields: ProjectFields,
@@ -167,29 +167,19 @@ export async function createProject(
     return await post<OrgWriteResponse>("/v1/workspace/org/projects", fields);
   } catch (err) {
     if (!(err instanceof ApiTimeoutError)) throw err;
-    const known = await baseline;
-    if (!known) throw new ProjectCreateTimeoutError(false);
-    const found = await verifyProjectCreate(fields, known);
-    if (found) return found;
-    throw new ProjectCreateTimeoutError(true);
+    throw new ProjectCreateTimeoutError(await baseline);
   }
 }
 
 /**
- * 上一次新建超时后核实：重读整份名单，认出「提交前没见过 + 同名同上级」的那个就返回它；
- * 确定没有返回 null；重读失败抛 `ProjectCreateTimeoutError(false)`（仍不知道建没建）。
+ * 新建超时后核实：重读整份名单，认出「提交前没见过 + 同名同上级」的那个就返回它；
+ * 确定没有返回 null；读失败原样抛（仍不知道建没建）。
  */
 export async function verifyProjectCreate(
   fields: ProjectFields,
   known: ReadonlySet<string>,
 ): Promise<OrgWriteResponse | null> {
-  let rows: ProjectNode[];
-  try {
-    rows = await fetchProjects();
-  } catch {
-    throw new ProjectCreateTimeoutError(false, known);
-  }
-  const found = findCreatedProject(rows, fields, known);
+  const found = findCreatedProject(await fetchProjects(), fields, known);
   return found ? { sync_id: found.syncId, version: 0 } : null;
 }
 

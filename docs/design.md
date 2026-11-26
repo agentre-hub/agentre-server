@@ -1112,6 +1112,23 @@ the menu keeps opening at the pointer. The phone index's load-failure Retry is 4
 toasts no longer pick their own position; the host's `Toaster` does: `top-center` on the
 phone (a bottom toast would cover the composer for 5–7 seconds), `bottom-right` on desktop.
 
+The same controlled-open pattern covers the board's package overlays (`Issues`,
+`TaskFormDialog`): the filter sheet (`BoardFilterBar` `open` / `onOpenChange`), the project
+scope sheet (`ProjectScopePicker`), a card's move menu (`IssueBoard` `openCardMenuId` /
+`onCardMenuOpenChange`) and the task page's ⋯ menu (`TaskFormShell` `moreMenuOpen` /
+`onMoreMenuOpenChange`). Each is a `useBackDismiss` layer; only the phone instances pass the
+props, so desktop adds no history entries. The project delete dialog renders in the package's
+touch tier on the phone (`TouchProvider` already covers it): a bottom sheet with the red
+destructive button on top, then Cancel, both full-width 44px.
+
+Create timeouts do not re-read on their own. A project or label create that times out shows the
+package's one-line "network timed out, may already be created" with a **Refresh** button; the
+button calls the host's recheck (`createProjectCreatePorts().recheckCreate` for projects,
+`useBoard().recheckLabelCreate` for labels), which re-reads the full list and looks for a
+"not seen before submit, same name (and parent)" entry. Found: treated as created (the project
+dialog calls `onCreated(id)` and closes; the label panel clears its input). Not found, or the
+re-read failing: say so and allow resubmitting. No raw English error text reaches the screen.
+
 ### PWA and the offline shell
 
 The console is installable. The whole surface is:

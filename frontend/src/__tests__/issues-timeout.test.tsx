@@ -7,7 +7,13 @@
  * 认的规则：重读结果里有一条「提交前看板上没有的 sync_id」，且标题（去空白）、项目、
  * Agent 与用户提交的一致。同名旧任务因此不会被误认，时钟偏差也不影响。
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -354,21 +360,7 @@ describe("新建标签超时（F5、W13）", () => {
         (init as RequestInit)?.method === "POST",
     );
 
-  async function submitLabel(name: string) {
-    await renderBoard(true);
-    fireEvent.pointerDown(screen.getByTestId("filter-trigger"), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.click(screen.getByTestId("filter-trigger"));
-    fireEvent.click(await screen.findByTestId("filter-manage-labels"));
-    fireEvent.change(await screen.findByTestId("label-new-name"), {
-      target: { value: name },
-    });
-    fireEvent.click(screen.getByTestId("label-create"));
-  }
-
-  it("认出新建好的（提交前没见过 + 同名）就当作建成：不报错、输入清空、不再 POST", async () => {
+  const openLabels = async (name: string) => {
     await renderBoard(true);
     fireEvent.pointerDown(screen.getByTestId("filter-trigger"), {
       button: 0,
@@ -377,24 +369,55 @@ describe("新建标签超时（F5、W13）", () => {
     fireEvent.click(screen.getByTestId("filter-trigger"));
     fireEvent.click(await screen.findByTestId("filter-manage-labels"));
     const input = await screen.findByTestId("label-new-name");
-    fireEvent.change(input, { target: { value: "infra" } });
-    // 服务端其实建好了：同名新标签在名单里；提交前就在的同名旧标签不算。
+    fireEvent.change(input, { target: { value: name } });
+    return input;
+  };
+  const refreshButton = () =>
+    within(screen.getByTestId("label-manager-error")).getByRole("button", {
+      name: /refresh/i,
+    });
+
+  it("超时不自动重读：一行提示 + 「刷新看看」，不露英文原文，输入保留", async () => {
+    const input = await openLabels("infra");
+    const reads = () =>
+      mockedApi.mock.calls.filter(
+        ([p, i]) =>
+          String(p).startsWith("/v1/workspace/issues") &&
+          !(i as RequestInit)?.method,
+      ).length;
+    const before = reads();
+    fireEvent.click(screen.getByTestId("label-create"));
+    const error = await screen.findByTestId("label-manager-error");
+    expect(error.textContent).not.toMatch(/timed out after|\/v1\//i);
+    expect(refreshButton()).toBeTruthy();
+    expect(input).toHaveProperty("value", "infra");
+    expect(reads()).toBe(before);
+  });
+
+  it("刷新看看：服务端其实建好了（提交前没见过 + 同名）就当作建成：输入清空", async () => {
+    const input = await openLabels("infra");
+    fireEvent.click(screen.getByTestId("label-create"));
+    await screen.findByTestId("label-manager-error");
     serverLabels = [
       ...serverLabels,
       { sync_id: "lab-new", name: "infra", tone: "gray", usage_count: 0 },
     ];
-    fireEvent.click(screen.getByTestId("label-create"));
-
+    fireEvent.click(refreshButton());
     await waitFor(() => expect(input).toHaveProperty("value", ""));
     expect(screen.queryByTestId("label-manager-error")).toBeNull();
     expect(labelPosts()).toHaveLength(1);
   });
 
-  it("没找到：一行中文、不露英文原文，输入保留、可以再提交", async () => {
-    await submitLabel("infra");
-    const error = await screen.findByTestId("label-manager-error");
-    expect(error.textContent).not.toMatch(/timed out after/i);
-    expect(error.textContent).toMatch(/wasn't found|submit it again/i);
+  it("刷新看看：没找到，说一句，输入保留、可以再提交", async () => {
+    await openLabels("infra");
+    fireEvent.click(screen.getByTestId("label-create"));
+    await screen.findByTestId("label-manager-error");
+    fireEvent.click(refreshButton());
+    await waitFor(() =>
+      expect(screen.getByTestId("label-manager-error").textContent).toMatch(
+        /wasn't found|submit it again|not found/i,
+      ),
+    );
     expect(screen.getByTestId("label-new-name")).toHaveProperty(
       "value",
       "infra",
@@ -417,62 +440,6 @@ describe("新建标签超时（F5、W13）", () => {
     gate = new Promise(() => {});
     fireEvent.click(screen.getByTestId("label-create"));
     await waitFor(() => expect(labelPosts()).toHaveLength(1));
-  });
-
-  it("重读失败：说「可能已经建好了」，不当成没建", async () => {
-    await renderBoard(true);
-    fireEvent.pointerDown(screen.getByTestId("filter-trigger"), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.click(screen.getByTestId("filter-trigger"));
-    fireEvent.click(await screen.findByTestId("filter-manage-labels"));
-    fireEvent.change(await screen.findByTestId("label-new-name"), {
-      target: { value: "infra" },
-    });
-    boardReadFails = true;
-    fireEvent.click(screen.getByTestId("label-create"));
-    const error = await screen.findByTestId("label-manager-error");
-    expect(error.textContent).toMatch(/may already have been created/i);
-  });
-
-  it("重读失败后再提交：先核实；读仍失败不发第二个 POST，读恢复且认出就当作建成", async () => {
-    await renderBoard(true);
-    fireEvent.pointerDown(screen.getByTestId("filter-trigger"), {
-      button: 0,
-      ctrlKey: false,
-    });
-    fireEvent.click(screen.getByTestId("filter-trigger"));
-    fireEvent.click(await screen.findByTestId("filter-manage-labels"));
-    const input = await screen.findByTestId("label-new-name");
-    fireEvent.change(input, { target: { value: "infra" } });
-    boardReadFails = true;
-    fireEvent.click(screen.getByTestId("label-create"));
-    await screen.findByTestId("label-manager-error");
-    expect(labelPosts()).toHaveLength(1);
-
-    fireEvent.click(screen.getByTestId("label-create"));
-    await waitFor(() =>
-      expect(
-        mockedApi.mock.calls.filter(([p]) =>
-          String(p).startsWith("/v1/workspace/issues"),
-        ).length,
-      ).toBeGreaterThan(3),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(labelPosts()).toHaveLength(1);
-    expect(screen.getByTestId("label-manager-error").textContent).toMatch(
-      /may already have been created/i,
-    );
-
-    boardReadFails = false;
-    serverLabels = [
-      ...serverLabels,
-      { sync_id: "lab-new", name: "infra", tone: "gray", usage_count: 0 },
-    ];
-    fireEvent.click(screen.getByTestId("label-create"));
-    await waitFor(() => expect(input).toHaveProperty("value", ""));
-    expect(labelPosts()).toHaveLength(1);
   });
 });
 

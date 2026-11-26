@@ -306,6 +306,46 @@ describe("各处浮层接上了返回键", () => {
     expect(path()).toBe("/chat");
   });
 
+  it("删除项目在手机上是底部抽屉：红色删除键在上，整宽 44px，取消在下", () => {
+    setViewport(true);
+    render(
+      <Shell>
+        <ProjectDialogs
+          create={{
+            parent: false,
+            parentOptions: [],
+            ports: {} as never,
+            close: () => {},
+            onCreated: () => {},
+          }}
+          settings={{
+            project: null,
+            parentOptions: [],
+            ports: {} as never,
+            close: () => {},
+            onChanged: () => {},
+          }}
+          deletion={{
+            project: { id: "p1", name: "Web" },
+            childCount: 0,
+            offlineMachines: [],
+            ports: {} as never,
+            close: () => {},
+            onDeleted: () => {},
+          }}
+        />
+      </Shell>,
+    );
+    const footer = screen.getByTestId("delete-project-footer");
+    const buttons = footer.querySelectorAll("button");
+    expect(buttons[0].getAttribute("data-testid")).toBe(
+      "delete-project-submit",
+    );
+    expect(buttons[0].className).toContain("w-full");
+    expect(buttons[0].className).toContain("min-h-11");
+    expect(buttons[1].className).toContain("min-h-11");
+  });
+
   it("第一次保存的说明框：系统返回关掉它，停在原页", () => {
     setViewport(true);
     function Host() {

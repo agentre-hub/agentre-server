@@ -6,15 +6,8 @@
  */
 import i18n from "@/i18n";
 import { knownApiErrorText } from "@/lib/loadError";
-import { ProjectCreateTimeoutError } from "@/lib/projects";
 
 export function projectFailureText(err: unknown): string {
   const t = (key: string) => i18n.t(key);
-  // 新建超时：一句中文，不露英文原文（F5）。
-  if (err instanceof ProjectCreateTimeoutError) {
-    return t(
-      err.checked ? "project.create.timeoutNotFound" : "project.create.timeout",
-    );
-  }
   return knownApiErrorText(err, t) ?? t("common.projectError.fallback");
 }

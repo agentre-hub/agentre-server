@@ -108,6 +108,13 @@ export default function Issues() {
   const [labelsOpen, setLabelsOpen] = React.useState(false);
   // 标签管理框在手机上是浮层：系统返回先关它、停在看板（D1）。
   useBackDismiss(labelsOpen, () => setLabelsOpen(false));
+  // 筛选 / 范围弹层、卡片 ⋯ 菜单同理：包经受控开合告知开关，宿主登记返回记号（D1）。
+  const [filterOpen, setFilterOpen] = React.useState(false);
+  useBackDismiss(filterOpen, () => setFilterOpen(false));
+  const [scopeOpen, setScopeOpen] = React.useState(false);
+  useBackDismiss(scopeOpen, () => setScopeOpen(false));
+  const [cardMenuId, setCardMenuId] = React.useState<number | null>(null);
+  useBackDismiss(cardMenuId !== null, () => setCardMenuId(null));
 
   const [projects, setProjects] = React.useState<ProjectNode[]>([]);
   const [agents, setAgents] = React.useState<NewConvAgent[]>([]);
@@ -269,6 +276,8 @@ export default function Issues() {
               title={
                 <ProjectScopePicker
                   sheet
+                  open={scopeOpen}
+                  onOpenChange={setScopeOpen}
                   scope={query.scope}
                   projects={scopeProjects}
                   unassignedCount={board.unassignedCount}
@@ -295,6 +304,8 @@ export default function Issues() {
             <div className="flex min-h-12 shrink-0 items-center gap-2 px-4 py-1">
               <BoardFilterBar
                 sheet
+                open={filterOpen}
+                onOpenChange={setFilterOpen}
                 query={query}
                 labels={board.labels}
                 projects={scopeProjects}
@@ -379,6 +390,10 @@ export default function Issues() {
             hideCardNumber
             drag={isMobile ? undefined : bindings}
             layout={isMobile ? "stage" : "columns"}
+            openCardMenuId={cardMenuId}
+            onCardMenuOpenChange={(id, open) =>
+              setCardMenuId((cur) => (open ? id : cur === id ? null : cur))
+            }
             ports={{
               onEdit: openTask,
               onDelete: (taskId) => void board.deleteTask(taskId),
@@ -421,6 +436,7 @@ export default function Issues() {
             <LabelManagerPanel
               labels={board.labels}
               onLabelMutate={board.mutateLabel}
+              onCreateTimeoutRecheck={board.recheckLabelCreate}
               className="max-h-[60vh]"
             />
           </DialogContent>
