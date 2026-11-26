@@ -897,6 +897,9 @@ export function useSessionSend({
       detail,
       ...(handedOffAt ? { handedOffAt } : {}),
     };
+    // 这一条又挂回流里了：它不再算「已丢弃」。重发途中被收起（K4）或被丢弃的那条重发
+    // 又失败时，不撤掉这一笔的话下面那次收起永远跳过它。
+    dismissedRef.current.delete(next.id);
     setFailedSends((prev) =>
       replacing && prev.some((f) => f.id === replacing)
         ? prev.map((f) => (f.id === replacing ? next : f))

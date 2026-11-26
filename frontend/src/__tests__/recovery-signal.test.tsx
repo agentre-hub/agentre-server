@@ -12,10 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as accountChannel from "@/lib/accountChannel";
 import type { AccountChannelState } from "@/lib/accountChannel";
-import {
-  RecoveryRetryGapMs,
-  useRetryOnRecovery,
-} from "@/hooks/use-retry-on-recovery";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import { useAccountChannelState } from "@/hooks/use-account-channel";
 import { ApiError } from "@/lib/api";
 import { noteRecovery, subscribeRecovery } from "@/lib/recoverySignal";
@@ -124,15 +121,49 @@ describe("useRetryOnRecovery", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it("不打转：重试又失败了，下一次信号（隔开之后）才再试一次", () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+  it("不打转：重试又失败了，不自己再试，下一次信号才再试一次", () => {
     const retry = vi.fn();
-    renderHook(() => useRetryOnRecovery(true, retry));
+    const { rerender } = renderHook(
+      ({ failure }: { failure: unknown }) => useRetryOnRecovery(failure, retry),
+      { initialProps: { failure: new Error("offline") as unknown } },
+    );
 
     goOnline();
     expect(retry).toHaveBeenCalledTimes(1);
 
-    vi.setSystemTime(Date.now() + RecoveryRetryGapMs);
+    rerender({ failure: new Error("still offline") });
+    expect(retry).toHaveBeenCalledTimes(1);
+
+    goOnline();
+    expect(retry).toHaveBeenCalledTimes(2);
+  });
+
+  it("重试还没答时又来信号：不重发同一个请求", () => {
+    const retry = vi.fn();
+    renderHook(() => useRetryOnRecovery(new Error("offline"), retry));
+
+    goOnline();
+    comeToForeground();
+    act(() => noteRecovery());
+
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+    回前台那一下网络常常还没回来：重试当场就失败（离线时 fetch 立刻拒绝），紧接着
+    `online` 才到。那一下才是真的能成的时机，不能因为离上一次重试不到两秒就吞掉。
+  */
+  it("重试当场又失败、紧接着网络才回来：这一下照样再试", () => {
+    const retry = vi.fn();
+    const { rerender } = renderHook(
+      ({ failure }: { failure: unknown }) => useRetryOnRecovery(failure, retry),
+      { initialProps: { failure: new Error("offline") as unknown } },
+    );
+
+    comeToForeground();
+    expect(retry).toHaveBeenCalledTimes(1);
+    rerender({ failure: new Error("still offline") });
+
     goOnline();
     expect(retry).toHaveBeenCalledTimes(2);
   });

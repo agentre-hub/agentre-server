@@ -599,6 +599,69 @@ describe("「可能已送达」在转录里出现了就收起（K4）", () => {
     expect(runCalls()).toHaveLength(0);
   });
 
+  it("点了「重发」、回声在重发途中到了，重发随后又断：气泡照样收起，库里不留", async () => {
+    let onEvent: ((frame: unknown, at?: number) => void) | undefined;
+    mockUseRelay.mockImplementation((_t, opts) => {
+      onEvent = (opts as { onEvent?: typeof onEvent } | undefined)?.onEvent;
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    let fail: () => void = () => {};
+    stubRun(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = () => reject(new Error("socket closed"));
+        }),
+    );
+    await seed({
+      failed: [
+        {
+          id: "f1",
+          text: "其实到了",
+          kind: "transport",
+          handedOffAt: Date.now() - 1_000,
+        },
+      ],
+    });
+    mount();
+    fireEvent.click(await screen.findByTestId("send-failure-retry"));
+    await waitFor(() => expect(runCalls()).toHaveLength(1));
+
+    // 最初那一次其实到了：它的回声在重发还没答的时候到。
+    await act(async () => {
+      onEvent?.(
+        {
+          conversationId: CID,
+          event: { kind: "user_message", text: "其实到了" },
+          seq: 3,
+        },
+        Date.now(),
+      );
+    });
+    await settle();
+    await act(async () => fail());
+    await settle();
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-failure")).toBeNull(),
+    );
+    await waitFor(async () =>
+      expect((await outboxStore.get(CID))?.failed ?? []).toEqual([]),
+    );
+    expect(runCalls()).toHaveLength(1);
+  });
+
   it("对不上（文字改过 / 早于交出时刻）：一直留着，不猜", async () => {
     const handedOffAt = Date.now() - 60_000;
     await seed({
