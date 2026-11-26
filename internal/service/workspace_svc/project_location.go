@@ -95,7 +95,7 @@ func (s *workspaceSvc) ProjectMachines(
 	out := make([]ProjectMachineView, 0, len(devices))
 	for _, dev := range devices {
 		view := ProjectMachineView{
-			DeviceID: dev.ID, DeviceName: device_entity.DisplayName(dev.Name, dev.Fingerprint), Kind: dev.Kind,
+			DeviceID: dev.ID, DeviceName: deviceLabel(dev), Kind: dev.Kind,
 			Fingerprint: dev.Fingerprint, Online: placer.isOnline(dev.Fingerprint),
 		}
 		if dev.Kind == device_entity.KindAgentred {

@@ -652,7 +652,7 @@ func (p *targetPlacer) place(fingerprint string, deviceUnspecified bool) machine
 		return machinePlacement{Availability: AvailabilityUnpaired}
 	}
 	out := machinePlacement{
-		DeviceID: dev.ID, DeviceName: dev.Name, Availability: AvailabilityOffline,
+		DeviceID: dev.ID, DeviceName: deviceLabel(dev), Availability: AvailabilityOffline,
 	}
 	if dev.IsActive() && p.isOnline(fingerprint) {
 		out.Availability = AvailabilityAvailable

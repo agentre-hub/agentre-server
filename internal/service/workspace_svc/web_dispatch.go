@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/pkg/i18n"
@@ -123,7 +124,7 @@ func (r *dispatchResolver) evaluateTier(
 			break
 		}
 		tier.DeviceID = dev.ID
-		tier.DeviceName = dev.Name
+		tier.DeviceName = deviceLabel(dev)
 		tier.Kind = dev.Kind
 		if !dev.IsActive() || !r.isOnline(t.Fingerprint) {
 			tier.Availability = AvailabilityOffline
@@ -276,4 +277,13 @@ func (s *workspaceSvc) WebDispatchPlan(
 		plan.Projects = projects
 	}
 	return plan, nil
+}
+
+// deviceLabel 是设备在派发计划、机器清单里的名字，与设备列表同一口径：用户设的备注名
+// 优先，没设才回落到设备自报的名字（缺省再回落到指纹缩写）。
+func deviceLabel(dev *device_entity.Device) string {
+	if name := strings.TrimSpace(dev.DisplayName); name != "" {
+		return dev.DisplayName
+	}
+	return device_entity.DisplayName(dev.Name, dev.Fingerprint)
 }
