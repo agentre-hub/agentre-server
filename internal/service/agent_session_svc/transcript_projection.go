@@ -19,7 +19,10 @@
 // （`transcript/frames.ts` 的 applyFrame）**明确 return 掉**的那些。哪天其中某一种
 // 有了显示面，那边会先动，这里必须跟着动——否则数据在传输中途就没了，前端改了也
 // 看不见。`steer_consumed` 就是这么离开清单的：它是「轮次在跑时插进来的那句话」唯一
-// 的来路（runtime.steer 不发 user_message），归约器认了它之后这里必须放行。反过来，
+// 的来路（runtime.steer 不发 user_message），归约器认了它之后这里必须放行。
+// `subagent_started` / `_progress` / `_done` / `_model` 同理：归约器把它们并进外层
+// tool_use 的子代理卡 overlay，`agrctl send --wait` 升级的 shell 调用只凭 overlay 的
+// 来源认成卡，削掉它们控制台上就只剩一行普通的 Bash。反过来，
 // `context_window_updated` 与 `usage` 虽然也在那段「记而不显」的注释里，却**有**显示
 // 面（reduceSessionState 喂 Composer 底栏那条上下文用量），所以它们不在清单里。
 package agent_session_svc
@@ -39,10 +42,6 @@ var droppedEventKinds = map[string]bool{
 	"permission_mode_changed": true,
 	"tool_use_end":            true,
 	"retry":                   true,
-	"subagent_started":        true,
-	"subagent_progress":       true,
-	"subagent_done":           true,
-	"subagent_model":          true,
 }
 
 // mergeableEventKinds 是逐块流式、合并起来语义不变的那两种。一条 delta 常常只有

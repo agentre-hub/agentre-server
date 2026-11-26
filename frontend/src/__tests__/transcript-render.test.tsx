@@ -157,6 +157,47 @@ describe("Transcript", () => {
   });
 
   /**
+   * 控制台拥有的会话里 `agrctl send --wait` 被 agentred 升级成子代理卡：工具名与入参
+   * 都还是 shell 的，卡片只凭 overlay 的 origin=agrctl 认出来。落库之后那张卡投影成帧
+   * 只剩一条 subagent_done 快照（agentre internal/pkg/transcript/projection.go），
+   * 镜像转录页（/v1/agent-sessions/transcript）把这一帧送下来，这里就该画成卡；
+   * 少了它就只是一行普通的 Bash —— 那正是镜像投影曾经削掉它时用户看到的样子。
+   */
+  it("给定 agrctl send 升级的 shell 调用带 subagent_done 快照，当渲染，则画成子代理卡而不是 Bash 行", () => {
+    const shell = f({
+      kind: "tool_use_start",
+      id: "tu-sh",
+      name: "Bash",
+      input: { command: 'agrctl send --agent verifier --wait "ping"' },
+    });
+    const result = f({
+      kind: "tool_result",
+      toolCallId: "tu-sh",
+      content: "inner-pong",
+    });
+    const done = f({
+      kind: "subagent_done",
+      toolCallId: "tu-sh",
+      info: {
+        kind: "agrctl_send",
+        origin: "agrctl",
+        status: "completed",
+        taskDescription: "ping",
+        finalText: "inner-pong",
+        toolUses: 1,
+      },
+    });
+
+    const withCard = renderFrames(shell, result, done);
+    expect(withCard.getByTestId("agent-spawn-card")).toBeTruthy();
+    withCard.unmount();
+
+    const withoutCard = renderFrames(shell, result);
+    expect(withoutCard.queryByTestId("agent-spawn-card")).toBeNull();
+    expect(withoutCard.getByText("Bash")).toBeTruthy();
+  });
+
+  /**
    * 本站自渲染的块曾经横在对话列外面：包的内容列是 `max-w-measure`（720px），
    * 本站那些块是外层容器的整宽（768px），左右各探出去一截。现在没有本站自渲染的
    * 块了，所以每一行都该在包的列里。
