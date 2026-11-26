@@ -288,6 +288,42 @@ describe("overview: 摘要四格", () => {
     expect(within(tile).getByText("Office Mac mini is offline")).toBeTruthy();
   });
 
+  it("agrctl 的 cli 设备离线也不算设备在线，副行不点它的名", async () => {
+    serve({
+      "/v1/devices": {
+        devices: [
+          {
+            id: 1,
+            name: "Home NUC",
+            kind: "agentred",
+            fingerprint: "fp-1",
+            online: true,
+          },
+          {
+            id: 3,
+            name: "wangyizhideMacBook-Pro.local",
+            kind: "cli",
+            fingerprint: "fp-cli",
+            online: false,
+          },
+        ],
+      },
+      "/v1/stats/overview": statsResponse({
+        summary: {
+          ...statsResponse().summary,
+          devices_online: 1,
+          devices_total: 1,
+        },
+      }),
+    });
+    renderOverview();
+
+    await screen.findByText("Devices online");
+    const tile = screen.getByTestId("tile-online");
+    expect(within(tile).queryByText(/is offline/)).toBeNull();
+    expect(within(tile).queryByText(/wangyizhideMacBook/)).toBeNull();
+  });
+
   it("四张卡里一个「—」都没有：这一版每一格都有真实数据源", async () => {
     serve();
     renderOverview();

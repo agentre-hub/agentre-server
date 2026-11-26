@@ -44,7 +44,7 @@ import {
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
 import { fetchAgents } from "@/lib/agents";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { fetchDevices, runsSessions, type DeviceItem } from "@/lib/devices";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
 import {
   fetchStatsOverview,
@@ -335,7 +335,7 @@ export default function Overview() {
   );
 
   const firstOffline = useMemo(
-    () => (devices ?? []).find((d) => !d.online),
+    () => (devices ?? []).filter(runsSessions).find((d) => !d.online),
     [devices],
   );
   const agentsBySync = useMemo(
