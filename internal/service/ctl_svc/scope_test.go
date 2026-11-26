@@ -20,7 +20,7 @@ func TestScope_GivenPATWithoutRead_WhenListOrGet_ThenForbiddenNamingScope(t *tes
 		list(agentrewire.CtlKind_CTL_KIND_PROVIDER),
 		get(agentrewire.CtlKind_CTL_KIND_PROVIDER, 50),
 	} {
-		_, err := h.do(t, patCaller("resources:write", "chat"), req, false)
+		_, err := h.do(t, patCaller("resources:write", "devices:write"), req, false)
 		require.Error(t, err)
 		assert.Equal(t, 403, statusOf(t, err))
 		assert.Equal(t, "token lacks scope read", err.Error())
@@ -34,6 +34,21 @@ func TestScope_GivenPATWithRead_WhenListOrGet_ThenServed(t *testing.T) {
 	assert.Len(t, resp.GetList().GetItems(), 1)
 	_, err = h.do(t, patCaller("read"), get(agentrewire.CtlKind_CTL_KIND_PROVIDER, 50), false)
 	require.NoError(t, err)
+}
+
+func TestScope_GivenChatOnlyPAT_WhenListOrGet_ThenServedButWritesStayRefused(t *testing.T) {
+	h := setup(t)
+	resp, err := h.do(t, patCaller("chat"), list(agentrewire.CtlKind_CTL_KIND_PROVIDER), false)
+	require.NoError(t, err)
+	assert.Len(t, resp.GetList().GetItems(), 1)
+	_, err = h.do(t, patCaller("chat"), get(agentrewire.CtlKind_CTL_KIND_PROVIDER, 50), false)
+	require.NoError(t, err)
+	for _, preview := range []bool{true, false} {
+		_, err = h.do(t, patCaller("chat"), updateProvider(), preview)
+		require.Error(t, err)
+		assert.Equal(t, 403, statusOf(t, err))
+		assert.Equal(t, "token lacks scope resources:write", err.Error())
+	}
 }
 
 func TestScope_GivenPATWithoutResourcesWrite_WhenWrite_ThenForbiddenEvenAsPreview(t *testing.T) {

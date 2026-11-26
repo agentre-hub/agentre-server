@@ -100,7 +100,7 @@ type scopeRoute struct {
 }
 
 var scopedRoutes = []scopeRoute{
-	{"devices list", http.MethodGet, "/v1/devices", ``, "read", []string{"read"}},
+	{"devices list", http.MethodGet, "/v1/devices", ``, "read", []string{"read", "chat"}},
 	{"device rename", http.MethodPatch, "/v1/devices/5", `{"display_name":"x"}`, "devices:write", []string{"devices:write"}},
 	{"device revoke", http.MethodPost, "/v1/oauth/token/revoke", `{"device_id":5}`, "devices:write", []string{"devices:write"}},
 	{"device upgrade", http.MethodPost, "/v1/devices/upgrade", `{"device_id":5}`, "devices:write", []string{"devices:write"}},
@@ -203,4 +203,11 @@ func TestRouter_CtlResourcesAdmitsPATAndPassesKindAndScopesToTheExecutor(t *test
 
 	// 浏览器票据之类不属于账号调用方：照旧 401。
 	assert.Equal(t, http.StatusUnauthorized, serveWithBearer(engine, http.MethodPost, "/v1/ctl/resources", "garbage", `{}`).Code)
+}
+
+func TestRouter_ReadOnlyPATStillCannotStartOrSaveChats(t *testing.T) {
+	engine := newScopeRouter(t)
+	status, text := serveRecovering(engine, http.MethodPost, "/v1/saved-sessions", patToken("read"), `{}`)
+	assert.Equal(t, http.StatusForbidden, status)
+	assert.Contains(t, text, "token lacks scope chat")
 }

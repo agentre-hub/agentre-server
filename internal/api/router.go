@@ -419,7 +419,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 不放 org 写、项目、看板等其余路由，它们仍在上面那组，个人 token 解析不到。
 	// RequireScope 对会话与设备一律放行，只裁个人 token（决策 16）。
 	accountCallers := g.Group("/", middleware.SessionOrAccountAuth(accountBearer, consoleOrigins))
-	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeRead)).Bind(
+	// 设备列表：agrctl 的账号 send 要借它挑执行设备，只带 chat 的 token 也得能读。
+	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat)).Bind(
 		deviceCtr.List,
 	)
 	// 个人 token 查自己（agrctl whoami）：不要求任何具体范围——每枚 token 都该能看见自己的

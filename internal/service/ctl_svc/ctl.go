@@ -48,6 +48,19 @@ func (c Caller) requireScope(scope string) error {
 	return &Error{Status: http.StatusForbidden, Msg: "token lacks scope " + scope}
 }
 
+// requireAnyScope 个人 token 带 scopes 中任一个即放行；拒绝时点名第一个。
+func (c Caller) requireAnyScope(scopes ...string) error {
+	if !c.isPersonalToken() {
+		return nil
+	}
+	for _, s := range scopes {
+		if slices.Contains(c.Scopes, s) {
+			return nil
+		}
+	}
+	return &Error{Status: http.StatusForbidden, Msg: "token lacks scope " + scopes[0]}
+}
+
 // CtlSvc 执行一次 ctl 请求。preview 为真时写请求只算变更清单、不落库——agentred 在
 // 会话里出审批卡之前用它拿到真实的前后值（决策 6、7）。
 type CtlSvc interface {
@@ -132,7 +145,7 @@ func (s *ctlSvc) Handle(
 ) (*agentrewire.CtlResponse, error) {
 	switch op := req.GetOp().(type) {
 	case *agentrewire.CtlRequest_List:
-		if err := caller.requireScope(personal_token_entity.ScopeRead); err != nil {
+		if err := caller.requireAnyScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
 			return nil, err
 		}
 		st, err := loadState(ctx, caller)
@@ -147,7 +160,7 @@ func (s *ctlSvc) Handle(
 			List: &agentrewire.CtlListResponse{Items: items},
 		}}, nil
 	case *agentrewire.CtlRequest_Get:
-		if err := caller.requireScope(personal_token_entity.ScopeRead); err != nil {
+		if err := caller.requireAnyScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
 			return nil, err
 		}
 		st, err := loadState(ctx, caller)
