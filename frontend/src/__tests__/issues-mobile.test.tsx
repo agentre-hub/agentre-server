@@ -183,7 +183,7 @@ describe("看板手机形态", () => {
     await renderPhoneBoard();
 
     fireEvent.click(screen.getAllByTestId(/^board-card-menu-/)[0]);
-    const sheet = await screen.findByTestId(/^board-card-sheet-/);
+    const sheet = await screen.findByTestId(/^board-card-sheet-\d+$/);
     fireEvent.click(within(sheet).getByRole("button", { name: /Review/ }));
 
     await waitFor(() => {
@@ -192,6 +192,15 @@ describe("看板手机形态", () => {
         stage: "review",
       });
     });
+  });
+
+  it("卡片菜单的标题是任务标题，不带 #编号", async () => {
+    await renderPhoneBoard();
+
+    fireEvent.click(screen.getAllByTestId(/^board-card-menu-/)[0]);
+    const sheet = await screen.findByTestId(/^board-card-sheet-\d+$/);
+    expect(sheet.textContent).toContain("Fix the login redirect");
+    expect(sheet.textContent).not.toContain("#");
   });
 
   it("任务是整屏页而不是居中弹窗：dvh 高容器，无取消按钮，保存在页头", async () => {
@@ -569,10 +578,10 @@ describe("看板手机浮层：系统返回先关浮层（D1）", () => {
   it("卡片 ⋯ 菜单：返回只关菜单，停在看板", async () => {
     await renderPhoneBoard();
     fireEvent.click(screen.getAllByTestId(/^board-card-menu-/)[0]);
-    await screen.findByTestId(/^board-card-sheet-/);
+    await screen.findByTestId(/^board-card-sheet-\d+$/);
     systemBack();
     await waitFor(() =>
-      expect(screen.queryByTestId(/^board-card-sheet-/)).toBeNull(),
+      expect(screen.queryByTestId(/^board-card-sheet-\d+$/)).toBeNull(),
     );
     expect(screen.getByTestId("path").textContent).toBe("/issues");
   });

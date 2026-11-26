@@ -43,6 +43,7 @@
     "subtitle": "Browsers currently signed in to this account.",
     "current": "This session",
     "currentPhone": "This device",
+    "unknownBrowser": "Unknown browser",
     "signedInAt": "Signed in {{date}}",
     "lastActiveAt": "Last active {{date}}",
     "loadFailedWhat": "Could not load your sessions",

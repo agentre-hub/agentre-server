@@ -820,6 +820,37 @@ describe("Account page: mobile layout on 390px screen", () => {
     expect(timesContainer?.className).not.toContain("truncate");
   });
 
+  it("falls back to a name when the UA is empty so the row never starts with a separator", async () => {
+    markWebauthnSupported();
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/auth/me") return ME;
+      if (
+        path === "/v1/passkeys" &&
+        (!init || (init.method ?? "GET") === "GET")
+      )
+        return PASSKEYS;
+      if (path === "/v1/auth/sessions")
+        return {
+          sessions: [
+            {
+              user_agent: "",
+              ip: "",
+              created_at: 1755000000000,
+              last_active_at: Date.now(),
+              current: true,
+            },
+          ],
+        };
+      throw new Error(`unexpected call: ${path} ${init?.method ?? "GET"}`);
+    });
+    renderAccount();
+
+    const label = await screen.findByText("Unknown browser");
+    const row = label.closest("button") as HTMLElement;
+    expect((row.textContent ?? "").trim().startsWith("·")).toBe(false);
+    expect(row.textContent).not.toMatch(/Unknown browser\s*·/);
+  });
+
   it("displays passkey created and last-used times with wrapping on mobile", async () => {
     markWebauthnSupported();
     mockDefaultApi();

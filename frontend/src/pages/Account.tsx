@@ -97,9 +97,11 @@ function sessionTimesLine(t: Translate, s: SessionRow): string {
 }
 
 /** 登录记录的主文案：能认出「设备 · 浏览器」就用它，认不出回退原文（截断由调用方给）。 */
-function sessionLabel(s: SessionRow): string {
+function sessionLabel(t: Translate, s: SessionRow): string {
   const parsed = parseUserAgent(s.user_agent);
-  return parsed ? `${parsed.device} · ${parsed.browser}` : s.user_agent;
+  if (parsed) return `${parsed.device} · ${parsed.browser}`;
+  // UA 为空（或只有空白）时回退原文会得到一个空标签，行首只剩「·」：给个兜底名。
+  return s.user_agent.trim() || t("account.signins.unknownBrowser");
 }
 
 /** 登录记录的图标：按设备类型认，认不出来（或是桌面系统）退回显示器。 */
@@ -631,7 +633,7 @@ export default function Account() {
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="min-w-0 flex-1 truncate text-aux text-foreground">
-                                  {sessionLabel(s)}
+                                  {sessionLabel(t, s)}
                                 </span>
                                 {s.current && (
                                   <StatusMark
@@ -652,8 +654,12 @@ export default function Account() {
                                 </div>
                               ) : (
                                 <div className="mt-0.5 truncate text-2xs text-muted-foreground">
-                                  <span className="font-mono">{s.ip}</span>
-                                  {META_SEP}
+                                  {s.ip && (
+                                    <>
+                                      <span className="font-mono">{s.ip}</span>
+                                      {META_SEP}
+                                    </>
+                                  )}
                                   <span>
                                     {s.last_active_at
                                       ? formatRelativeTime(
