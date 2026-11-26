@@ -125,10 +125,7 @@ export const projectRoster = createRoster(
  * 消息里的 timed out 是包认超时的标记，不上屏。
  */
 export class ProjectCreateTimeoutError extends Error {
-  constructor(
-    /** 提交前的基线（有才能事后核实）；基线没取到为 null。 */
-    public knownBefore: ReadonlySet<string> | null = null,
-  ) {
+  constructor() {
     super("project create timed out");
     this.name = "ProjectCreateTimeoutError";
   }
@@ -150,37 +147,56 @@ export function findCreatedProject(
 }
 
 /**
- * 建项目。POST 超时时请求可能已经写进去了：抛 `ProjectCreateTimeoutError` 并带上提交前的
- * 基线，由「刷新看看」据此核实（`verifyProjectCreate`）。
+ * 新建的「提交前」基线：此刻名单里全部项目的标识，读不到为 null。
  *
- * 「提交前」的基线取共享名单（在飞就共用、10 秒内复用）且**与 POST 同时发出、不等它**，
- * 创建不会被基线拖慢；基线取不到时不敢认（否则同名旧项目会被认错）。
+ * 走共享名单（在飞就共用、10 秒内复用）：它只要是一次**在 POST 发出之前就答完了**的读
+ * 就成立，调用方因此必须先等它、再发 POST（见 `createProjectCreatePorts`）。
+ */
+export function readProjectBaseline(): Promise<ReadonlySet<string> | null> {
+  return projectRoster.get().then(
+    (rows) => new Set(rows.map((p) => p.syncId)) as ReadonlySet<string>,
+    () => null,
+  );
+}
+
+/**
+ * 建项目。POST 超时时请求可能已经写进去了：抛 `ProjectCreateTimeoutError`，由「刷新看看」
+ * 核实（`verifyProjectCreate`）。基线不归这里取——它必须先于 POST 答完，见
+ * `readProjectBaseline`。
  */
 export async function createProject(
   fields: ProjectFields,
 ): Promise<OrgWriteResponse> {
-  const baseline = projectRoster.get().then(
-    (rows) => new Set(rows.map((p) => p.syncId)) as ReadonlySet<string>,
-    () => null,
-  );
   try {
     return await post<OrgWriteResponse>("/v1/workspace/org/projects", fields);
   } catch (err) {
     if (!(err instanceof ApiTimeoutError)) throw err;
-    throw new ProjectCreateTimeoutError(await baseline);
+    throw new ProjectCreateTimeoutError();
   }
 }
 
 /**
- * 新建超时后核实：重读整份名单，认出「提交前没见过 + 同名同上级」的那个就返回它；
- * 确定没有返回 null；读失败原样抛（仍不知道建没建）。
+ * 新建超时后核实：**每次都现读整份名单**（不走共享名单），读失败原样抛——仍不知道建没
+ * 建，不能说没找到。
+ *
+ * 有基线时认「提交前没见过 + 同名同上级」的那个；基线没取到时退一步，名单里有同名同上级
+ * 的就算找到：认错成同名旧项目的代价是打开了它，认不出的代价是再提交建出第二个。
+ *
+ * `knownNow` 是这次读到的全部标识：认不出、用户再提交时，它就是那一次的「提交前」基线。
  */
 export async function verifyProjectCreate(
   fields: ProjectFields,
-  known: ReadonlySet<string>,
-): Promise<OrgWriteResponse | null> {
-  const found = findCreatedProject(await fetchProjects(), fields, known);
-  return found ? { sync_id: found.syncId, version: 0 } : null;
+  knownBefore: ReadonlySet<string> | null,
+): Promise<{
+  created: OrgWriteResponse | null;
+  knownNow: ReadonlySet<string>;
+}> {
+  const rows = await fetchProjects();
+  const found = findCreatedProject(rows, fields, knownBefore ?? new Set());
+  return {
+    created: found ? { sync_id: found.syncId, version: 0 } : null,
+    knownNow: new Set(rows.map((p) => p.syncId)),
+  };
 }
 
 export function updateProject(

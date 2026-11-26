@@ -28,6 +28,7 @@ const wire = (id: string, name: string) => ({
 });
 let server: ReturnType<typeof wire>[];
 let posts = 0;
+let readsFail = false;
 const created = vi.fn();
 
 beforeEach(async () => {
@@ -35,6 +36,7 @@ beforeEach(async () => {
   projectRoster.invalidate();
   server = [wire("old-x", "X")];
   posts = 0;
+  readsFail = false;
   created.mockReset();
   mockedApi.mockReset();
   mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -42,14 +44,18 @@ beforeEach(async () => {
       posts += 1;
       throw new ApiTimeoutError(path, 15000);
     }
-    if (path === "/v1/workspace/projects") return { projects: server };
+    if (path === "/v1/workspace/projects") {
+      if (readsFail) throw new ApiTimeoutError(path, 15000);
+      return { projects: server };
+    }
     if (path === "/v1/devices") return { devices: [] };
     throw new Error(`unexpected ${path}`);
   });
 });
 
-async function submitTimedOut() {
-  await projectRoster.get();
+async function submitTimedOut({ baseline = true } = {}) {
+  if (baseline) await projectRoster.get();
+  else readsFail = true; // 提交前那次读也超时了：没有基线
   const ports = createProjectCreatePorts(createProjectFsPort());
   render(
     <MemoryRouter>
@@ -84,15 +90,18 @@ async function submitTimedOut() {
   const name = await screen.findByPlaceholderText(/name/i);
   fireEvent.change(name, { target: { value: "X" } });
   fireEvent.click(screen.getByTestId("project-create-submit"));
-  return screen.findByTestId("project-create-timeout");
+  const line = await screen.findByTestId("project-create-timeout");
+  readsFail = false;
+  return line;
 }
+
+const reads = () =>
+  mockedApi.mock.calls.filter(
+    ([p, i]) => p === "/v1/workspace/projects" && !i?.method,
+  ).length;
 
 describe("新建项目超时", () => {
   it("一行提示 + 「刷新看看」，不露英文原文，不自动重读", async () => {
-    const reads = () =>
-      mockedApi.mock.calls.filter(
-        ([p, i]) => p === "/v1/workspace/projects" && !i?.method,
-      ).length;
     const line = await submitTimedOut();
     expect(line.textContent).not.toMatch(/timed out after|\/v1\//i);
     expect(screen.getByRole("button", { name: /refresh/i })).toBeTruthy();
@@ -118,5 +127,32 @@ describe("新建项目超时", () => {
     expect(screen.getByRole("alert").textContent).not.toMatch(/timed out/i);
     fireEvent.click(screen.getByTestId("project-create-submit"));
     await waitFor(() => expect(posts).toBe(2));
+  });
+
+  describe("提交前的基线没取到", () => {
+    it("刷新看看现读一次，服务端其实建好了就打开它", async () => {
+      await submitTimedOut({ baseline: false });
+      server.push(wire("made-x", "X"));
+      const before = reads();
+      fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+      await waitFor(() => expect(created).toHaveBeenCalledWith("made-x"));
+      expect(reads()).toBe(before + 1);
+      expect(posts).toBe(1);
+    });
+
+    it("刷新看看那次读也失败：说没刷新成，再点创建不会再发 POST", async () => {
+      await submitTimedOut({ baseline: false });
+      readsFail = true;
+      fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("project-create-timeout").textContent,
+        ).toMatch(/couldn't refresh/i),
+      );
+      expect(screen.queryByText(/not found yet/i)).toBeNull();
+      fireEvent.click(screen.getByTestId("project-create-submit"));
+      await waitFor(() => expect(reads()).toBeGreaterThan(2));
+      expect(posts).toBe(1);
+    });
   });
 });
