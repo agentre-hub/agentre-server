@@ -632,6 +632,33 @@ func TestSnapshot_GivenBackends_ThenCarriesOnlyCallersFullNestedConfig(t *testin
 	assert.Equal(t, "https://hermes.example.com", got.Backends[0].Config.HermesURL)
 }
 
+// Given 这台机器上的一个后端绑了供应商与固定模型 When 取快照 Then 条目带上这两个键：控制台 /
+// agrctl 派发只带 {type, sync_id}，agentred 只能从快照知道「跟随后端配置」要跑哪家、哪个模型。
+// 没绑的后端两键缺席（= CLI 自身登录态），HTTP 契约样本因此不变。
+func TestSnapshot_GivenABackendBoundToAFixedModel_ThenCarriesItsProviderAndModelKeys(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
+		sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentBackend,
+	}).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-cc", AgentredFingerprint: "fp-1",
+			Payload: `{"type":"claudecode","name":"cc-verify","provider_key":"relay-anthropic","model_key":"2660e973","config":{}}`},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-login", AgentredFingerprint: "fp-1",
+			Payload: `{"type":"claudecode","name":"login","config":{}}`},
+	}, nil)
+
+	got, err := New().Snapshot(context.Background(), 7, "fp-1")
+	require.NoError(t, err)
+	require.Len(t, got.Backends, 2)
+	assert.Equal(t, "relay-anthropic", got.Backends[0].ProviderKey)
+	assert.Equal(t, "2660e973", got.Backends[0].ModelKey)
+
+	wire, err := json.Marshal(got.Backends[1])
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"backend_sync_id":"b-login","config":{}}`, string(wire))
+}
+
 // 引擎拒绝原因要有稳定业务码：控制台据此既不把本机路径误报成普通表单错误，
 // 也不让将来改文案影响调用方。
 func TestUpdateProvider_GivenUnknownKey_ThenReturnsTheDedicatedProviderNotFoundCode(t *testing.T) {

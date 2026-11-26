@@ -125,8 +125,13 @@ type CLIOverlaySnapshot struct {
 // DTO（见 internal/api/engine 的 guard_test.go）。形状对应 agentre daemon 那份
 // snapshotBackendConfig：字段名逐字一致，两端共用一个 config 键表。
 type BackendSnapshot struct {
-	BackendSyncID string                      `json:"backend_sync_id"`
-	Config        syncwire.AgentBackendConfig `json:"config"`
+	BackendSyncID string `json:"backend_sync_id"`
+	// ProviderKey / ModelKey 是这条后端绑定的供应商与固定模型（缺席 = CLI 自身登录态 /
+	// 跟随供应商默认模型）。控制台与 agrctl 的派发只带 {type, sync_id}，设备上「跟随后端
+	// 配置」的一轮要跑哪家、哪个模型只能从这里知道。
+	ProviderKey string                      `json:"provider_key,omitempty"`
+	ModelKey    string                      `json:"model_key,omitempty"`
+	Config      syncwire.AgentBackendConfig `json:"config"`
 }
 
 type SnapshotView struct {
@@ -546,7 +551,9 @@ func (s *engineSvc) Snapshot(ctx context.Context, userID int64, fingerprint stri
 				if err := json.Unmarshal(doc.config(), &config); err != nil {
 					continue
 				}
-				out.Backends = append(out.Backends, BackendSnapshot{BackendSyncID: row.SyncID, Config: config})
+				out.Backends = append(out.Backends, BackendSnapshot{
+					BackendSyncID: row.SyncID, ProviderKey: doc.str("provider_key"), ModelKey: doc.str("model_key"), Config: config,
+				})
 			}
 		}
 	}
