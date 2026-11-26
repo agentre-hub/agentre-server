@@ -659,6 +659,29 @@ func TestSnapshot_GivenABackendBoundToAFixedModel_ThenCarriesItsProviderAndModel
 	assert.JSONEq(t, `{"backend_sync_id":"b-login","config":{}}`, string(wire))
 }
 
+// Given 这台机器上的一个后端配了思考力度与透传环境变量 When 取快照 Then 条目带上这两个键：
+// 控制台 / agrctl 派发只带 {type, sync_id}，没有会话级覆盖时这一轮要按后端自己的力度与环境跑，
+// agentred 只能从快照知道它们。
+func TestSnapshot_GivenABackendWithEffortAndEnv_ThenCarriesThem(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
+		sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentBackend,
+	}).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-cc", AgentredFingerprint: "fp-1",
+			Payload: `{"type":"claudecode","name":"cc","reasoning_effort":"high","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\"}","config":{}}`},
+	}, nil)
+
+	got, err := New().Snapshot(context.Background(), 7, "fp-1")
+	require.NoError(t, err)
+	require.Len(t, got.Backends, 1)
+	wire, err := json.Marshal(got.Backends[0])
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"backend_sync_id":"b-cc","reasoning_effort":"high",`+
+		`"env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\"}","config":{}}`, string(wire))
+}
+
 // 引擎拒绝原因要有稳定业务码：控制台据此既不把本机路径误报成普通表单错误，
 // 也不让将来改文案影响调用方。
 func TestUpdateProvider_GivenUnknownKey_ThenReturnsTheDedicatedProviderNotFoundCode(t *testing.T) {
