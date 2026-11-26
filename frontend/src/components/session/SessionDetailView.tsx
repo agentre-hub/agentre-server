@@ -66,6 +66,7 @@ import {
 } from "@/components/session/useSessionTargetDevice";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useRelayChannel } from "@/hooks/use-relay";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import {
   TranscriptSessionId,
   appendFrames,
@@ -339,6 +340,14 @@ export default function SessionDetailView({
    * 与 Agent 名同一种取法：解不出就不摆那一维，不拿标识本身顶上。
    */
   const [projects, setProjects] = useState<ProjectNode[]>([]);
+  /**
+   * 两份名单各自最近一次读失败的原值（成功即清）。只给恢复信号看：网络回来、回前台、
+   * 通道重连时失败的那份自己再取一次（规格 2026-11-25 K3），名字随之补上。
+   */
+  const [agentsError, setAgentsError] = useState<unknown>(null);
+  const [projectsError, setProjectsError] = useState<unknown>(null);
+  /** 重取靠它换依赖：effect 只在回调里写状态。 */
+  const [rosterRound, setRosterRound] = useState({ agents: 0, projects: 0 });
   const { backends: engineBackends, catalog: pickerCatalog } =
     useEngineCatalog();
   const [permissionMode, setPermissionMode] = useState("");
@@ -926,24 +935,49 @@ export default function SessionDetailView({
   // Agent 清单（头部要「是哪个 Agent 在跑」）。锦上添花：取不到就退回状态文字，
   // 不阻塞详情渲染，也不伪造名字。与对话页同一屏，走共享名单（`@/lib/rosterFetch`），
   // 项目树同理。
-  useAliveEffect((alive) => {
-    agentRoster
-      .get<WorkspaceAgent>()
-      .then((got) => alive() && setAgents(got))
-      .catch(() => {})
-      // 取不到也算问过：转录抬头不能为了一次失败永远吊着不写名字。
-      .finally(() => alive() && setAgentsSettled(true));
-  }, []);
+  useAliveEffect(
+    (alive) => {
+      agentRoster
+        .get<WorkspaceAgent>()
+        .then((got) => {
+          if (!alive()) return;
+          setAgents(got);
+          setAgentsError(null);
+        })
+        .catch((e: unknown) => {
+          if (alive()) setAgentsError(e);
+        })
+        // 取不到也算问过：转录抬头不能为了一次失败永远吊着不写名字。
+        .finally(() => alive() && setAgentsSettled(true));
+    },
+    [rosterRound.agents],
+  );
 
   // 项目树（头部要「这条对话在动哪个项目」）。同样是锦上添花：取不到就少一维，
   // 不阻塞详情渲染。这里不设 settled 那一格 —— 项目名解不开时整段不摆，没有
   // 「先摆个中性的、等一下换掉」这种中间态要区分。
-  useAliveEffect((alive) => {
-    projectRoster
-      .get()
-      .then((got) => alive() && setProjects(got))
-      .catch(() => {});
-  }, []);
+  useAliveEffect(
+    (alive) => {
+      projectRoster
+        .get()
+        .then((got) => {
+          if (!alive()) return;
+          setProjects(got);
+          setProjectsError(null);
+        })
+        .catch((e: unknown) => {
+          if (alive()) setProjectsError(e);
+        });
+    },
+    [rosterRound.projects],
+  );
+  // 失败不进共享名单的缓存（`@/lib/rosterFetch`），重跑一遍 get 就是一次新请求。
+  useRetryOnRecovery(agentsError, () =>
+    setRosterRound((r) => ({ ...r, agents: r.agents + 1 })),
+  );
+  useRetryOnRecovery(projectsError, () =>
+    setRosterRound((r) => ({ ...r, projects: r.projects + 1 })),
+  );
 
   /**
    * 问执行端「这个后端支持哪几档权限模式」。

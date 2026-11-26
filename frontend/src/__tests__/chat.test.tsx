@@ -3498,6 +3498,78 @@ describe("对话页：索引取数失败", () => {
     expect(within(banner).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  // 规格 2026-11-25 K3：网络回来（online）、回到前台时，失败的列表自己再取一次。
+  it("网络恢复：失败的列表自动重取一次，成功即撤掉横幅", async () => {
+    stubFailingIndex();
+    renderChat();
+
+    await screen.findByTestId("index-load-error");
+    const before = indexRequests.length;
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("index-load-error")).toBeNull();
+    });
+    expect(indexRequests.length).toBeGreaterThan(before);
+  });
+
+  it("列表没失败：网络恢复不多取一次", async () => {
+    stubApi({ mirror: [mirrored()] });
+    renderChat();
+    await screen.findByText("重构登录页");
+    await waitFor(() => expect(indexRequests.length).toBeGreaterThan(0));
+    const before = indexRequests.length;
+    const devicesBefore = mockedApi.mock.calls.filter(
+      (c) => c[0] === "/v1/devices",
+    ).length;
+
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(indexRequests.length).toBe(before);
+    expect(
+      mockedApi.mock.calls.filter((c) => c[0] === "/v1/devices").length,
+    ).toBe(devicesBefore);
+  });
+
+  it("设备 / Agent 名单读失败：网络恢复后自动重读一次", async () => {
+    let rostersFail = true;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") {
+        if (rostersFail) throw new Error("offline");
+        return { devices: [agentred] };
+      }
+      if (path === "/v1/workspace/agents") return { agents };
+      if (path.startsWith("/v1/workspace/projects")) return { projects: [] };
+      if (path.startsWith("/v1/agent-sessions?")) {
+        indexRequests.push(new URLSearchParams(path.split("?")[1] ?? ""));
+        return { total: 0, groups: [], unread: { total: 0 } };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    renderChat();
+    const deviceReads = () =>
+      mockedApi.mock.calls.filter((c) => c[0] === "/v1/devices").length;
+    await waitFor(() => expect(deviceReads()).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const before = deviceReads();
+
+    rostersFail = false;
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    await waitFor(() => expect(deviceReads()).toBeGreaterThan(before));
+  });
+
   it("带一个重试,按下去真的重新取一次", async () => {
     stubFailingIndex();
     renderChat();

@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
@@ -457,6 +458,11 @@ export function useSessionIndex({
   // 新控件会短暂配上旧行，A→B→A 也可能被 B 留下的布尔状态永久卡住。
   const rangePending = appliedRangeKey !== rangeKey;
   const visibleLoadError = loadErrorRangeKey === rangeKey ? loadError : null;
+  // 网络恢复 / 回前台 / 通道重连时，取不出来的这一范围自己再取一次（规格 2026-11-25
+  // K3）。已有一轮在飞就让它答：它答完会清掉（或换上）这条失败。
+  useRetryOnRecovery(visibleLoadError, () => {
+    if (!roundInFlightRef.current) refetch();
+  });
   // 切回本页看过的组合：这一遍落地之前先摆上一次的结果（决策 6）。机器轴不用它，
   // 那一档的行等这一遍的镜像落地后才与机器快照对账，行为保持原样。
   const cached =

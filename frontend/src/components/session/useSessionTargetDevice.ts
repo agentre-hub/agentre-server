@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import { ApiError } from "@/lib/api";
 import { deviceRoster, fetchDevices, type DeviceItem } from "@/lib/devices";
 
@@ -112,6 +113,10 @@ export function useSessionTargetDevice(did: number): SessionTargetDevice {
     },
     [did, round],
   );
+
+  // 网络恢复 / 回前台 / 通道重连时，读失败的名单自己再取一次（规格 2026-11-25 K3）：
+  // 此前横幅一直挂到用户点「重试」或整页刷新。
+  useRetryOnRecovery(deviceError, retryDevice);
 
   return {
     retryDevice,

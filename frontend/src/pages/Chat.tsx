@@ -46,6 +46,7 @@ import type {
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { backDismissLayerOf, useBackDismiss } from "@/hooks/use-back-dismiss";
 import { useMe } from "@/hooks/use-me";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import {
   deviceDisplayName,
   deviceRoster,
@@ -668,29 +669,34 @@ export default function Chat() {
    * 设备 hook 同一屏上也在要，共用一个在飞请求、10 秒内复用。信号到来时
    * use-account-channel 先作废再喊这里，所以信号路上直接 get 拿到的就是新的。
    */
-  useAliveEffect((alive) => {
-    Promise.all([
-      deviceRoster.get(),
-      agentRoster.get<NewConvAgent & { department_name?: string }>(),
-    ])
-      .then(([d, a]) => {
-        if (!alive()) return;
-        rostersLandedRef.current.agents = true;
-        applyDevices(d);
-        setAgents(a);
-        setAgentsLoadError(null);
-      })
-      .catch((e: unknown) => {
-        if (!alive()) return;
-        setRostersFailed(true);
-        setAgentsLoadError(e);
-        sessionIndex.setLoadError(e);
-      })
-      // 取不到也算问过：挑 Agent 那一屏不能为了一次失败永远转下去。
-      .finally(() => {
-        if (alive()) setAgentsSettled(true);
-      });
-  }, []);
+  /** 名单重读靠它换依赖（恢复信号，见下面的 useRetryOnRecovery）。 */
+  const [rosterRound, setRosterRound] = useState(0);
+  useAliveEffect(
+    (alive) => {
+      Promise.all([
+        deviceRoster.get(),
+        agentRoster.get<NewConvAgent & { department_name?: string }>(),
+      ])
+        .then(([d, a]) => {
+          if (!alive()) return;
+          rostersLandedRef.current.agents = true;
+          applyDevices(d);
+          setAgents(a);
+          setAgentsLoadError(null);
+        })
+        .catch((e: unknown) => {
+          if (!alive()) return;
+          setRostersFailed(true);
+          setAgentsLoadError(e);
+          sessionIndex.setLoadError(e);
+        })
+        // 取不到也算问过：挑 Agent 那一屏不能为了一次失败永远转下去。
+        .finally(() => {
+          if (alive()) setAgentsSettled(true);
+        });
+    },
+    [rosterRound],
+  );
 
   useAccountChannel([AccountChannelDevicePresence], () => {
     deviceRoster
@@ -736,6 +742,16 @@ export default function Chat() {
     projectRoster.invalidate();
     loadProjects();
   }, [loadProjects]);
+  /*
+    网络恢复 / 回前台 / 通道重连时，读失败的名单自己再读一次（规格 2026-11-25 K3）：
+    此前设备与 Agent 名单失败之后只有设备上下线的信号能把它救回来，行上的 Agent 名
+    一直缺着。失败不进共享名单的缓存，重跑即新请求；读成了的那份 10 秒内照旧复用。
+    原值在 agentsLoadError 上（与 rostersFailed 同一处写），401 据它不重试。
+  */
+  useRetryOnRecovery(agentsLoadError || rostersFailed, () =>
+    setRosterRound((n) => n + 1),
+  );
+  useRetryOnRecovery(projectsLoadError, reloadProjects);
 
   // 同步版本推进：行上的 Agent 名与项目轴的组头都来自 sync_objects。放在这里而不是
   // 跟另外两条信号挤在一起，只因为它要用到上面这个 reloadProjects。
