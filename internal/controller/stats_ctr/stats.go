@@ -33,19 +33,12 @@ func (s *Stats) Overview(c *gin.Context, req *api.OverviewRequest) (*api.Overvie
 	if err != nil {
 		return nil, err
 	}
-	devices, err := s.listDevices(c)
+	devices, err := s.listMachines(c)
 	if err != nil {
 		return nil, err
 	}
-	// 「设备在线 n/m」只数能跑会话的机器（desktop / agentred）；cli 是 agrctl 对端，
-	// 不连中继，既不算在线也不算台数。
-	runners := make([]device_svc.DeviceView, 0, len(devices))
 	online := 0
 	for _, d := range devices {
-		if !runsSessions(d) {
-			continue
-		}
-		runners = append(runners, d)
 		if d.Online {
 			online++
 		}
@@ -62,7 +55,7 @@ func (s *Stats) Overview(c *gin.Context, req *api.OverviewRequest) (*api.Overvie
 			ActiveDays:         view.Summary.ActiveDays,
 			WindowDays:         view.Summary.WindowDays,
 			DevicesOnline:      online,
-			DevicesTotal:       len(runners),
+			DevicesTotal:       len(devices),
 		},
 		Heatmap:  heatmap(view.Heatmap),
 		Agents:   agents(view.Agents),
@@ -103,7 +96,7 @@ func (s *Stats) settings(c *gin.Context) (*api.SettingsResponse, error) {
 		SavedConversations:   view.SavedConversations,
 		Today:                view.Today,
 	}
-	devices, err := s.listDevices(c)
+	devices, err := s.listMachines(c)
 	if err != nil {
 		return nil, err
 	}
@@ -133,12 +126,26 @@ func (s *Stats) settings(c *gin.Context) (*api.SettingsResponse, error) {
 	return resp, nil
 }
 
+// listMachines 是账号下能跑会话的机器（desktop / agentred）。「设备在线 n/m」与隐私页
+// 的逐台上报进度都只说机器：cli 是 agrctl 对端，不连中继、不上报活跃统计，算进去就成了
+// 一台永远离线的设备。
+//
 // 返回服务层的 view 而不是 api 的 DTO：设备是设备域的事实，这里只读它需要的几列
 // （ID / Name / Online / Fingerprint），wire 形状由各自的响应类型自己声明。
-func (s *Stats) listDevices(c *gin.Context) ([]device_svc.DeviceView, error) {
-	return device_svc.Default().ListUserDevices(
+func (s *Stats) listMachines(c *gin.Context) ([]device_svc.DeviceView, error) {
+	devices, err := device_svc.Default().ListUserDevices(
 		c.Request.Context(), ginctx.UserID(c), ginctx.DeviceID(c),
 	)
+	if err != nil {
+		return nil, err
+	}
+	machines := make([]device_svc.DeviceView, 0, len(devices))
+	for _, d := range devices {
+		if runsSessions(d) {
+			machines = append(machines, d)
+		}
+	}
+	return machines, nil
 }
 
 // heatmap 及下面四个映射一律 make(..., 0, len)：nil 切片在 JSON 里是 null，而前端对

@@ -483,6 +483,23 @@ describe("本站的项目 ports", () => {
       ]);
     });
 
+    it("agrctl 的 cli 设备不是机器：不进配路径的机器清单", async () => {
+      restMocks.fetchDevices.mockResolvedValue([
+        device({}),
+        device({
+          id: 3,
+          name: "mac.local",
+          kind: "cli",
+          fingerprint: "fp-cli",
+          online: false,
+        }),
+      ]);
+      const ports = createProjectCreatePorts(createProjectFsPort());
+      await expect(ports.machines!.list()).resolves.toEqual([
+        { id: "fp-1", name: "build-box", kind: "agentred", online: true },
+      ]);
+    });
+
     it("写往哪去只由那台机器是哪一类决定：agentred 走 REST（离线也配得了）", async () => {
       restMocks.setProjectLocation.mockResolvedValue({});
       const ports = createProjectCreatePorts(createProjectFsPort());

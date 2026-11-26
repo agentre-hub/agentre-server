@@ -355,6 +355,28 @@ func TestSettings_DeviceReportedThroughOmittedWhenNeverReported(t *testing.T) {
 	assert.Contains(t, body, `"saved_conversations":128`)
 }
 
+// agrctl 的 cli 设备不上报活跃统计、也没有在线态：逐台进度里不列它，否则隐私页把它
+// 画成一台「离线」的机器。只剩 cli 时整段缺席，与一台设备都没有同一支。
+func TestSettings_CLIDevicesAreNotListedAsReportingMachines(t *testing.T) {
+	act := settingsStub()
+	dev := &stubDevices{items: []device_svc.DeviceView{
+		device(2, "mac-mini", "fp-a", true),
+		kindDevice(3, device_entity.KindCLI, false),
+	}}
+	server, sid, csrf := serve(t, act, dev)
+
+	body := data(t, do(t, http.MethodGet, server.URL+"/v1/stats/settings", sid, csrf, ""))
+	assert.Contains(t, body, `"device_id":2`)
+	assert.NotContains(t, body, `"device_id":3`)
+	assert.Equal(t, []string{"fp-a"}, act.reportedFPs)
+
+	only := settingsStub()
+	server, sid, csrf = serve(t, only, &stubDevices{items: []device_svc.DeviceView{kindDevice(3, device_entity.KindCLI, false)}})
+	body = data(t, do(t, http.MethodGet, server.URL+"/v1/stats/settings", sid, csrf, ""))
+	assert.NotContains(t, body, `"devices"`)
+	assert.Equal(t, 0, only.reportedCall)
+}
+
 // 一台设备都没有时 devices 整段缺席：前端据此**不画**这一段，而不是摆一排「未知」。
 func TestSettings_OmitsDevicesSectionWhenThereAreNone(t *testing.T) {
 	act := settingsStub()

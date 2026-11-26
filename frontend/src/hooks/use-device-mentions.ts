@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { useAliveEffect } from "@/hooks/use-alive-effect";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { fetchDevices, runsSessions, type DeviceItem } from "@/lib/devices";
 
 /** 交给共享包 `buildMentionSources` 第三个入参的形状。 */
 export interface DeviceMentionItem {
@@ -18,13 +18,14 @@ export interface DeviceMentionItem {
  * `fp=""` 的空壳，不如它不在菜单里。
  *
  * 这一端没有「本机」那一档：浏览器不是一台机器（桌面端才有，见那边的
- * `buildDeviceMentionItems`）。
+ * `buildDeviceMentionItems`）。agrctl 的 cli 设备也不列：它是调用方而不是机器，
+ * 没有在线态可画。
  */
 export function toDeviceMentionItems(
   devices: DeviceItem[],
 ): DeviceMentionItem[] {
   return devices
-    .filter((d) => d.fingerprint)
+    .filter((d) => d.fingerprint && runsSessions(d))
     .map((d) => ({ fp: d.fingerprint, name: d.name, online: d.online }));
 }
 
