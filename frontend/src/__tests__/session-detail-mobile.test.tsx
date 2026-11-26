@@ -49,7 +49,7 @@ import { backDismissLayerOf } from "@/hooks/use-back-dismiss";
 import { FILE_PREVIEW_LAYER_STATE_KEY } from "@/components/session/useFilePreviewTabs";
 import { toTranscriptFrame } from "@/components/session/transcriptFrame";
 import { bindAccount } from "@/lib/localStore";
-import { RelayError } from "@/lib/relayClient";
+import { relayRequestTimeoutError } from "@/lib/relayClient";
 import { transcriptCache } from "@/lib/transcriptCache";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
@@ -731,7 +731,7 @@ describe("移动端会话详情：底部停靠区", () => {
     fakeClient.request.mockImplementation(async (method: unknown, ...rest) => {
       if (method === rpcMethods.runtimeSubmitToolPermission) {
         submits += 1;
-        if (submits === 1) throw new RelayError(-1, "relay: 请求超时", null);
+        if (submits === 1) throw relayRequestTimeoutError();
         return {};
       }
       return (base as (...a: unknown[]) => unknown)(method, ...rest);

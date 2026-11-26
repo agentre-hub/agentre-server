@@ -1126,8 +1126,17 @@ package's one-line "network timed out, may already be created" with a **Refresh*
 button calls the host's recheck (`createProjectCreatePorts().recheckCreate` for projects,
 `useBoard().recheckLabelCreate` for labels), which re-reads the full list and looks for a
 "not seen before submit, same name (and parent)" entry. Found: treated as created (the project
-dialog calls `onCreated(id)` and closes; the label panel clears its input). Not found, or the
-re-read failing: say so and allow resubmitting. No raw English error text reaches the screen.
+dialog calls `onCreated(id)` and closes; the label panel clears its input). Not found: say so and
+allow resubmitting. The re-read failing is still "unknown": the timeout line and Refresh stay,
+the line says the refresh failed, and pressing create again re-runs the check instead of
+creating a second one. No raw English error text reaches the screen.
+
+The "before submit" baseline must be a read that has already been answered: a read sent
+alongside the POST has no ordering guarantee on the server (several replicas, separate
+connections) and can include the new row, which would then read as "already there". The board
+starts its unfiltered baseline read when the new-task form opens (`useBoard().prepareCreate`)
+and the POST waits for it; after a "not found" recheck, that recheck's full read is the next
+baseline.
 
 ### PWA and the offline shell
 

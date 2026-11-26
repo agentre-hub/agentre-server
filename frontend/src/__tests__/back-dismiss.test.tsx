@@ -171,6 +171,24 @@ describe("useBackDismiss", () => {
     expect(path()).toBe("/prev");
   });
 
+  it("手机：两层嵌套开着时页面 replace 了地址，两层都留着，返回由内向外逐层关，历史不多一格", () => {
+    setViewport(true);
+    renderPage(["a", "b"]);
+    fireEvent.click(screen.getByText("open-a"));
+    fireEvent.click(screen.getByText("open-b"));
+    fireEvent.click(screen.getByText("replace-self"));
+    expect(screen.getByTestId("overlay-a")).toBeTruthy();
+    expect(screen.getByTestId("overlay-b")).toBeTruthy();
+    back();
+    expect(screen.queryByTestId("overlay-b")).toBeNull();
+    expect(screen.getByTestId("overlay-a")).toBeTruthy();
+    back();
+    expect(screen.queryByTestId("overlay-a")).toBeNull();
+    expect(path()).toBe("/page");
+    back();
+    expect(path()).toBe("/prev");
+  });
+
   it("桌面：不碰历史，开关浮层都不产生导航", () => {
     setViewport(false);
     renderPage();

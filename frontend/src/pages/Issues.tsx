@@ -232,6 +232,12 @@ export default function Issues() {
     [board],
   );
 
+  // 打开新建表单：同时去读那次新建的「提交前」基线（见 useBoard 的 saveTask）。
+  const openCreate = (value: TaskFormValue) => {
+    board.prepareCreate();
+    setEditing(value);
+  };
+
   // 新建超时后的「刷新看看」：认出刚提交的那条就换成编辑它；刷新失败说一声。
   const refreshCreated = React.useCallback(async (): Promise<
     "found" | "notFound" | "failed"
@@ -293,7 +299,7 @@ export default function Issues() {
                   edge="end"
                   aria-label={t("issues.actions.newTask")}
                   onClick={() =>
-                    setEditing(initialTaskFormValue({ scope: query.scope }))
+                    openCreate(initialTaskFormValue({ scope: query.scope }))
                   }
                 >
                   <Plus className="size-5" aria-hidden="true" />
@@ -345,7 +351,7 @@ export default function Issues() {
                 size="sm"
                 className="h-[30px] max-[860px]:ml-auto"
                 onClick={() =>
-                  setEditing(initialTaskFormValue({ scope: query.scope }))
+                  openCreate(initialTaskFormValue({ scope: query.scope }))
                 }
               >
                 <Plus data-icon="inline-start" aria-hidden="true" />
@@ -399,7 +405,7 @@ export default function Issues() {
               onDelete: (taskId) => void board.deleteTask(taskId),
               onMove: (taskId, stage) => void board.moveTask(taskId, stage, 0),
               onCreateTask: (stage) =>
-                setEditing(initialTaskFormValue({ stage, scope: query.scope })),
+                openCreate(initialTaskFormValue({ stage, scope: query.scope })),
               onClearFilters: () => setQuery(EMPTY_BOARD_QUERY),
             }}
           />

@@ -352,6 +352,74 @@ describe("看板有筛选时的超时查找（F5）", () => {
   });
 });
 
+/**
+ * 并发的两个请求在服务端没有先后保证（多副本、连接池里各走各的）：「提交前」的基线读若
+ * 与 POST 同时发出，它完全可能在 POST 落库之后才被处理——那份「提交前」里已经有了刚建的
+ * 那条，刷新时它就成了「早就在的」，界面说没找到、允许再提交，再提交就建出第二条。
+ */
+describe("基线读不能晚于 POST 被处理（F5）", () => {
+  /** POST 落库（服务端已经有了这条）然后才超时；此后的读都看得见它。 */
+  const commitThenTimeout = () => {
+    const base = mockedApi.getMockImplementation()!;
+    let committed: () => void = () => {};
+    const postCommitted = new Promise<void>((resolve) => {
+      committed = resolve;
+    });
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/issues" && init?.method === "POST") {
+        serverIssues = [issue("iss-new", "Phone task"), ...serverIssues];
+        committed();
+        throw new ApiTimeoutError(path, 15_000);
+      }
+      // 与 POST 同时在飞的全量读：服务端在 POST 落库之后才处理它。
+      if (path === "/v1/workspace/issues" && !init?.method) {
+        // 等 POST 落库；POST 一直没来（它在等这次读）就在 50ms 后照常答。
+        await Promise.race([
+          postCommitted,
+          new Promise<void>((r) => setTimeout(r, 50)),
+        ]);
+        return boardOf(path);
+      }
+      return base(path, init);
+    });
+  };
+
+  it.each([
+    ["看板没筛选", ""],
+    ["看板有关键词筛选", "Old"],
+  ])("%s：刷新认得出刚建的那条，不允许再提交", async (_name, keyword) => {
+    await renderBoard(false);
+    if (keyword) {
+      fireEvent.change(screen.getByPlaceholderText("Search tasks…"), {
+        target: { value: keyword },
+      });
+      await waitFor(() =>
+        expect(
+          mockedApi.mock.calls.some(([p]) =>
+            String(p).includes(`keyword=${keyword}`),
+          ),
+        ).toBe(true),
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("issue-board").textContent).toContain(
+          "Old one",
+        ),
+      );
+    }
+    commitThenTimeout();
+    await submitUntilTimeout("Phone task");
+
+    fireEvent.click(refreshButton());
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("task-form-breadcrumb").textContent,
+      ).not.toMatch(/New task/),
+    );
+    expect(creates()).toHaveLength(1);
+  });
+});
+
 describe("新建标签超时（F5、W13）", () => {
   const labelPosts = () =>
     mockedApi.mock.calls.filter(

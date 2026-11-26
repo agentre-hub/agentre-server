@@ -81,6 +81,8 @@ export interface UseBoardResult {
    * 认出返回它摊回表单的值，认不出返回 `null`；重读本身失败则抛出，由调用方说出口。
    */
   findSubmitted: () => Promise<TaskFormValue | null>;
+  /** 打开新建表单时调：先去读「提交前」的全量基线，提交时 POST 等它答完再发。 */
+  prepareCreate: () => void;
   deleteTask: (id: number) => Promise<void>;
   mutateLabel: (mutation: LabelMutation) => Promise<void>;
   /** 新建标签超时后的「刷新看看」：认出那次新建返回 true。 */
@@ -110,12 +112,19 @@ export function useBoard(
   // 要在 effect 里同步拍下去的 state：查询变了而结果还没换，就是在途。
   const [loadedKey, setLoadedKey] = React.useState<string | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
-  // 板上已有的任务标识，随每次成功的读更新；新建提交时抓一份当「提交前」的基线。
+  // 板上已有的任务标识，随每次成功的读更新；全量基线读不到时退回它。
   const knownIdsRef = React.useRef<ReadonlySet<string>>(new Set());
+  /**
+   * 下一次新建的「提交前」基线：**不带筛选**的全量标识，打开新建表单时就去读
+   * （`prepareCreate`），提交时它多半早已答完。见 `saveTask` 里的说明。
+   */
+  const createBaselineRef = React.useRef<Promise<ReadonlySet<string>> | null>(
+    null,
+  );
   const lastCreateRef = React.useRef<{
     fields: IssueFields;
     /** 提交前**不带筛选**的全量标识（读不到则退回当前板上那份）。 */
-    knownBefore: Promise<ReadonlySet<string>>;
+    knownBefore: ReadonlySet<string>;
   } | null>(null);
   /** 新建标签超时：那次提交的基线，「刷新看看」据此认「提交前没见过」的新标签。 */
   const timedOutLabelRef = React.useRef<ReadonlySet<string> | null>(null);
@@ -212,27 +221,47 @@ export function useBoard(
     [ids, reload],
   );
 
+  /** 读一份不带筛选的全量标识当新建基线；读不到退回板上那份。 */
+  const readCreateBaseline = React.useCallback(
+    (): Promise<ReadonlySet<string>> =>
+      fetchBoard("").then(
+        (all) => new Set((all?.issues ?? []).map((row) => row.sync_id)),
+        () => knownIdsRef.current,
+      ),
+    [],
+  );
+
+  const prepareCreate = React.useCallback(() => {
+    createBaselineRef.current = readCreateBaseline();
+  }, [readCreateBaseline]);
+
   const saveTask = React.useCallback(
     async (value: TaskFormValue) => {
       const fields = toIssueFields(value, ids);
       if (value.id) {
         await updateIssue(ids.syncIdOf(value.id), fields);
       } else {
-        // 基线不能用当前板：板上有筛选时，被筛掉的同名旧任务会被误认成刚建的。
-        const onBoard = knownIdsRef.current;
-        lastCreateRef.current = {
-          fields,
-          knownBefore: fetchBoard("")
-            .then(
-              (all) => new Set((all?.issues ?? []).map((row) => row.sync_id)),
-            )
-            .catch(() => onBoard),
-        };
+        /*
+          「提交前」的基线必须是一次**答完了**的读：与 POST 同时发出的读在服务端没有先后
+          保证（多副本、连接各走各的），它若在 POST 落库之后才被处理，刚建的那条就进了
+          基线，刷新时被当成早就在的，界面允许再提交——建出第二条。
+
+          所以 POST 等基线答完再发。基线在打开新建表单时就已经去读了，用户填标题的那段
+          时间里它多半已经回来，POST 几乎不被拖慢。基线不能用当前板：板上有筛选（含已完成
+          保留期）时，被筛掉的同名旧任务会被误认成刚建的；读不到才退回板上那份。
+        */
+        const baseline = createBaselineRef.current ?? readCreateBaseline();
+        createBaselineRef.current = baseline;
+        const knownBefore = await baseline;
+        lastCreateRef.current = { fields, knownBefore };
         await createIssue(fields);
+        // 建成了：这份基线已经过时。没建成（被拒）时它仍是「提交前」，留给再提交；
+        // 超时后的「刷新看看」会换上那次读到的全量。
+        createBaselineRef.current = null;
       }
       await reload();
     },
-    [ids, reload],
+    [ids, readCreateBaseline, reload],
   );
 
   const findSubmitted = React.useCallback(async () => {
@@ -249,11 +278,15 @@ export function useBoard(
         ),
       ]);
       if (!all.board) throw all.cause;
+      // 这一份全量读已经答完：认不出、用户再提交时，它就是那一次的「提交前」基线。
+      createBaselineRef.current = Promise.resolve(
+        new Set((all.board.issues ?? []).map((row) => row.sync_id)),
+      );
       if (!last) return null;
       const found = findSubmittedIssue(
         all.board.issues ?? [],
         last.fields,
-        await last.knownBefore,
+        last.knownBefore,
       );
       return found ? toTaskFormValue(found, ids) : null;
     } finally {
@@ -318,8 +351,8 @@ export function useBoard(
 
   /**
    * 「刷新看看」：重读全量名单（不带板子当前的筛选），认「提交前没见过 + 同名」的标签。
-   * 认出返回 true（并刷新看板）；确定没有返回 false；读失败或没有基线都说没找到，
-   * 让用户可以再提交。
+   * 认出返回 true（并刷新看板）；确定没有返回 false；没有基线（板子还没读回来过）认不
+   * 出「新的」，也说没找到。读失败原样抛：仍不知道建没建，由面板留着超时那一行。
    */
   const recheckLabelCreate = React.useCallback(
     async (name: string): Promise<boolean> => {
@@ -352,6 +385,7 @@ export function useBoard(
     moveTask,
     saveTask,
     findSubmitted,
+    prepareCreate,
     deleteTask,
     mutateLabel,
     recheckLabelCreate,

@@ -184,25 +184,38 @@ function TaskForm({
 
   /*
     有没有未保存的改动（F4）。表单状态在共享包的壳里、没有「脏了」的出口，这里读 DOM：
-    标题与描述直接比初值；属性那一排（阶段 / 项目 / 标签 / Agent / 机器 / 模型）靠它们的
-    可见文字——用户第一次碰它们之前（pointer / 键盘事件在捕获阶段先于它们的处理）记一
-    份基线，之后文字变了才算改过。没碰过就不比，异步到的后端清单改了 pill 文字也不会
-    误报。
+    标题与描述直接比初值；共享壳自己的那几颗 pill（阶段 / 项目 / 标签 / Agent）靠它们的
+    可见文字——用户第一次碰到 pill 行（pointer / 键盘事件在捕获阶段先于它们的处理）时记
+    一份基线，之后文字变了才算改过。只认 pill 行里的那一下：碰 ⋯ 或页面空白处不是改属性。
+
+    机器与模型两颗 pill 是这一层画的、值也在这一层（`exec`），直接比值，不读它们的字：
+    它们的字跟着异步到的后端清单与引擎目录变（「跟随」→ 机器名），那不是用户改的。
   */
   const rootRef = React.useRef<HTMLDivElement>(null);
   const pillsBaseline = React.useRef<string | null>(null);
-  const readPills = () =>
-    rootRef.current?.querySelector('[data-testid="task-form-pills"]')
-      ?.textContent ?? "";
+  const initialExec = React.useRef(exec);
+  const execRef = React.useRef(exec);
+  React.useLayoutEffect(() => {
+    execRef.current = exec;
+  });
+  const readPills = () => {
+    const row = rootRef.current?.querySelector(
+      '[data-testid="task-form-pills"]',
+    );
+    if (!row) return "";
+    const copy = row.cloneNode(true) as Element;
+    copy
+      .querySelectorAll(
+        '[data-testid="board-exec-target-pill"],[data-testid="board-model-pill"]',
+      )
+      .forEach((pill) => pill.remove());
+    return copy.textContent ?? "";
+  };
   const notePillsTouch = (event: React.SyntheticEvent) => {
     if (pillsBaseline.current !== null) return;
     const target = event.target as Element;
-    if (
-      target.closest?.(
-        '[data-testid="task-title"],[data-testid="task-description"],[data-testid="task-form-close"]',
-      )
-    )
-      return;
+    // 弹层画在 portal 里，但第一下一定落在 pill 行里的触发器上。
+    if (!target.closest?.('[data-testid="task-form-pills"]')) return;
     pillsBaseline.current = readPills();
   };
   React.useEffect(() => {
@@ -211,12 +224,17 @@ function TaskForm({
         rootRef.current?.querySelector<HTMLInputElement>(
           `[data-testid="${id}"]`,
         )?.value;
+      const before = initialExec.current;
+      const now = execRef.current;
       return (
         (field("task-title") ?? value.title) !== value.title ||
         (field("task-description") ?? value.description) !==
           value.description ||
         (pillsBaseline.current !== null &&
-          readPills() !== pillsBaseline.current)
+          (readPills() !== pillsBaseline.current ||
+            now.agentBackendSyncId !== before.agentBackendSyncId ||
+            now.llmProviderKey !== before.llmProviderKey ||
+            now.llmModelKey !== before.llmModelKey))
       );
     };
     const ref = dirtyRef;

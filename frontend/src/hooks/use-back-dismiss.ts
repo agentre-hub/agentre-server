@@ -25,15 +25,19 @@ interface Entry {
   deferred?: boolean;
   // 下面那一层关掉、把它的记号让给这一层：退到那一格（层数 = adopt）后认作自己的。
   adopt?: number;
-  // 页面 replace 了地址、正在把多出来的那一格收回去：记着要落到的地址。
-  collapse?: { to: Location; key: string };
+  // 页面 replace 了地址、正在把多出来的那一格收回去：记着要落到的地址。领头的那一层
+  // （层数最小）退回所有记号下面那一格、把新地址 replace 上去，再按原来的次序替每一层
+  // 压回记号（`stack`，含它自己）；其余各层只等着被它重新压上（`stack` 为空）。
+  collapse?: { to: Location; key: string; stack: EntryRef[] };
 }
+
+type EntryRef = { current: Entry | null };
 
 /**
  * 眼下各层的记号。反过来的次序也会发生：新的一层先压（Radix 菜单项的 onSelect 先单独
  * 提交），菜单在下一次提交才关——这时菜单的记号已被压在下面，直接退会把新的一层退掉。
  */
-const liveEntries = new Set<{ current: Entry | null }>();
+const liveEntries = new Set<EntryRef>();
 
 /** 当前这一条历史上记着的浮层层数；没有记号按 0 算。 */
 export function backDismissLayerOf(state: unknown): number {
@@ -154,14 +158,27 @@ export function useBackDismiss(open: boolean, close: () => void): void {
       return;
     }
     if (entry.collapse) {
-      if (layer === 0 && location.key !== entry.collapse.key) {
-        const to = entry.collapse.to;
+      const { to, key, stack } = entry.collapse;
+      if (stack.length > 0 && layer === 0 && location.key !== key) {
         entry.collapse = undefined;
         void navigate(
           { pathname: to.pathname, search: to.search, hash: to.hash },
           { replace: true, state: to.state },
         );
-        push(to);
+        // 由下往上替每一层压回记号，层数与 replace 之前一致。
+        let state: unknown = to.state;
+        for (const ref of stack) {
+          const level = backDismissLayerOf(state) + 1;
+          state = {
+            ...(typeof state === "object" ? state : null),
+            [BACK_DISMISS_STATE_KEY]: level,
+          };
+          ref.current = { level, landed: false, pathname: to.pathname };
+          void navigate(
+            { pathname: to.pathname, search: to.search, hash: to.hash },
+            { state },
+          );
+        }
       }
       return;
     }
@@ -172,9 +189,28 @@ export function useBackDismiss(open: boolean, close: () => void): void {
         navigationType === "REPLACE" &&
         location.pathname === entry.pathname
       ) {
-        entry.landed = false;
-        entry.collapse = { to: location, key: location.key };
-        void navigate(-1);
+        // 同一次 replace 也换掉了别的层的记号（嵌套开着）：只退一次、退到所有记号下面
+        // 那一格，由层数最小的那一层领头收回，否则每层各退一格、各压一条，历史就乱了。
+        const stack = [...liveEntries]
+          .filter(
+            (r) =>
+              r.current !== null &&
+              r.current.landed &&
+              !r.current.deferred &&
+              r.current.collapse === undefined &&
+              r.current.level > layer,
+          )
+          .sort((a, b) => a.current!.level - b.current!.level);
+        for (const r of stack) {
+          r.current!.landed = false;
+          r.current!.collapse = { to: location, key: location.key, stack: [] };
+        }
+        stack[0].current!.collapse = {
+          to: location,
+          key: location.key,
+          stack,
+        };
+        void navigate(-stack.length);
       } else {
         entryRef.current = null;
         closeRef.current();

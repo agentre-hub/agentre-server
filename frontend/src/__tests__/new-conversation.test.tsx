@@ -47,7 +47,7 @@ import {
 } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";
 import { ensureRelayTicket } from "@/lib/relayTicket";
-import { RelayError } from "@/lib/relayClient";
+import { RelayError, relayRequestTimeoutError } from "@/lib/relayClient";
 import { installClipboard, restoreClipboardEnv } from "@/test/clipboard";
 import { useRelayChannel } from "@/hooks/use-relay";
 import i18n from "@/i18n";
@@ -3434,9 +3434,7 @@ describe("新对话派发超时：可能已经开始了", () => {
     const actual =
       await vi.importActual<typeof import("@/lib/dispatch")>("@/lib/dispatch");
     const client = {
-      request: vi
-        .fn()
-        .mockRejectedValue(new RelayError(-1, "relay: 请求超时", null)),
+      request: vi.fn().mockRejectedValue(relayRequestTimeoutError()),
       close: vi.fn(),
     };
     await expect(
@@ -3455,7 +3453,7 @@ describe("新对话派发超时：可能已经开始了", () => {
     mockFetchPlan.mockResolvedValue(availablePlan);
     mockEnsureRelayTicket.mockResolvedValue(relayTicket);
     mockDispatch.mockRejectedValue(
-      new DispatchTimeoutError(new RelayError(-1, "relay: 请求超时", null)),
+      new DispatchTimeoutError(relayRequestTimeoutError()),
     );
     renderChat();
     await openDraft();

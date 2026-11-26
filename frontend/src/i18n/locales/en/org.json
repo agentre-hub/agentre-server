@@ -99,6 +99,7 @@
       "savedJustNow": "Saved · just now",
       "savedAt": "Saved · {{time}}",
       "saveFailed": "Save failed",
+      "saveFailedAfterLeave": "Your edit wasn't saved",
       "retry": "Retry"
     },
     "prompt": {

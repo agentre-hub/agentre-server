@@ -17,6 +17,7 @@ import { deviceRoster } from "@/lib/devices";
 import {
   accountStore,
   bindAccount,
+  LOCAL_ACCOUNT_CHANNEL,
   LOCAL_DB_NAME,
   readLocalIdentity,
   wipeBusinessData,
@@ -162,6 +163,60 @@ describe("wipeBusinessData", () => {
     await wipeBusinessData();
     await deviceRoster.get();
     expect(mockedApi).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * 多个标签页共用一份本机存储：一个标签页登出 / 401 / 换账号清空了本机，其余还开着的
+ * 标签页内存里仍绑着上一个账号——它们的实时帧、草稿、发件箱会把上一个账号的东西重新
+ * 写回来；别的标签页随后登进另一个账号时，cookie 是共用的，它们还会把新账号的数据记在
+ * 旧账号名下。所以清空要告诉其余标签页：它们立刻停写，并整页重新载入（重新走「读本地 →
+ * 核对身份」）。
+ */
+describe("别的标签页清空了本机", () => {
+  const originalLocation = window.location;
+  let reload: ReturnType<typeof vi.fn>;
+  let other: BroadcastChannel;
+  beforeEach(() => {
+    reload = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, reload },
+    });
+    other = new BroadcastChannel(LOCAL_ACCOUNT_CHANNEL);
+  });
+  afterEach(() => {
+    other.close();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+  });
+
+  it("这一页立刻停写并重新载入", async () => {
+    bindAccount(1);
+    other.postMessage("wiped");
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    await accountStore.put("draft", "session:c1", { text: "late" });
+    bindAccount(1);
+    expect(await accountStore.get("draft", "session:c1")).toBeUndefined();
+  });
+
+  it("还没绑定账号（登录页）：什么都不做", async () => {
+    other.postMessage("wiped");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("这一页清空时告诉别的标签页", async () => {
+    const heard = vi.fn();
+    other.onmessage = (event) => heard(event.data);
+    bindAccount(1);
+    await wipeBusinessData();
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledWith("wiped"));
+    // 自己发的不会回到自己身上。
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 

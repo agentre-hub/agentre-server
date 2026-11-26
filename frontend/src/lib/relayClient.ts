@@ -68,6 +68,19 @@ export class RelayError extends Error {
    * 断开 / 关闭共用，那几种**可能已送达**；只有带这个记号的才能对用户说「重发是干净的」。
    */
   notSent = false;
+
+  /**
+   * 等应答超时：帧已经交出去、一直没等到回执（可能已送达）。认它靠这个记号，不靠消息
+   * 文字——那句是给诊断看的，改一个字就会让各处的超时判定悄悄失效。
+   */
+  timedOut = false;
+}
+
+/** 造一个「等应答超时」的 RelayError，记号与码在一处定下。 */
+export function relayRequestTimeoutError(): RelayError {
+  const err = new RelayError(-1, "relay: 请求超时", null);
+  err.timedOut = true;
+  return err;
 }
 
 /** 造一个「没发出去」的 RelayError，记号与码在一处定下。 */
@@ -485,7 +498,7 @@ export class RelayClient {
         } catch {
           // 通道此刻就没了：取消无处可发，而这条请求照样要落定。
         }
-        reject(new RelayError(-1, "relay: 请求超时", null));
+        reject(relayRequestTimeoutError());
         // 连着两次等不到应答，连接据此判这条 socket 已死、换一条（E3）。
         this.connection.noteRequestTimeout?.();
       }, options.timeoutMs ?? RequestTimeoutMs);

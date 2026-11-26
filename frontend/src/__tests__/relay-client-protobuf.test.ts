@@ -15,6 +15,7 @@ import {
   RequestTimeoutMs,
   type RelayClientOptions,
 } from "@/lib/relayClient";
+import { isRelayRequestTimeout } from "@/lib/dispatch";
 import { RelayConnection } from "@/lib/relayConnection";
 import { unwrapEnvelope, wrapEnvelope } from "@agentre-hub/agentre-wire";
 import { machineTarget } from "@/lib/relayTarget";
@@ -1026,6 +1027,10 @@ describe("RelayClient 请求超时", () => {
     timeout!.fn();
 
     await expect(inflight).rejects.toMatchObject({ code: -1 });
+    // 各处（审批 / 派发）认「可能已送达的超时」认的是这个判据，不是消息文字。
+    expect(isRelayRequestTimeout(await inflight.catch((e: unknown) => e))).toBe(
+      true,
+    );
   });
 });
 

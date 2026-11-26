@@ -38,7 +38,8 @@ const MIRROR_MAX_PER_GROUP = "50";
 
 /**
  * 列表在本机存储里的类别名（规格 2026-11-25 决策 A1）：键是范围键，值是 `StoredRange`。
- * 每个看过的「范围 + 筛选 + 搜索词」各存一份第一页。
+ * 每个看过的「范围 + 筛选 + 搜索词」各存一份第一页；带搜索词的只留最近的若干份
+ * （`persistRange`）。
  */
 const STORE_KIND = "session-index";
 
@@ -630,7 +631,7 @@ export function useSessionIndex({
           );
           // 下一次冷启动先摆这一份（决策 A1）。机器轴的行来自机器快照，不落盘。
           if (axis !== "machine") {
-            void accountStore.put<StoredRange>(STORE_KIND, rangeKey, {
+            void persistRange(rangeKey, {
               groups,
               unreadTotal: unread.total ?? 0,
               accountTotal: account.total ?? 0,
@@ -1051,6 +1052,35 @@ export function useSessionIndex({
     deleting,
     confirmDelete,
   };
+}
+
+/** 带搜索词的范围在本机最多留这么多份（最近存的优先）。 */
+export const SEARCH_RANGES_KEPT = 20;
+
+/** 范围键（`轴|scope|搜索词|筛选`）里的搜索词；搜索词自己可能含 `|`，取中间那几段。 */
+function searchOfRangeKey(key: string): string {
+  return key.split("|").slice(2, -1).join("|");
+}
+
+/**
+ * 存一个范围的第一页（键见 `rangeKey`）。带搜索词的范围每停手一次就是一个新键：存完把
+ * 超出 `SEARCH_RANGES_KEPT` 的最老那几份删掉，本机存储不随搜索次数无限长下去。不带搜索
+ * 词的（范围 × 筛选，有限个）不在此列。
+ */
+export async function persistRange(
+  key: string,
+  value: StoredRange,
+): Promise<void> {
+  await accountStore.put<StoredRange>(STORE_KIND, key, value);
+  if (!searchOfRangeKey(key)) return;
+  const searched = (await accountStore.list<StoredRange>(STORE_KIND))
+    .filter((entry) => searchOfRangeKey(entry.key) !== "")
+    .sort((a, b) => (b.value.savedAt ?? 0) - (a.value.savedAt ?? 0));
+  await Promise.all(
+    searched
+      .slice(SEARCH_RANGES_KEPT)
+      .map((entry) => accountStore.delete(STORE_KIND, entry.key)),
+  );
 }
 
 /** 把一条删掉的对话从本机存储里每个范围的那一份里摘掉。 */

@@ -99,6 +99,7 @@
       "savedJustNow": "已保存 · 刚刚",
       "savedAt": "已保存 · {{time}}",
       "saveFailed": "保存失败",
+      "saveFailedAfterLeave": "刚才的修改没保存上",
       "retry": "重试"
     },
     "prompt": {

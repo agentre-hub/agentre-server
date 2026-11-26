@@ -13,6 +13,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import { toast, Toaster } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError, ApiTimeoutError, ApiUnavailableError } from "@/lib/api";
@@ -796,6 +797,40 @@ describe("Agent 系统提示词与描述离开即存（F4、I12）", () => {
     await waitFor(() => expect(status.textContent).toContain("boom"));
     expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
     expect((promptBox() as HTMLTextAreaElement).value).toBe("Be brief");
+  });
+
+  it("离开后才存失败：页头已经不在了，顶部提示没保存上并给「重试」，重试把同一份文字再存一次", async () => {
+    mockMobileViewport();
+    let fail = true;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && (!init || init.method === undefined))
+        return chart;
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      if (path === "/v1/workspace/org/agents/update") {
+        if (fail) throw new Error("boom");
+        return { sync_id: "agent-alice", version: 2 };
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+    render(<Toaster />);
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+
+    const notice = (await screen.findByText("Your edit wasn't saved")).closest(
+      "[data-sonner-toast]",
+    ) as HTMLElement;
+    expect(within(notice).getByText("boom")).toBeTruthy();
+    fail = false;
+    fireEvent.click(within(notice).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(updates().length).toBe(2));
+    expect(updates()[1]).toEqual({
+      sync_id: "agent-alice",
+      prompt_json: JSON.stringify(["Be brief"]),
+    });
+    toast.dismiss();
   });
 
   it("存成功：页头下显示「已保存」", async () => {

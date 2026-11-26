@@ -4,6 +4,8 @@
  * 桌面形态由 issues-page / issues-edges 守，这里只钉手机这一棵树。
  */
 import {
+  act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -397,6 +399,105 @@ describe("任务整屏页的历史与未保存改动（D2、F4）", () => {
 
     await waitFor(() => expect(screen.queryByTestId("task-form")).toBeNull());
     expect(screen.queryByTestId("confirm-sheet")).toBeNull();
+  });
+
+  /** 一条钉了机器的任务；账号的后端清单要等 `release()` 才到。 */
+  const openPinnedTaskWithLateBackends = async () => {
+    let releaseBackends: () => void = () => {};
+    const backendsArrived = new Promise<void>((resolve) => {
+      releaseBackends = resolve;
+    });
+    await renderPhoneBoard();
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/v1/workspace/issues") && !init?.method)
+        return {
+          ...board,
+          issues: [
+            {
+              ...board.issues[0],
+              agent_sync_id: "agent-alice",
+              agent_backend_sync_id: "backend-1",
+            },
+            board.issues[1],
+          ],
+        };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            {
+              sync_id: "agent-alice",
+              name: "Alice",
+              avatar_color: "agent-3",
+              has_available_target: true,
+              exec_targets: [],
+            },
+          ],
+        };
+      if (path === "/v1/workspace/org/backends") {
+        await backendsArrived;
+        return {
+          backends: [
+            {
+              sync_id: "backend-1",
+              name: "Claude Code",
+              backend_type: "claude_code",
+              device_name: "MacBook",
+              device_unspecified: false,
+              availability: "available",
+            },
+          ],
+        };
+      }
+      return base(path, init);
+    });
+    cleanup();
+    render(
+      <MemoryRouter initialEntries={["/prev", "/issues"]} initialIndex={1}>
+        <HistoryProbe />
+        <Issues />
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+    await screen.findByTestId("issue-board");
+    await openFirstTask();
+    return releaseBackends;
+  };
+
+  it("没改动、只先碰了 ⋯：机器清单晚到把 pill 从「跟随」换成机器名，✕ 仍直接关", async () => {
+    const releaseBackends = await openPinnedTaskWithLateBackends();
+    const machine = screen.getByTestId("board-exec-target-pill");
+    expect(machine.textContent).not.toContain("MacBook");
+
+    // 用户先点了 ⋯（又收起），什么都没改。
+    fireEvent.pointerDown(screen.getByTestId("task-form-more"));
+    await act(async () => releaseBackends());
+    await waitFor(() =>
+      expect(screen.getByTestId("board-exec-target-pill").textContent).toMatch(
+        /MacBook|Claude Code/,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("task-form-close"));
+    await waitFor(() => expect(screen.queryByTestId("task-form")).toBeNull());
+    expect(screen.queryByTestId("confirm-sheet")).toBeNull();
+  });
+
+  it("碰了机器 pill 并改成「跟随 Agent」：算改动，✕ 先问", async () => {
+    const releaseBackends = await openPinnedTaskWithLateBackends();
+    await act(async () => releaseBackends());
+    await waitFor(() =>
+      expect(screen.getByTestId("board-exec-target-pill").textContent).toMatch(
+        /MacBook|Claude Code/,
+      ),
+    );
+    const machine = screen.getByTestId("board-exec-target-pill");
+    fireEvent.pointerDown(machine);
+    fireEvent.click(machine);
+    fireEvent.click(await screen.findByTestId("board-exec-target-row-follow"));
+
+    fireEvent.click(screen.getByTestId("task-form-close"));
+    expect(await screen.findByTestId("confirm-sheet")).toBeTruthy();
   });
 
   it("只改了属性（换阶段）也算改动：✕ 先问", async () => {

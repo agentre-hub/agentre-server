@@ -32,7 +32,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
 import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
-import { RelayError } from "@/lib/relayClient";
+import { relayRequestTimeoutError } from "@/lib/relayClient";
 import DecisionPanel from "@/components/session/DecisionPanel";
 import { edgeClasses } from "./helpers/edge-classes";
 import { waiterBlocks } from "@/lib/waiterBlocks";
@@ -280,7 +280,7 @@ describe("面板审批提交失败：toast 文案与不叠加", () => {
     await i18n.changeLanguage("zh-CN");
     const errored = vi.spyOn(toast, "error");
     const { result } = setup(async () => {
-      throw new RelayError(-1, "relay: 请求超时", null);
+      throw relayRequestTimeoutError();
     });
     await result.current.panelPorts.answerToolPermission({
       sessionId: 7,
@@ -340,7 +340,7 @@ describe("面板审批提交失败：toast 文案与不叠加", () => {
 
   it("Given 转录里的卡提交超时, When 失败, Then 抛出的错误带超时名，共享包据此写「没收到确认」", async () => {
     const { result } = setup(async () => {
-      throw new RelayError(-1, "relay: 请求超时", null);
+      throw relayRequestTimeoutError();
     });
     const err = await result.current.transcriptPorts
       .answerToolPermission({

@@ -25,6 +25,8 @@ import { setCsrfToken } from "@/lib/api";
 import { invalidateRosters } from "@/lib/rosterFetch";
 
 export const LOCAL_DB_NAME = "agentre-local";
+/** 标签页之间说「本机被清空了」的频道名。 */
+export const LOCAL_ACCOUNT_CHANNEL = "agentre-local-account";
 /** 存的东西改了形状就加一：旧库整个丢掉。 */
 const FORMAT_VERSION = 1;
 const RECORDS = "records";
@@ -42,6 +44,36 @@ let account: number | null = null;
 /** 之后的读写落在哪个账号下；`null` = 不读不写。 */
 export function bindAccount(next: number | null): void {
   account = next;
+  if (next !== null) peers();
+}
+
+/**
+ * 标签页之间的「本机被清空了」。多个标签页共用这一份存储：一个标签页清空之后，其余
+ * 还开着的内存里仍绑着上一个账号，实时帧、草稿、发件箱会把它的东西重新写回来；别的
+ * 标签页随后登进另一个账号时 cookie 是共用的，它们还会把新账号的数据记在旧账号名下。
+ * 所以清空完告诉其余标签页：收到的立刻停写，并整页重新载入（重新走「读本地 → 核对
+ * 身份」）。没有 BroadcastChannel 时退回今天的行为（等自己的请求撞上 401）。
+ */
+let peerChannel: BroadcastChannel | null | undefined;
+
+function peers(): BroadcastChannel | null {
+  if (peerChannel !== undefined) return peerChannel;
+  try {
+    peerChannel =
+      typeof BroadcastChannel === "undefined"
+        ? null
+        : new BroadcastChannel(LOCAL_ACCOUNT_CHANNEL);
+  } catch {
+    peerChannel = null;
+  }
+  peerChannel?.addEventListener("message", (event: MessageEvent) => {
+    if (event.data !== "wiped" || account === null) return;
+    account = null;
+    setCsrfToken(null);
+    invalidateRosters(null);
+    window.location.reload();
+  });
+  return peerChannel;
 }
 
 /**
@@ -250,4 +282,9 @@ export async function wipeBusinessData(): Promise<void> {
     },
     undefined,
   );
+  try {
+    peers()?.postMessage("wiped");
+  } catch {
+    // 频道已关：别的标签页只能等自己撞上 401。
+  }
 }

@@ -26,6 +26,7 @@ import { deviceRoster } from "@/lib/devices";
 import { accountStore, bindAccount } from "@/lib/localStore";
 import { invalidateRosters } from "@/lib/rosterFetch";
 import Chat from "@/pages/Chat";
+import { persistRange, SEARCH_RANGES_KEPT } from "@/pages/chat/useSessionIndex";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -414,5 +415,35 @@ describe("桌面", () => {
     expect(await screen.findByText("等你批")).toBeTruthy();
     expect(screen.queryByText("Syncing")).toBeNull();
     expect(document.querySelector("[data-stale]")).toBeNull();
+  });
+});
+
+/**
+ * 每个看过的「范围 + 筛选 + 搜索词」各存一份第一页（A1）。搜索词是用户随手敲的：每停手
+ * 一次就是一个新键，不设上限的话本机存储随搜索次数无限长下去。带搜索词的那几份只留最近
+ * 的若干份；不带搜索词的（范围 × 筛选，有限个）不受影响。
+ */
+describe("本机存的搜索结果有上限", () => {
+  const page = (savedAt: number) => ({
+    groups: [],
+    unreadTotal: 0,
+    accountTotal: 0,
+    savedAt,
+  });
+
+  it("带搜索词的只留最近 SEARCH_RANGES_KEPT 份，最老的先走；不带搜索词的一份不动", async () => {
+    await persistRange("time|||all", page(1));
+    await persistRange("agent|agent:a1||all", page(2));
+    for (let i = 0; i < SEARCH_RANGES_KEPT + 5; i++) {
+      await persistRange(`time||q${i}|all`, page(100 + i));
+    }
+
+    const keys = (await accountStore.list("session-index")).map((r) => r.key);
+    const searched = keys.filter((k) => /\|q\d+\|/.test(k));
+    expect(searched).toHaveLength(SEARCH_RANGES_KEPT);
+    expect(searched).not.toContain("time||q0|all");
+    expect(searched).toContain(`time||q${SEARCH_RANGES_KEPT + 4}|all`);
+    expect(keys).toContain("time|||all");
+    expect(keys).toContain("agent|agent:a1||all");
   });
 });

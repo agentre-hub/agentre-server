@@ -239,16 +239,11 @@ export class DispatchTimeoutError extends Error {
 }
 
 /**
- * 这是中继客户端的「等应答超时」（码 -1、帧已交出去、文案是客户端自己写的那句）。
+ * 这是中继客户端的「等应答超时」（码 -1、帧已交出去，带 `timedOut` 记号）。
  * 码 -1 还被未就绪 / 断开共用，只有这一种既「可能已送达」又有人在等它的回执。
  */
 export function isRelayRequestTimeout(error: unknown): error is RelayError {
-  return (
-    error instanceof RelayError &&
-    error.code === -1 &&
-    !error.notSent &&
-    /请求超时/.test(error.message)
-  );
+  return error instanceof RelayError && error.timedOut;
 }
 
 export class DispatchRunError extends Error {
