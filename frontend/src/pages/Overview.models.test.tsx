@@ -52,6 +52,7 @@ function serve(models: unknown[], providers: unknown) {
       if (providers instanceof Error) throw providers;
       return { providers };
     }
+    if (p === "/v1/engine/backends") return { backends: [] };
     if (p === "/v1/devices") return { devices: [] };
     if (p === "/v1/auth/me") return { user_id: 1, display_name: "Dev" };
     if (p.startsWith("/v1/agent-sessions")) return { total: 0, items: [] };

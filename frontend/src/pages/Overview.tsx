@@ -44,9 +44,8 @@ import {
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
 import { fetchAgents } from "@/lib/agents";
-import { api } from "@/lib/api";
 import { fetchDevices, runsSessions, type DeviceItem } from "@/lib/devices";
-import type { EngineProvider } from "@/lib/engineCatalog";
+import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
 import {
   fetchStatsOverview,
@@ -289,7 +288,7 @@ export default function Overview() {
   const [projects, setProjects] = useState<ProjectNode[] | null>(null);
   // 模型分布记的是会话钉的模型 key（服务生成的引用键）；人认得的模型 id 从供应商目录里
   // 查。目录取不到就保持空，那一行退回写 key。
-  const [providers, setProviders] = useState<EngineProvider[] | null>(null);
+  const { providers } = useEngineCatalog();
 
   useAliveEffect(
     (alive) => {
@@ -332,14 +331,6 @@ export default function Overview() {
     loadWorkspace();
   }, [loadDevices, loadWorkspace]);
 
-  useAliveEffect((alive) => {
-    api<{ providers?: EngineProvider[] }>("/v1/engine/providers")
-      .then((got) => {
-        if (alive()) setProviders(got.providers ?? []);
-      })
-      .catch(() => {});
-  }, []);
-
   // 各订各的那一类：一条对话存进账号不该让 Agent 名单也重取一遍。
   useAccountChannel([AccountChannelDevicePresence], loadDevices);
   useAccountChannel([AccountChannelSyncVersion], loadWorkspace);
@@ -361,7 +352,7 @@ export default function Overview() {
   );
   const modelLabel = useCallback(
     (providerKey: string, modelKey: string) => {
-      const model = (providers ?? [])
+      const model = providers
         .find((p) => p.provider_key === providerKey)
         ?.models.find((m) => m.model_key === modelKey);
       // 目录里找不到（模型已删 / 目录取不到）就写 key：宁可一串引用键，也不写空。
