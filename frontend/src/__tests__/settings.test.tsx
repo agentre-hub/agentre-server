@@ -180,12 +180,13 @@ describe("Settings", () => {
       expect(screen.queryByRole("radio", { name: /^Hermes/ })).toBeNull(),
     );
 
-    const pi = document.querySelector<HTMLButtonElement>(
-      '[data-backend-type="piagent"]',
+    // 从紧挨着 Hermes 的那一格出发：方向键要跳过隐藏的 Hermes（与 builtin）落到 OpenClaw。
+    const beforeHermes = document.querySelector<HTMLButtonElement>(
+      '[data-backend-type="antigravity"]',
     );
-    expect(pi).not.toBeNull();
-    fireEvent.click(pi!);
-    fireEvent.keyDown(pi!, { key: "ArrowRight" });
+    expect(beforeHermes).not.toBeNull();
+    fireEvent.click(beforeHermes!);
+    fireEvent.keyDown(beforeHermes!, { key: "ArrowRight" });
 
     await waitFor(() =>
       expect(
