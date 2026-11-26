@@ -141,7 +141,7 @@ func (s *Stats) listMachines(c *gin.Context) ([]device_svc.DeviceView, error) {
 	}
 	machines := make([]device_svc.DeviceView, 0, len(devices))
 	for _, d := range devices {
-		if runsSessions(d) {
+		if device_entity.RunsSessions(d.Kind) {
 			machines = append(machines, d)
 		}
 	}
@@ -196,10 +196,4 @@ func projects(in []activity_svc.ProjectCount) []api.ProjectRow {
 		out = append(out, api.ProjectRow{SyncID: r.SyncID, Count: r.Count})
 	}
 	return out
-}
-
-// runsSessions 判定一台设备是不是能跑会话的机器。与中继的可寻址判据同一组 kind，但
-// relay_svc 的那份是私有的，这里不为它引入反向依赖。
-func runsSessions(d device_svc.DeviceView) bool {
-	return d.Kind == device_entity.KindAgentred || d.Kind == device_entity.KindDesktop
 }

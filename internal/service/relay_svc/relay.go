@@ -197,14 +197,14 @@ func New(
 }
 
 func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64, kind string) (Route, error) {
-	if !isAddressableKind(kind) {
+	if !device_entity.RunsSessions(kind) {
 		return Route{}, ErrDaemonForbidden
 	}
 	device, err := s.devices.Find(ctx, deviceID)
 	if err != nil {
 		return Route{}, err
 	}
-	if !device.UsableBy(accountID) || !isAddressableKind(device.Kind) {
+	if !device.UsableBy(accountID) || !device_entity.RunsSessions(device.Kind) {
 		return Route{}, ErrDaemonForbidden
 	}
 	// 一条 websocket 一个 ConnID：PrepareDaemon 在 handler 里只跑一次，见 Route.ConnID。
@@ -216,10 +216,6 @@ func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64,
 		AccountID: accountID, Fingerprint: device.Fingerprint,
 		InstanceID: s.config.InstanceID, ConnID: connID,
 	}, nil
-}
-
-func isAddressableKind(kind string) bool {
-	return kind == device_entity.KindAgentred || kind == device_entity.KindDesktop
 }
 
 func (s *relaySvc) RegisterDaemon(ctx context.Context, route Route) error {
@@ -263,7 +259,7 @@ func (s *relaySvc) ConnectClient(ctx context.Context, accountID int64, fingerpri
 	if err != nil {
 		return Route{}, err
 	}
-	if device == nil || !isAddressableKind(device.Kind) || !device.IsActive() {
+	if device == nil || !device_entity.RunsSessions(device.Kind) || !device.IsActive() {
 		return Route{}, ErrDaemonNotFound
 	}
 

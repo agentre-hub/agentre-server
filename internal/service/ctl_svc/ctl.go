@@ -39,17 +39,10 @@ type Caller struct {
 // isPersonalToken 报告调用方是不是一枚个人 token——唯一按范围裁剪能力的调用方。
 func (c Caller) isPersonalToken() bool { return c.Kind == device_svc.KindPersonalToken }
 
-// requireScope 在调用方是个人 token 时要求它带着 scope；设备调用方不按范围裁（agentred 在
-// 会话里已审批过，cli 设备是账号登录态），一律放行。拒绝文案与 HTTP 中间件逐字相同。
-func (c Caller) requireScope(scope string) error {
-	if !c.isPersonalToken() || slices.Contains(c.Scopes, scope) {
-		return nil
-	}
-	return &Error{Status: http.StatusForbidden, Msg: "token lacks scope " + scope}
-}
-
-// requireAnyScope 个人 token 带 scopes 中任一个即放行；拒绝时点名第一个。
-func (c Caller) requireAnyScope(scopes ...string) error {
+// requireScope 在调用方是个人 token 时要求它带着 scopes 中任一个；设备调用方不按范围裁
+// （agentred 在会话里已审批过，cli 设备是账号登录态），一律放行。拒绝时点名第一个，文案与
+// HTTP 中间件逐字相同。
+func (c Caller) requireScope(scopes ...string) error {
 	if !c.isPersonalToken() {
 		return nil
 	}
@@ -145,7 +138,7 @@ func (s *ctlSvc) Handle(
 ) (*agentrewire.CtlResponse, error) {
 	switch op := req.GetOp().(type) {
 	case *agentrewire.CtlRequest_List:
-		if err := caller.requireAnyScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
+		if err := caller.requireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
 			return nil, err
 		}
 		st, err := loadState(ctx, caller)
@@ -160,7 +153,7 @@ func (s *ctlSvc) Handle(
 			List: &agentrewire.CtlListResponse{Items: items},
 		}}, nil
 	case *agentrewire.CtlRequest_Get:
-		if err := caller.requireAnyScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
+		if err := caller.requireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
 			return nil, err
 		}
 		st, err := loadState(ctx, caller)

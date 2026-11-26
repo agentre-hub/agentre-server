@@ -70,7 +70,7 @@ func TestResolveTarget_GivenAMachineForm_ThenRoutesToThatMachine(t *testing.T) {
 	require.Equal(t, Route{AccountID: 7, Fingerprint: "fp-desktop", InstanceID: "server-a"}, route)
 }
 
-// isAddressableKind 是这道闸的**唯一**否决理由：目标设备存在、活跃、在线登记也
+// device_entity.RunsSessions 是这道闸的**唯一**否决理由：目标设备存在、活跃、在线登记也
 // 写了，只有 kind 不是 agentred / desktop，因此拒绝只可能出自那一次重查。
 //
 // 两种目标形式各查一遍：conversation: 解析出来的机器与 machine: 直接点名的机器

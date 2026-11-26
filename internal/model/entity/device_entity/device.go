@@ -42,6 +42,13 @@ type Device struct {
 
 func (*Device) TableName() string { return "devices" }
 
+// RunsSessions 判定这种 kind 的设备是不是能跑会话的机器（desktop / agentred）。中继只寻址
+// 它们，控制台的「设备在线 n/m」与逐台上报进度也只数它们；判据只此一份，加一种能跑会话的
+// kind 时只改这里（前端的同名判据在 frontend/src/lib/devices.ts）。
+func RunsSessions(kind string) bool {
+	return kind == KindAgentred || kind == KindDesktop
+}
+
 func (d *Device) IsActive() bool { return d != nil && d.Status == consts.ACTIVE }
 
 // UsableBy 判定这台设备能不能被 userID 这个账号当作自己的设备使用：查得到、归他、
