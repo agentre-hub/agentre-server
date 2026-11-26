@@ -34,6 +34,11 @@ const KIND = "outbox";
 /** 发件箱里的一条消息：输入框交出来的那份，加一个本机的身份。 */
 export interface OutboxMessage extends ChatComposerSubmit {
   id: string;
+  /**
+   * 交给中继的那一刻（只有「已交出」的带）。恢复成「可能已送达」时随之带进失败，
+   * 转录里看得见它了据此收起（规格 2026-11-25 K4）。
+   */
+  handedOffAt?: number;
 }
 
 export interface OutboxEntry {
@@ -177,7 +182,15 @@ function toFailure(
   message: OutboxMessage,
   kind: FailedSend["kind"],
 ): FailedSend {
-  return { id: message.id, text: message.text, images: message.images, kind };
+  return {
+    id: message.id,
+    text: message.text,
+    images: message.images,
+    kind,
+    ...(kind === "transport" && message.handedOffAt
+      ? { handedOffAt: message.handedOffAt }
+      : {}),
+  };
 }
 
 /** 本机发件箱。所有方法都不会拒绝（存储不可用时静默）。 */

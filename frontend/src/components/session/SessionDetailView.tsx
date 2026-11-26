@@ -1969,6 +1969,8 @@ export default function SessionDetailView({
       return shown;
     },
     composerHandleRef,
+    // 「可能已送达」的那几条据它收起（K4）。
+    transcript: messages,
   });
 
   /**

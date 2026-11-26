@@ -15,8 +15,9 @@ import type {
   ChatComposerHandle,
   ChatComposerSubmit,
 } from "@agentre-hub/agentre-ui";
-import type { ModelTarget } from "@agentre-hub/agentre-ui";
+import type { ModelTarget, TranscriptMessage } from "@agentre-hub/agentre-ui";
 
+import { deliveredFailureIds } from "@/components/session/deliveredSends";
 import type { FailedSend } from "@/components/session/SendFailureBubble";
 import type { SteerQueue } from "@/components/session/useSteerQueue";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
@@ -247,7 +248,16 @@ export interface SessionSendParams {
    * （规格 2026-11-25 C 节）。不给 = 撤销只撤不放回。
    */
   composerHandleRef?: RefObject<ChatComposerHandle | null>;
+  /**
+   * 这一屏投影出来的转录。「可能已送达」的那几条在这里看得见了（内容一致、时间不早于
+   * 交出时刻的用户消息）就收起，连同发件箱里那一条（规格 2026-11-25 K4）。缺省为空：
+   * 什么都不收。
+   */
+  transcript?: readonly TranscriptMessage[];
 }
+
+/** `transcript` 的缺省值：模块级常量，免得每次渲染一个新数组让下面的 effect 重跑。 */
+const NoTranscript: readonly TranscriptMessage[] = [];
 
 /**
  * 这么大的消息才显示上传进度：小消息一眨眼就出门，进度环只会闪一下。
@@ -340,6 +350,7 @@ export function useSessionSend({
   onOwnTurnStarted,
   transcriptSeq = () => 0,
   composerHandleRef,
+  transcript = NoTranscript,
 }: SessionSendParams): SessionSend {
   const {
     turnActiveRef,
@@ -733,9 +744,17 @@ export function useSessionSend({
       此刻的轮次状态，晚几毫秒就可能把插话判成新的一轮。
     */
     const outboxId = replacing ?? fromQueue?.id ?? randomId();
+    /*
+      交出时刻（K4）：转录里出现内容一致、不早于它的用户消息时，「可能已送达」收起。
+      从一条「可能已送达」上重发的沿用它最初那次交出：那一次就可能已经送到了，转录里
+      出现的也可能是那一份。
+    */
+    const handedOffAt =
+      failedSends.find((f) => f.id === replacing && f.kind === "transport")
+        ?.handedOffAt ?? Date.now();
     const handed = outboxStore.handOff(
       conversationId,
-      { id: outboxId, ...message },
+      { id: outboxId, ...message, handedOffAt },
       { claimQueued: fromQueue?.id, replacing },
     );
     if ((fromQueue || replacing) && !(await handed)) return;
@@ -779,6 +798,7 @@ export function useSessionSend({
               images: message.images,
               kind: failure.kind,
               detail: failure.detail,
+              ...(failure.kind === "transport" ? { handedOffAt } : {}),
             };
       await settleOutbox(failed);
       // 这条消息属于**发起它的那条会话**。目标已经换了就一个字都不写：那条红气泡
@@ -798,7 +818,13 @@ export function useSessionSend({
         //
         // 重发失败时**原地更新**那一条，不再挂一条新的：同一段字在流里出现两次
         // 只会让人以为自己发了两遍。分类可能变（断线重发被拒），所以整条替换。
-        queueFailedSend(message, failed.kind, failed.detail, outboxId);
+        queueFailedSend(
+          message,
+          failed.kind,
+          failed.detail,
+          outboxId,
+          failed.handedOffAt,
+        );
       }
     } finally {
       // 结果落库之后才放锁：别的实例看到锁空着，才会把还记着的「已交出」当成被杀。
@@ -861,6 +887,7 @@ export function useSessionSend({
     kind: FailedSend["kind"],
     detail?: string,
     replacing?: string,
+    handedOffAt?: number,
   ): FailedSend {
     const next: FailedSend = {
       id: replacing ?? randomId(),
@@ -868,6 +895,7 @@ export function useSessionSend({
       images: message.images,
       kind,
       detail,
+      ...(handedOffAt ? { handedOffAt } : {}),
     };
     setFailedSends((prev) =>
       replacing && prev.some((f) => f.id === replacing)
@@ -876,6 +904,26 @@ export function useSessionSend({
     );
     return next;
   }
+
+  /*
+    「可能已送达」在转录里看得见了：收起气泡，连同发件箱里那一条（规格 2026-11-25 K4）。
+    判据见 deliveredFailureIds——对不上的一律留着。只撤不发：这里从不重发任何东西。
+
+    气泡的 state 在发件箱那一笔落库之后才改（回调里写，effect 体内不写）；记进
+    dismissedRef 是为了发件箱的通知晚到时不把它加回来，也让下一次重跑不再撤一遍。
+  */
+  useEffect(() => {
+    const delivered = deliveredFailureIds(failedSends, transcript).filter(
+      (id) => !dismissedRef.current.has(id),
+    );
+    if (delivered.length === 0) return;
+    for (const id of delivered) dismissedRef.current.add(id);
+    void Promise.all(
+      delivered.map((id) => outboxStore.dropFailure(sid, id)),
+    ).then(() =>
+      setFailedSends((prev) => prev.filter((f) => !delivered.includes(f.id))),
+    );
+  }, [failedSends, transcript, sid]);
 
   function dropFailedSend(id: string) {
     dismissedRef.current.add(id);

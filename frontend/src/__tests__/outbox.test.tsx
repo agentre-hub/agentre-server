@@ -504,6 +504,130 @@ describe("已交出（C3）：不发两次", () => {
   });
 });
 
+/**
+ * 「可能已送达」看得见了就收起（规格 2026-11-25 K4）：同一对话的转录里出现了内容一致
+ * （文字相同、图片数相同）且时间不早于交出时刻的用户消息时，气泡与库里那条一起撤掉；
+ * 对不上就一直留着，永不自动重发。
+ */
+describe("「可能已送达」在转录里出现了就收起（K4）", () => {
+  /** 镜像里这条对话的转录：几条用户消息，各带发生时刻。 */
+  function serveTranscript(messages: { text: string; at: number }[]) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions") return { items: [] };
+      if (
+        typeof path === "string" &&
+        path.startsWith("/v1/agent-sessions/transcript")
+      )
+        return {
+          frames: messages.map((m, i) => ({
+            seq: i + 1,
+            method: "runtime.event",
+            createtime: m.at,
+            params: {
+              conversationId: CID,
+              event: { kind: "user_message", text: m.text },
+            },
+          })),
+          cursor: messages.length,
+          has_more: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+  }
+
+  it("发送时连接断了、回声随后到了：气泡收起，库里那条一并撤掉，不重发", async () => {
+    let onEvent: ((frame: unknown, at?: number) => void) | undefined;
+    mockUseRelay.mockImplementation((_t, opts) => {
+      onEvent = (opts as { onEvent?: typeof onEvent } | undefined)?.onEvent;
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    stubRun(() => Promise.reject(new Error("socket closed")));
+    mount();
+    await send("这条其实到了");
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("transport");
+
+    await act(async () => {
+      onEvent?.(
+        {
+          conversationId: CID,
+          event: { kind: "user_message", text: "这条其实到了" },
+          seq: 3,
+        },
+        Date.now(),
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("send-failure")).toBeNull(),
+    );
+    await waitFor(async () =>
+      expect((await outboxStore.get(CID))?.failed ?? []).toEqual([]),
+    );
+    expect(runCalls()).toHaveLength(1);
+  });
+
+  it("被杀后恢复出来的那条：转录里有它（交出之后），恢复即收起", async () => {
+    const handedOffAt = Date.now() - 60_000;
+    await seed({
+      handedOff: [{ id: "h1", text: "杀掉之前发的", handedOffAt }],
+    });
+    serveTranscript([{ text: "杀掉之前发的", at: handedOffAt + 300 }]);
+    stubRun(() => ({}));
+    mount();
+
+    expect(await screen.findByText("杀掉之前发的")).toBeTruthy();
+    await waitFor(async () => {
+      const entry = await outboxStore.get(CID);
+      expect(entry?.failed ?? []).toEqual([]);
+      expect(entry?.handedOff ?? []).toEqual([]);
+    });
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+    expect(runCalls()).toHaveLength(0);
+  });
+
+  it("对不上（文字改过 / 早于交出时刻）：一直留着，不猜", async () => {
+    const handedOffAt = Date.now() - 60_000;
+    await seed({
+      failed: [
+        { id: "f1", text: "部署一下", kind: "transport", handedOffAt },
+        { id: "f2", text: "继续", kind: "transport", handedOffAt },
+      ],
+    });
+    serveTranscript([
+      { text: "部署一下吧", at: handedOffAt + 300 },
+      { text: "继续", at: handedOffAt - 1 },
+    ]);
+    stubRun(() => ({}));
+    mount();
+
+    await screen.findByText("部署一下吧");
+    await waitFor(() =>
+      expect(screen.getAllByTestId("send-failure")).toHaveLength(2),
+    );
+    await settle();
+    expect(screen.getAllByTestId("send-failure")).toHaveLength(2);
+    expect((await outboxStore.get(CID))?.failed.map((f) => f.id)).toEqual([
+      "f1",
+      "f2",
+    ]);
+    expect(runCalls()).toHaveLength(0);
+  });
+});
+
 describe("从失败气泡重发：不发两次（C3）", () => {
   it("两个实例对着同一条恢复出来的失败都点「重发」：只发一次，两边都不卡住", async () => {
     installLocks();

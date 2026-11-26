@@ -62,6 +62,12 @@ export interface FailedSend {
    * 的话它就真的没了,而那颗「重发」会发出一条**和用户写的不一样**的消息。
    */
   images?: ChatImageAttachment[];
+  /**
+   * 这条消息交给中继的那一刻（Unix 毫秒，本机钟）。只有 `transport` 带它：转录里出现
+   * 内容一致、时间不早于它的用户消息时，这条「可能已送达」就收起（规格 2026-11-25
+   * K4，见 deliveredFailureIds）。没有这一格的（旧记录）一直留着。
+   */
+  handedOffAt?: number;
 }
 
 export default function SendFailureBubble({
