@@ -301,8 +301,8 @@ func TestListAndDelete(t *testing.T) {
 		Convey("when tokens are listed, then every fact is shown but no secret", func() {
 			tokens.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*personal_token_entity.PersonalToken{
 				{ID: 1, UserID: 7, Name: "ci", TokenHash: "digest", Scopes: "read", CreatedByDeviceID: 3,
-					ExpiresAt: 9000, LastUsedAt: 8000, RotatedAt: 7000, Createtime: 6000},
-				{ID: 2, UserID: 7, Name: "forever", TokenHash: "digest-2", Scopes: "chat,approve"},
+					ExpiresAt: 9000, LastUsedAt: 8000, RotatedAt: 7000, Createtime: 6000, PeerFingerprint: "pat:fp-1"},
+				{ID: 2, UserID: 7, Name: "forever", TokenHash: "digest-2", Scopes: "chat,approve", PeerFingerprint: "pat:fp-2"},
 			}, nil)
 			devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return(cliDevice(), nil)
 
@@ -310,8 +310,8 @@ func TestListAndDelete(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(views, ShouldResemble, []TokenView{
 				{Name: "ci", Scopes: []string{"read"}, Createtime: 6000, ExpiresAt: 9000, LastUsedAt: 8000,
-					RotatedAt: 7000, CreatedByDeviceID: 3, CreatedByDeviceName: "laptop"},
-				{Name: "forever", Scopes: []string{"chat", "approve"}},
+					RotatedAt: 7000, CreatedByDeviceID: 3, CreatedByDeviceName: "laptop", PeerFingerprint: "pat:fp-1"},
+				{Name: "forever", Scopes: []string{"chat", "approve"}, PeerFingerprint: "pat:fp-2"},
 			})
 		})
 

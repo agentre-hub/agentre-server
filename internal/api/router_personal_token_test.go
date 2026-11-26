@@ -16,6 +16,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
@@ -42,7 +43,12 @@ func (f *fakePersonalTokens) Rotate(_ context.Context, c personal_token_svc.Call
 
 func (f *fakePersonalTokens) List(_ context.Context, c personal_token_svc.Caller) ([]personal_token_svc.TokenView, error) {
 	f.callers = append(f.callers, c)
-	return []personal_token_svc.TokenView{{Name: "ci", Scopes: []string{"read"}}}, nil
+	return []personal_token_svc.TokenView{{Name: "ci", Scopes: []string{"read"}, PeerFingerprint: "pat:fp-ci"}}, nil
+}
+
+func (f *fakePersonalTokens) Self(_ context.Context, c personal_token_svc.Caller) (personal_token_svc.TokenView, error) {
+	f.callers = append(f.callers, c)
+	return personal_token_svc.TokenView{Name: "ci", PeerFingerprint: "pat:own"}, nil
 }
 
 func (f *fakePersonalTokens) Delete(_ context.Context, c personal_token_svc.Caller, _ string) error {
@@ -129,6 +135,37 @@ func TestRouter_PersonalTokenManagement(t *testing.T) {
 			So(json.Unmarshal(w.Body.Bytes(), &envelope), ShouldBeNil)
 			So(envelope.Data.Token, ShouldEqual, fakePAT)
 			So(envelope.Data.Item.Name, ShouldEqual, "ci")
+		})
+
+		Convey("when a cli device lists tokens, then each item names its peer fingerprint and the account's console peer is given", func() {
+			cli := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 3, Kind: device_entity.KindCLI, Handle: "3"})
+			w := serveWithBearer(engine, http.MethodGet, "/v1/personal-tokens", cli, ``)
+			var envelope struct {
+				Data struct {
+					Tokens []struct {
+						PeerFingerprint string `json:"peer_fingerprint"`
+					} `json:"tokens"`
+					ConsolePeerFingerprint string `json:"console_peer_fingerprint"`
+				} `json:"data"`
+			}
+			So(json.Unmarshal(w.Body.Bytes(), &envelope), ShouldBeNil)
+			So(envelope.Data.Tokens, ShouldHaveLength, 1)
+			So(envelope.Data.Tokens[0].PeerFingerprint, ShouldEqual, "pat:fp-ci")
+			So(envelope.Data.ConsolePeerFingerprint, ShouldEqual, credstore.AccountPeerFingerprint(7))
+		})
+
+		Convey("when a personal token asks about itself, then the console peer is given too", func() {
+			w := serveWithBearer(engine, http.MethodGet, "/v1/personal-tokens/self", fakePAT, ``)
+			So(w.Code, ShouldEqual, http.StatusOK)
+			var envelope struct {
+				Data struct {
+					PeerFingerprint        string `json:"peer_fingerprint"`
+					ConsolePeerFingerprint string `json:"console_peer_fingerprint"`
+				} `json:"data"`
+			}
+			So(json.Unmarshal(w.Body.Bytes(), &envelope), ShouldBeNil)
+			So(envelope.Data.PeerFingerprint, ShouldEqual, "pat:own")
+			So(envelope.Data.ConsolePeerFingerprint, ShouldEqual, credstore.AccountPeerFingerprint(7))
 		})
 
 		Convey("when a personal token calls them, then it is refused and the service is never reached", func() {

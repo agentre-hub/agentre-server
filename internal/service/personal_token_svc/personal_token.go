@@ -117,7 +117,7 @@ type TokenView struct {
 	CreatedByDeviceID   int64
 	CreatedByDeviceName string
 	// PeerFingerprint 是这枚 token 的对端指纹（它发起的会话记在这个发起方名下）。只有 Self
-	// 填它：token 据此认出自己发起的会话；管理列表不需要。
+	// 与 List 填它：token 据此认出自己发起的会话，列表的调用方据它把会话发起方认成 token 名。
 	PeerFingerprint string
 }
 
@@ -290,7 +290,15 @@ func (s *personalTokenSvc) List(ctx context.Context, caller Caller) ([]TokenView
 	if err != nil {
 		return nil, err
 	}
-	return s.views(ctx, caller.AccountID, rows)
+	views, err := s.views(ctx, caller.AccountID, rows)
+	if err != nil {
+		return nil, err
+	}
+	// 管理列表带每枚 token 的对端指纹：调用方据它把会话的发起方认成 token 名。views 与 rows 同序。
+	for i := range views {
+		views[i].PeerFingerprint = rows[i].PeerFingerprint
+	}
+	return views, nil
 }
 
 func (s *personalTokenSvc) Self(ctx context.Context, caller Caller) (TokenView, error) {

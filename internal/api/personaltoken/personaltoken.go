@@ -23,6 +23,9 @@ type Token struct {
 	// 设备此刻的显示名，设备已撤销时为空串。
 	CreatedByDeviceID   int64  `json:"created_by_device_id"`
 	CreatedByDeviceName string `json:"created_by_device_name"`
+	// PeerFingerprint 是这枚 token 的对端指纹，只有列表带：它发起的会话记在这个发起方名下，
+	// agrctl 据它把会话的发起方认成 token 名。标识而非凭据；其它响应里的 item 不带它。
+	PeerFingerprint string `json:"peer_fingerprint,omitempty"`
 }
 
 // CreateRequest 创建一枚个人 token。名字在账号内唯一（大小写不敏感），已被占用答 409。
@@ -49,6 +52,9 @@ type ListRequest struct {
 
 type ListResponse struct {
 	Tokens []Token `json:"tokens"`
+	// ConsolePeerFingerprint 是本账号控制台（浏览器）的对端指纹：控制台发起的会话记在它名下。
+	// 由账号派生、不是凭据，只交给账号自己已鉴权的调用方。
+	ConsolePeerFingerprint string `json:"console_peer_fingerprint"`
 }
 
 // SelfRequest 让一枚个人 token 查询自己：名字、范围、到期时间。只认个人 token（其它调用方
@@ -62,6 +68,8 @@ type SelfResponse struct {
 	// PeerFingerprint 是这枚 token 的对端指纹：它发起的会话在账号会话索引与 agentred 上都记在
 	// 这个发起方名下（agrctl list sessions --mine 据此认出自己的会话）。它是标识，不是凭据。
 	PeerFingerprint string `json:"peer_fingerprint"`
+	// ConsolePeerFingerprint 同 ListResponse：个人 token 的调用方靠它认出控制台发起的会话。
+	ConsolePeerFingerprint string `json:"console_peer_fingerprint"`
 }
 
 // RotateRequest 给同名 token 换一个新密钥：名字、范围、对端指纹不变，旧密钥立即作废。

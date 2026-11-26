@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/personaltoken"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/service/personal_token_svc"
 )
@@ -69,9 +70,11 @@ func (h *PersonalToken) List(c *gin.Context, _ *api.ListRequest) (*api.ListRespo
 	}
 	items := make([]api.Token, 0, len(views))
 	for _, view := range views {
-		items = append(items, toToken(view))
+		item := toToken(view)
+		item.PeerFingerprint = view.PeerFingerprint
+		items = append(items, item)
 	}
-	return &api.ListResponse{Tokens: items}, nil
+	return &api.ListResponse{Tokens: items, ConsolePeerFingerprint: credstore.AccountPeerFingerprint(who.AccountID)}, nil
 }
 
 func (h *PersonalToken) Self(c *gin.Context, _ *api.SelfRequest) (*api.SelfResponse, error) {
@@ -85,7 +88,8 @@ func (h *PersonalToken) Self(c *gin.Context, _ *api.SelfRequest) (*api.SelfRespo
 	if err != nil {
 		return nil, err
 	}
-	return &api.SelfResponse{Item: toToken(view), PeerFingerprint: view.PeerFingerprint}, nil
+	return &api.SelfResponse{Item: toToken(view), PeerFingerprint: view.PeerFingerprint,
+		ConsolePeerFingerprint: credstore.AccountPeerFingerprint(who.AccountID)}, nil
 }
 
 func (h *PersonalToken) Rotate(c *gin.Context, req *api.RotateRequest) (*api.IssueResponse, error) {
