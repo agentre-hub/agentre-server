@@ -7,7 +7,7 @@ import {
   Loader2,
   ShieldCheck,
 } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState, type MouseEvent } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -168,10 +168,24 @@ export default function Login() {
    */
   const [consentMissed, setConsentMissed] = useState(false);
   const consentHintId = useId();
+  /**
+   * 已经把浏览器交给 GitHub 去授权。整页跳转要等网络，弱网下这段时间页面纹丝不动，
+   * 用户会以为没点上而再点（I26）：进等待态、按钮不可再点。
+   */
+  const [githubPending, setGithubPending] = useState(false);
+  // 从 GitHub 点系统返回会命中 bfcache，页面连同这个 state 原样复活：不解除就永远卡在等待。
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) setGithubPending(false);
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
 
   // 首次登录与失败后重试走的是同一件事：带着 next / user_code 重新发起
   // authorize（err 不透传，它是上一次的结果）。所以只有一个处理函数。
   const onLogin = () => {
+    if (githubPending) return;
     if (!consented) {
       setConsentMissed(true);
       return;
@@ -179,6 +193,7 @@ export default function Login() {
     const u = new URLSearchParams();
     if (next) u.set("next", next);
     if (userCode) u.set("user_code", userCode);
+    setGithubPending(true);
     // 用 assign 而不是 `href =`：语义相同（都保留历史记录），
     // 但与 RequireAuth 的 window.location.replace 保持同一种写法。
     window.location.assign("/v1/auth/oauth/github/authorize?" + u.toString());
@@ -279,10 +294,22 @@ export default function Login() {
    * login.test.tsx 里那条「点条款链接不勾选」守的就是这一点。
    */
   const showConsentHint = consentMissed && !consented;
+  // 行内 label / 复选框 / 链接自己处理点击；只有落在它们之外的空白处才由整行代劳，
+  // 否则 label 的点击冒泡上来会翻两次。
+  const onConsentRowClick = (e: MouseEvent<HTMLElement>) => {
+    if ((e.target as HTMLElement).closest("a, button, label, input")) return;
+    setConsented((c) => !c);
+    setConsentMissed(false);
+  };
   const consent = (
     <div
       data-testid="login-consent"
-      className="flex items-start gap-2.5 text-left"
+      className={cn(
+        "flex items-start gap-2.5 text-left",
+        // 手机：整行至少 44px、垂直居中；点行内任何非控件处都勾选（J4）。
+        mobile && "min-h-11 items-center",
+      )}
+      onClick={mobile ? onConsentRowClick : undefined}
     >
       <Checkbox
         id="login-consent-box"
@@ -337,10 +364,15 @@ export default function Login() {
   const githubButton = (
     <Button
       className={cn("w-full", mobile && "h-11")}
-      disabled={!mobile && !consented}
+      disabled={githubPending || (!mobile && !consented)}
+      aria-busy={githubPending || undefined}
       onClick={onLogin}
     >
-      <Github className="mr-2 h-4 w-4" />
+      {githubPending ? (
+        <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
+      ) : (
+        <Github className="mr-2 h-4 w-4" />
+      )}
       {t("login.github")}
     </Button>
   );

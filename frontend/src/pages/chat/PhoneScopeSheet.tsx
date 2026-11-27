@@ -7,6 +7,8 @@ import {
 } from "@agentre-hub/agentre-ui";
 import { useTranslation } from "react-i18next";
 
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
+
 export interface PhoneScopeSheetProps extends Pick<
   ScopeListProps,
   | "allCount"
@@ -37,6 +39,8 @@ export function PhoneScopeSheet({
   ...list
 }: PhoneScopeSheetProps) {
   const { t } = useTranslation();
+  // 系统返回先关范围弹层（D1）。
+  useBackDismiss(open, () => onOpenChange(false));
   return (
     <DialogShell open={open} onOpenChange={onOpenChange} className="h-[80dvh]">
       <DialogShellHeader

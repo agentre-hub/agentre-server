@@ -1,6 +1,15 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { useCallback, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
+import { describeFailure } from "@/lib/describeFailure";
 import type { RelayClient } from "@/lib/relayClient";
 import type { SessionViewStatus } from "@/lib/sessionView";
 
@@ -55,6 +64,9 @@ export function useTurnStop({
 }: UseTurnStopOptions): TurnStop {
   /** 点了停止的那条会话。 */
   const [stoppingSid, setStoppingSid] = useState<string | null>(null);
+  const { t } = useTranslation();
+  /** toast 里的「重试」要再走一遍 stop；经 ref 取最新的，免得闭包拿着旧的 client。 */
+  const stopRef = useRef<() => Promise<void>>(async () => {});
 
   // 回合结束（running 落回 false）就放下停止中：下一轮开起来时不能还挂着上一轮的。
   // 在渲染期按上一次的 running 调整，而不是在 effect 里补一帧。终态通知另由
@@ -74,12 +86,28 @@ export function useTurnStop({
         conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       });
-    } catch {
-      // 停不下来不另开一条错误面：这一轮的实时流会照常继续，状态自己说话。
-      // 只把停止键放开，让人还能再按一次。
+    } catch (err) {
+      // 这一轮的实时流会照常继续，状态自己说话；停止键放开，让人还能再按一次，
+      // 同时在顶部出声「没停下来」+ 原因 + 重试（手机 toast 在顶部，不盖停止键与输入框）。
+      // 请求 30 秒超时也走这里，不再转半分钟后悄悄复原。
       setStoppingSid((cur) => (cur === sid ? null : cur));
+      toast.error(t("session.stop.failed"), {
+        id: `turn-stop-${sid}`,
+        description: describeFailure(err, {
+          t,
+          what: t("session.stop.failedWhat"),
+        }).message,
+        action: {
+          label: t("session.stop.retry"),
+          onClick: () => void stopRef.current(),
+        },
+      });
     }
-  }, [clientRef, originRef, sid]);
+  }, [clientRef, originRef, sid, t]);
+
+  useEffect(() => {
+    stopRef.current = stop;
+  }, [stop]);
 
   const turnEnded = useCallback(() => setStoppingSid(null), []);
 

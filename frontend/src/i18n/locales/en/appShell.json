@@ -30,5 +30,10 @@
     "open": "Open menu",
     "back": "Back",
     "more": "More"
+  },
+  "unstable": "Network unstable · showing earlier content, retrying",
+  "update": {
+    "available": "A new version of the console is available",
+    "dismiss": "Dismiss"
   }
 }

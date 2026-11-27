@@ -21,6 +21,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import { availabilityReasonKey } from "@/components/session/newconv/types";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import type { OrgBackendItem } from "@/pages/org/types";
 
 export interface BoardExecTargetPillProps {
@@ -67,6 +68,8 @@ export function BoardExecTargetPill({
 }: BoardExecTargetPillProps) {
   const { t } = useTranslation();
   const [open, setOpen] = React.useState(false);
+  // 手机任务页上的弹层：系统返回先关它，任务页留着（D1）。
+  useBackDismiss(open, () => setOpen(false));
   const selected = backends.find((backend) => backend.sync_id === value);
 
   // 钉住的那一档已经不在账号里（在别处删掉了）：退回「跟随 Agent 绑定」，不留一个

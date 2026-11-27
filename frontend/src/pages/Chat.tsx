@@ -1,10 +1,18 @@
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ScopeTab } from "@agentre-hub/agentre-ui";
 import {
   Link,
   useLocation,
   useNavigate,
+  useNavigationType,
   useParams,
   useSearchParams,
 } from "react-router-dom";
@@ -36,6 +44,9 @@ import type {
   NewConvProject,
 } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { backDismissLayerOf, useBackDismiss } from "@/hooks/use-back-dismiss";
+import { useMe } from "@/hooks/use-me";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import {
   deviceDisplayName,
   deviceRoster,
@@ -43,12 +54,24 @@ import {
   type DeviceItem,
 } from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
+import {
+  conversationDraftKey,
+  DraftKeyContext,
+  type Draft,
+} from "@/lib/drafts";
 import { readRecentAgents } from "@/lib/recentAgents";
 import ResolvedSessionDetail, {
   type SessionDetailSeed,
 } from "@/components/session/ResolvedSessionDetail";
 import { useIsMobile } from "@/components/use-is-mobile";
-import { useAccountChannel } from "@/hooks/use-account-channel";
+import {
+  useAccountChannel,
+  useAccountChannelState,
+} from "@/hooks/use-account-channel";
+import {
+  UNREACHABLE_AFTER_MS,
+  useDelayedFlag,
+} from "@/components/session/SessionConnectionIndicator";
 import {
   AccountChannelDevicePresence,
   AccountChannelSyncVersion,
@@ -168,7 +191,7 @@ interface DraftSeed {
  * 判据是「账号里一条都还没保存过」——那正是「还没同意过」这件事在数据上的形态，
  * 不另存一个本地标记（换台电脑、换个浏览器就说不出话了）。
  */
-function FirstSaveDialog({
+export function FirstSaveDialog({
   open,
   onOpenChange,
   onConfirm,
@@ -178,6 +201,8 @@ function FirstSaveDialog({
   onConfirm: () => void;
 }) {
   const { t } = useTranslation();
+  // 手机上是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(open, () => onOpenChange(false));
   return (
     <DialogShell open={open} onOpenChange={onOpenChange} size="md">
       <DialogShellHeader
@@ -227,6 +252,7 @@ export default function Chat() {
   }>();
   const openConversationId = routeConversationId ?? null;
   const location = useLocation();
+  const navigationType = useNavigationType();
   const deviceParam = readDeviceParam(searchParams);
   /**
    * 异步回调里要的是**此刻**的地址，不是回调造出来那一刻的：保存 / 删除的应答回来时
@@ -236,12 +262,14 @@ export default function Chat() {
     conversationId: openConversationId,
     search: location.search,
     deviceParam,
+    layer: backDismissLayerOf(location.state),
   });
   useEffect(() => {
     locationRef.current = {
       conversationId: openConversationId,
       search: location.search,
       deviceParam,
+      layer: backDismissLayerOf(location.state),
     };
   });
 
@@ -275,9 +303,21 @@ export default function Chat() {
    * 一句还没有任何依据的肯定话。问过了没有得自己记一格，清单本身答不了。
    */
   const [agentsSettled, setAgentsSettled] = useState(false);
+  /** Agent / 项目名单最近一次读失败的原值（成功即清）。空清单配上它不说「还没有…」（G1）。 */
+  const [agentsLoadError, setAgentsLoadError] = useState<unknown>(null);
+  const [projectsLoadError, setProjectsLoadError] = useState<unknown>(null);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   /** 项目树**问过了**没有。理由与 `agentsSettled` 同：空清单说不出自己是哪一种空。 */
   const [projectsSettled, setProjectsSettled] = useState(false);
+  /**
+   * 设备名单有没有一份可信的答案（网络取回过，或从本机存储读回过）。没有时机器数
+   * 写「—」而不是 0 / 0（W25）：空数组说不出是「没有机器」还是「还不知道」。
+   */
+  const [devicesKnown, setDevicesKnown] = useState(false);
+  /** 手上的设备名单是本机存储里上次的那一份，网络的还没到（决策 A5：在线点置灰）。 */
+  const [devicesFromStore, setDevicesFromStore] = useState(false);
+  /** 这一次的名单取数失败了：本地的旧样子不再「同步中」。 */
+  const [rostersFailed, setRostersFailed] = useState(false);
   /**
    * 「新对话」这一路走到哪了。null = 没在开新对话。
    *
@@ -289,8 +329,46 @@ export default function Chat() {
     | { step: "pick" }
     | { step: "project" }
     // projectSyncId 只有从项目组头进来时才有：那颗 ＋ 问的是「在这个项目里开对话」。
-    | { step: "draft"; agent: NewConvAgent; projectSyncId?: string }
+    | {
+        step: "draft";
+        agent: NewConvAgent;
+        projectSyncId?: string;
+        /** 手机上「换一个 Agent」的选择器浮在草稿上：草稿不卸载，选定才换人。 */
+        picking?: boolean;
+        /** 换 Agent 时带过来的草稿（文字 + 图片），开场放进新草稿的输入框。 */
+        carry?: Draft;
+      }
   >(null);
+  /** 新对话草稿此刻的内容（DraftSession 报上来的），换 Agent 时带去下一个。 */
+  const liveNewDraft = useRef<Draft | undefined>(undefined);
+  /*
+    手机上新对话的各步骤进历史（规格 2026-11-25 D1、D2）：挑 Agent 弹层、「从项目里挑」
+    整屏、草稿整屏各压一条记号，系统返回 = 页头 ‹ 做的那件事——弹层收掉新对话、项目屏回
+    弹层、草稿回列表（草稿按 C1 已落本机，不丢）。草稿上的「换 Agent」选择器再压一层。
+
+    步骤之间换屏（弹层 → 项目屏 / 草稿，项目屏 → 弹层）是「退一条、压一条」：同时发出
+    会互相踩（与 selectScope 同一个坑）。所以界面里换屏走 goStep——历史上还有记号时先
+    让新步骤等着（settling），旧步骤收起时记号退干净（层数回 0）再压新的。返回键换屏时
+    记号已被它退掉，层数本来就是 0，不用等。
+  */
+  const composeLayer = backDismissLayerOf(location.state);
+  const [settling, setSettling] = useState(false);
+  if (settling && composeLayer === 0) setSettling(false);
+  const composeStep = compose?.step;
+  const goStep = useCallback((next: NonNullable<typeof compose>) => {
+    if (locationRef.current.layer > 0) setSettling(true);
+    setCompose(next);
+  }, []);
+  useBackDismiss(composeStep === "pick" && !settling, () => setCompose(null));
+  useBackDismiss(composeStep === "project" && !settling, () =>
+    setCompose({ step: "pick" }),
+  );
+  useBackDismiss(composeStep === "draft" && !settling, () => setCompose(null));
+  useBackDismiss(compose?.step === "draft" && compose.picking === true, () =>
+    setCompose((prev) =>
+      prev?.step === "draft" ? { ...prev, picking: false } : prev,
+    ),
+  );
   /**
    * 派发种子留在这一页的内存里、不进历史记录：浏览器刷新会保留 history.state，放在那里
    * 的话刷新之后还拿着派发那一刻的机器去连，绕过按地址认领（规格决策 4）。
@@ -313,6 +391,29 @@ export default function Chat() {
   // 「最近用过」只在打开这一路时读一次：读它是为了排个序，不值得每次渲染都碰
   // 一次 localStorage。
   const [recentIds, setRecentIds] = useState<string[]>([]);
+  /**
+   * 这一页（pathname + search）是怎么来的、上一页是哪：删除对话后要知道「退一步」是不是
+   * 恰好回到列表。只在页换了时前进——浮层的记号（同地址、只换 state）不算一页。
+   */
+  const trailRef = useRef({
+    cur: location,
+    prev: null as typeof location | null,
+    type: navigationType,
+  });
+  useEffect(() => {
+    const trail = trailRef.current;
+    if (
+      trail.cur.pathname === location.pathname &&
+      trail.cur.search === location.search
+    ) {
+      return;
+    }
+    trailRef.current = {
+      cur: location,
+      prev: trail.cur,
+      type: navigationType,
+    };
+  }, [location, navigationType]);
   /**
    * 离开当前开着的会话，回到不开任何会话的 `/chat`（范围参数留着）。
    *
@@ -341,10 +442,26 @@ export default function Chat() {
       // 右栏正开着这一条时一并收起：它已经不存在了，留在那里等于让用户对着一份
       // 已经删掉的转录继续读。身份就是 conversation_id，与行的键同一个值。
       if (locationRef.current.conversationId === row.conversationId) {
-        leaveSession();
+        // 手机上这条是从同一份列表点进来的（push 的一格）：退回那一格，历史里不留
+        // 「列表、列表」两份重复项（D3、I14）。深链打开、或上一格不是这份列表时
+        // 仍用 replace。浮层记号压在上面时 -1 只会退掉记号，同样走 replace。
+        const trail = trailRef.current;
+        const current = locationRef.current;
+        if (
+          isMobile &&
+          current.layer === 0 &&
+          trail.type === "PUSH" &&
+          trail.prev?.pathname === "/chat" &&
+          chatIndexAddress(trail.prev.search) ===
+            chatIndexAddress(current.search)
+        ) {
+          void nav(-1);
+        } else {
+          leaveSession();
+        }
       }
     },
-    [leaveSession],
+    [isMobile, leaveSession, nav],
   );
   /**
    * 右栏正开着的那条写进了账号：`?device=` 只是未保存会话的寻址兜底，从此由账号那一行
@@ -376,6 +493,7 @@ export default function Chat() {
     scope: isMobile ? phoneServerScope(phoneScope) : undefined,
     onDeleted: onSessionDeleted,
     onSaved: onSessionSaved,
+    overlayLayer: backDismissLayerOf(location.state),
   });
   // 这两个（连同下面 reach 的 forgetResolved）单独拎出来：整个 hook 结果每次渲染都是
   // 新对象，把它整个钉进依赖数组会让下面几个 useCallback 每渲染换一次引用，索引里的
@@ -437,7 +555,9 @@ export default function Chat() {
        */
       agent: NewConvAgent,
     ) => {
-      setCompose(null);
+      // compose 不在这里收：手机上草稿压着一条历史记号，这里先收、会话地址随后才到，
+      // 记号的退栈会赶在 push 前面把地址退回去。地址一换（openConversationId 变化）上面
+      // 那处渲染期调整就把它收掉，收的那一刻地址上已经没有记号，不会再多退一格。
       // 钉不住不影响这条对话开起来（第一轮就是按所选模型跑的），但后续轮次会回到
       // 跟随 Agent 绑定 —— 详情页必须如实说出来，否则它会显示成「跟随绑定」而
       // 用户明明选过。
@@ -472,6 +592,8 @@ export default function Chat() {
           savedToAccount ? {} : { device: deviceId },
           locationRef.current.search,
         ),
+        // 草稿压着记号时用会话地址把它换掉：历史是「上一页 → 会话」，一次返回就回去。
+        { replace: locationRef.current.layer > 0 },
       );
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
       // 却列不出来，看上去就像它没进账号。重取一次让它落成一行。
@@ -501,35 +623,85 @@ export default function Chat() {
    */
 
   /**
+   * 本地优先（规格 2026-11-25 决策 A1、A5）：冷启动时先把本机存储里上次的名单铺上，
+   * 不等网络。只给这一页铺：`roster.get()` 仍只交网络上的实情，外壳与详情不受影响。
+   * 网络那一份先到了就不要存储里的（landed 记着谁已经到了）；存储不可用、换了账号
+   * 时读到 undefined，照旧等网络（A6）。
+   */
+  const rostersLandedRef = useRef({
+    devices: false,
+    agents: false,
+    projects: false,
+  });
+  useAliveEffect((alive) => {
+    const landed = rostersLandedRef.current;
+    void deviceRoster.stored().then((d) => {
+      if (!alive() || !d || landed.devices) return;
+      setDevices(d);
+      setDevicesKnown(true);
+      setDevicesFromStore(true);
+    });
+    void agentRoster
+      .stored<NewConvAgent & { department_name?: string }>()
+      .then((a) => {
+        if (!alive() || !a || landed.agents) return;
+        setAgents(a);
+        setAgentsSettled(true);
+      });
+    void projectRoster.stored().then((p) => {
+      if (!alive() || !p || landed.projects) return;
+      setProjects(p);
+      setProjectsSettled(true);
+    });
+  }, []);
+  const applyDevices = useCallback((d: DeviceItem[]) => {
+    rostersLandedRef.current.devices = true;
+    setDevices(d);
+    setDevicesKnown(true);
+    setDevicesFromStore(false);
+    setRostersFailed(false);
+  }, []);
+
+  /**
    * 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。
    *
    * 这几份名单（含下面的项目树）走共享取数（`@/lib/rosterFetch`）：外壳、详情与目标
    * 设备 hook 同一屏上也在要，共用一个在飞请求、10 秒内复用。信号到来时
    * use-account-channel 先作废再喊这里，所以信号路上直接 get 拿到的就是新的。
    */
-  useAliveEffect((alive) => {
-    Promise.all([
-      deviceRoster.get(),
-      agentRoster.get<NewConvAgent & { department_name?: string }>(),
-    ])
-      .then(([d, a]) => {
-        if (!alive()) return;
-        setDevices(d);
-        setAgents(a);
-      })
-      .catch((e: unknown) => {
-        if (alive()) sessionIndex.setLoadError(e);
-      })
-      // 取不到也算问过：挑 Agent 那一屏不能为了一次失败永远转下去。
-      .finally(() => {
-        if (alive()) setAgentsSettled(true);
-      });
-  }, []);
+  /** 名单重读靠它换依赖（恢复信号，见下面的 useRetryOnRecovery）。 */
+  const [rosterRound, setRosterRound] = useState(0);
+  useAliveEffect(
+    (alive) => {
+      Promise.all([
+        deviceRoster.get(),
+        agentRoster.get<NewConvAgent & { department_name?: string }>(),
+      ])
+        .then(([d, a]) => {
+          if (!alive()) return;
+          rostersLandedRef.current.agents = true;
+          applyDevices(d);
+          setAgents(a);
+          setAgentsLoadError(null);
+        })
+        .catch((e: unknown) => {
+          if (!alive()) return;
+          setRostersFailed(true);
+          setAgentsLoadError(e);
+          sessionIndex.setLoadError(e);
+        })
+        // 取不到也算问过：挑 Agent 那一屏不能为了一次失败永远转下去。
+        .finally(() => {
+          if (alive()) setAgentsSettled(true);
+        });
+    },
+    [rosterRound],
+  );
 
   useAccountChannel([AccountChannelDevicePresence], () => {
     deviceRoster
       .get()
-      .then(setDevices)
+      .then(applyDevices)
       // 名单取不到时保持原样：组头少一维好过把用户正在看的一列清空。
       .catch(() => {});
   });
@@ -539,10 +711,27 @@ export default function Chat() {
   const loadProjects = useCallback(() => {
     projectRoster
       .get()
-      .then(setProjects)
-      .catch(() => {})
+      .then((p) => {
+        rostersLandedRef.current.projects = true;
+        setProjects(p);
+        setProjectsLoadError(null);
+      })
+      // 列表照常（都进「未归项目」）；只记下原值，挑项目那一屏据此不说「还没有项目」。
+      .catch((e: unknown) => setProjectsLoadError(e))
       // 取不到也算问过：那一屏不能为了一次失败永远转下去。
       .finally(() => setProjectsSettled(true));
+  }, []);
+  /** 挑 Agent 那一屏的「重试」：只重读 Agent 名单。 */
+  const retryAgents = useCallback(() => {
+    agentRoster.invalidate();
+    agentRoster
+      .get<NewConvAgent & { department_name?: string }>()
+      .then((a) => {
+        rostersLandedRef.current.agents = true;
+        setAgents(a);
+        setAgentsLoadError(null);
+      })
+      .catch((e: unknown) => setAgentsLoadError(e));
   }, []);
   useEffect(() => {
     loadProjects();
@@ -553,13 +742,26 @@ export default function Chat() {
     projectRoster.invalidate();
     loadProjects();
   }, [loadProjects]);
+  /*
+    网络恢复 / 回前台 / 通道重连时，读失败的名单自己再读一次（规格 2026-11-25 K3）：
+    此前设备与 Agent 名单失败之后只有设备上下线的信号能把它救回来，行上的 Agent 名
+    一直缺着。失败不进共享名单的缓存，重跑即新请求；读成了的那份 10 秒内照旧复用。
+    原值在 agentsLoadError 上（与 rostersFailed 同一处写），401 据它不重试。
+  */
+  useRetryOnRecovery(agentsLoadError || rostersFailed, () =>
+    setRosterRound((n) => n + 1),
+  );
+  useRetryOnRecovery(projectsLoadError, reloadProjects);
 
   // 同步版本推进：行上的 Agent 名与项目轴的组头都来自 sync_objects。放在这里而不是
   // 跟另外两条信号挤在一起，只因为它要用到上面这个 reloadProjects。
   useAccountChannel([AccountChannelSyncVersion], () => {
     agentRoster
       .get<NewConvAgent & { department_name?: string }>()
-      .then(setAgents)
+      .then((a) => {
+        rostersLandedRef.current.agents = true;
+        setAgents(a);
+      })
       .catch(() => {});
     reloadProjects();
   });
@@ -576,6 +778,12 @@ export default function Chat() {
     keyword: sessionIndex.debouncedSearch,
     filter: dataFilter,
   });
+  // 账号级中继通道连不上满 ~20 秒（与对话页头同一个阈值）：首页副行据此说话，不依赖机器轴。
+  const accountChannelState = useAccountChannelState();
+  const accountUnreachable = useDelayedFlag(
+    accountChannelState !== "connected",
+    UNREACHABLE_AFTER_MS,
+  );
   const { forgetResolved } = reach;
 
   /**
@@ -1044,13 +1252,17 @@ export default function Chat() {
     <div data-testid="chat-chrome" className="h-14 shrink-0" />
   );
 
+  const agentsLoadFailure = agentsLoadError
+    ? { error: agentsLoadError, onRetry: retryAgents }
+    : null;
   const composePick = (
     <NewConversationPane
       agents={agents}
       recentIds={recentIds}
-      onPick={(agent) => setCompose({ step: "draft", agent })}
-      onFromProject={() => setCompose({ step: "project" })}
+      onPick={(agent) => goStep({ step: "draft", agent })}
+      onFromProject={() => goStep({ step: "project" })}
       settled={agentsSettled}
+      loadFailure={agentsLoadFailure}
     />
   );
   const composeProject = (
@@ -1058,24 +1270,47 @@ export default function Chat() {
       projects={newConvProjects}
       agents={agents}
       stacked={isMobile}
-      onPick={(agent) => setCompose({ step: "draft", agent })}
-      onBack={() => setCompose({ step: "pick" })}
+      onPick={(agent) => goStep({ step: "draft", agent })}
+      onBack={() => goStep({ step: "pick" })}
       onNewProject={projectManagement.openCreate}
       projectsSettled={projectsSettled}
       agentsSettled={agentsSettled}
+      projectsFailure={
+        projectsLoadError
+          ? { error: projectsLoadError, onRetry: reloadProjects }
+          : null
+      }
+      agentsFailure={agentsLoadFailure}
     />
   );
   const composeDraft =
     compose?.step === "draft" ? (
       <DraftSession
+        // 换了 Agent 就是另一份草稿页（机器计划、模型、权限都按 Agent 重算）；
+        // 文字与图片经 carry 带过去。
+        key={compose.agent.sync_id}
         agent={compose.agent}
         agents={agents}
         projects={newConvProjects}
         initialProjectSyncId={compose.projectSyncId}
+        initialDraft={compose.carry}
+        onDraftChange={(draft) => {
+          liveNewDraft.current = draft;
+        }}
         onStarted={(session) => onDraftStarted(session, compose.agent)}
         // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
-        onBack={isMobile ? () => setCompose(null) : undefined}
-        onChangeRecipient={beginCompose}
+        // 用 transition 收：草稿里「接着最近的对话」先 onBack 再 push 地址，路由状态也是
+        // transition 更新——同一批渲染里 compose 为空时地址已经是新的，草稿的记号退栈
+        // 不会误退掉刚 push 的那一条。
+        onBack={
+          isMobile ? () => startTransition(() => setCompose(null)) : undefined
+        }
+        onChangeRecipient={
+          // 手机：选择器浮在草稿上；桌面右栏里没有这一颗。
+          isMobile
+            ? () => setCompose({ ...compose, picking: true })
+            : beginCompose
+        }
       />
     ) : null;
 
@@ -1169,8 +1404,25 @@ export default function Chat() {
     setHeldCounts({ key: countsKey, counts: phoneCounts });
   }
 
-  /** 列表载入之后断网：副标题换成「没有网络 · HH:MM 的内容」，不加横幅。 */
-  const offlineSince = useOfflineSince();
+  /**
+   * 没有网络时副标题换成「没有网络 · HH:MM 的内容」，不加横幅。摆着的是本机存储里
+   * 的旧样子（含完全离线打开）时，时间取那一份的时间。
+   */
+  const offlineSince = useOfflineSince(sessionIndex.freshAt);
+  /**
+   * 摆着的是本地的旧样子（列表或设备名单，规格 2026-11-25 决策 A5）：实时标记置灰。
+   * 正在核对时才说「同步中」「更新中」——取数失败或没有网络时没有在同步。
+   */
+  const phoneStale = sessionIndex.stale || devicesFromStore;
+  const phoneSyncing =
+    phoneStale &&
+    !sessionIndex.loadError &&
+    !rostersFailed &&
+    offlineSince === null;
+  /** 取数失败的横幅：没有网络时不挂，副标题已经说了（决策同上）。 */
+  const phoneShowsLoadError =
+    !!sessionIndex.loadError && phoneRows.length > 0 && offlineSince === null;
+  const { status: identityStatus } = useMe();
 
   /** 长按「停止这一轮」：只给在跑、且承载它的机器在线（停止发得出去）的那几行。 */
   const onlineDeviceIds = useMemo(
@@ -1232,13 +1484,25 @@ export default function Chat() {
     (open: boolean) => setScopeSheet((prev) => ({ ...prev, open })),
     [],
   );
+  // 选中：先收弹层（退掉它压在历史里的那条记号），记号退干净之后再换范围——换范围
+  // 是 replace，与退记号的 navigate(-1) 同时发出会互相踩：先 replace 则记号被换成
+  // 新地址、弹层误以为还开着；先退则新范围被退回去。
+  const pendingScope = useRef<Parameters<typeof phoneScopeOf>[0] | null>(null);
   const selectScope = useCallback(
     (value: Parameters<typeof phoneScopeOf>[0]) => {
-      setPhoneScope(phoneScopeOf(value));
+      pendingScope.current = value;
       setScopeSheet((prev) => ({ ...prev, open: false }));
     },
-    [setPhoneScope],
+    [],
   );
+  const scopeLayer = backDismissLayerOf(location.state);
+  useEffect(() => {
+    if (scopeSheet.open || scopeLayer > 0 || !pendingScope.current) return;
+    const value = pendingScope.current;
+    pendingScope.current = null;
+    setPhoneScope(phoneScopeOf(value));
+  }, [scopeSheet.open, scopeLayer, setPhoneScope]);
+
   /*
     每项的数：控制台没有逐项计数的端点，数的是已载入的行。换了范围之后手上只剩那一
     范围的行，别的项会数成 0——所以只在「全部」、筛选为全部且没在搜索时刷新（搜索中
@@ -1365,25 +1629,29 @@ export default function Chat() {
       selectedRow && selectedRow.saved !== false ? selectedRow : undefined;
     return (
       <>
-        <ResolvedSessionDetail
-          conversationId={openConversationId}
-          deviceParam={deviceParam}
-          seed={detailSeed}
-          form="page"
-          backTo={chatIndexAddress(location.search)}
-          initialTitle={detailTitle}
-          initialUserText={openSeed?.userText}
-          initialAgent={openSeed?.agent}
-          initialModelNote={openSeed?.modelNote}
-          initialEffortNote={openSeed?.effortNote}
-          initialTurnStartedAt={openSeed?.turnStartedAt}
-          onMarkedRead={markRead}
-          onDelete={
-            deletableRow
-              ? () => sessionIndex.askDelete(deletableRow)
-              : undefined
-          }
-        />
+        <DraftKeyContext.Provider
+          value={conversationDraftKey(openConversationId)}
+        >
+          <ResolvedSessionDetail
+            conversationId={openConversationId}
+            deviceParam={deviceParam}
+            seed={detailSeed}
+            form="page"
+            backTo={chatIndexAddress(location.search)}
+            initialTitle={detailTitle}
+            initialUserText={openSeed?.userText}
+            initialAgent={openSeed?.agent}
+            initialModelNote={openSeed?.modelNote}
+            initialEffortNote={openSeed?.effortNote}
+            initialTurnStartedAt={openSeed?.turnStartedAt}
+            onMarkedRead={markRead}
+            onDelete={
+              deletableRow
+                ? () => sessionIndex.askDelete(deletableRow)
+                : undefined
+            }
+          />
+        </DraftKeyContext.Provider>
         <DeleteSessionDialog
           open={sessionIndex.pendingDelete !== null}
           onOpenChange={(open) => {
@@ -1433,6 +1701,10 @@ export default function Chat() {
     dot: online ? "running" : "idle",
   });
   const onlineMachineCount = sessionMachines.filter((d) => d.online).length;
+  // 已去抖的「不可达」（useMachineReachability 里熬过 3 秒才报），所以这里不会随重连抖动闪。
+  const relayUnreachable =
+    accountUnreachable ||
+    Object.values(reach.machineStates).some((state) => state === "unreachable");
   const phoneSubtitle: PhoneSubtitle =
     offlineSince !== null && sessionIndex.loaded
       ? {
@@ -1445,17 +1717,33 @@ export default function Chat() {
           }),
           dot: "idle",
         }
-      : phoneScope.kind === "agent"
-        ? presence(!!scopedAgent?.has_available_target)
-        : scopedDevice
-          ? presence(scopedDevice.online)
-          : {
-              text: t("chat.phone.machinesOnline", {
-                online: onlineMachineCount,
-                total: sessionMachines.length,
-              }),
-              dot: onlineMachineCount > 0 ? "running" : "idle",
-            };
+      : relayUnreachable
+        ? {
+            // 执行端连不上（E1）：保留机器在线数，只把「连不上」说在前面。
+            text: t("chat.phone.relayUnreachable", {
+              online: devicesKnown ? onlineMachineCount : "—",
+              total: devicesKnown ? sessionMachines.length : "—",
+            }),
+            dot: "waiting",
+          }
+        : phoneScope.kind === "agent"
+          ? presence(!!scopedAgent?.has_available_target)
+          : scopedDevice
+            ? presence(scopedDevice.online)
+            : {
+                // 名单还没到 / 取不到时数量未知，写「—」而不是 0（W25）。
+                text: t(
+                  "chat.phone.machinesOnline",
+                  devicesKnown
+                    ? {
+                        online: onlineMachineCount,
+                        total: sessionMachines.length,
+                      }
+                    : { online: "—", total: "—" },
+                ),
+                dot:
+                  devicesKnown && onlineMachineCount > 0 ? "running" : "idle",
+              };
   /**
    * 搜索框下「命中几条」。端点那几轴、且没有本地再收窄时，是端点在完整集合上数的；
    * 机器那一档与「需要你 / 进行中」只能数手上这一份。
@@ -1469,6 +1757,10 @@ export default function Chat() {
     <AppShell
       flush
       ownHeader
+      // 手机首页的页头高过 52px（还有筛选条），细条由它摆在自己的页头下方。
+      ownStrip={
+        isMobile && compose?.step !== "draft" && compose?.step !== "project"
+      }
       index={desktopIndex}
       // 新对话草稿与会话详情同一种沉浸形态（决策 3）：底部 tab 也让出来，只剩草稿自己那层头部。
       immersive={isMobile && compose?.step === "draft"}
@@ -1504,6 +1796,9 @@ export default function Chat() {
             searchCount={phoneSearchCount}
             settled={phoneSettled}
             refreshing={phoneRefreshing}
+            stale={phoneStale}
+            syncing={phoneSyncing}
+            unstable={identityStatus === "unstable"}
             rows={phoneRows}
             filter={filter}
             onFilterChange={setFilter}
@@ -1520,20 +1815,21 @@ export default function Chat() {
             onSave={sessionIndex.onSave}
             hasOnlineMachine={hasOnlineMachine}
             onFindOnMachine={() => openScopeSheet("machine")}
+            noDevice={devicesKnown && devices.length === 0}
             hasMore={sessionIndex.hasMore}
             loadingMore={sessionIndex.loadingMore}
             loadMoreFailed={sessionIndex.loadMoreFailed}
             onLoadMore={sessionIndex.loadMore}
             banners={
-              (sessionIndex.loadError && phoneRows.length > 0) ||
-              sessionIndex.saveFailure ? (
+              phoneShowsLoadError || sessionIndex.saveFailure ? (
                 <IndexBanners
                   sessionIndex={sessionIndex}
-                  showLoadError={phoneRows.length > 0}
+                  showLoadError={phoneShowsLoadError}
                 />
               ) : undefined
             }
             loadFailed={!!sessionIndex.loadError}
+            loadError={sessionIndex.loadError ?? undefined}
             onRetry={() => {
               // 与横幅上那颗同一个动作：清掉再重取，成功了错误态不会还挂着。
               sessionIndex.setLoadError(null);
@@ -1584,19 +1880,23 @@ export default function Chat() {
               /* 地址上开着一条会话：右栏嵌入它的真实详情（embedded 形态：无外壳/
                  面包屑，由外层给尺寸）。先认出承载机器，再交给 SessionDetailView。 */
               <div className="min-h-0 flex-1">
-                <ResolvedSessionDetail
-                  conversationId={openConversationId}
-                  deviceParam={deviceParam}
-                  seed={detailSeed}
-                  form="embedded"
-                  initialTitle={detailTitle}
-                  initialUserText={openSeed?.userText}
-                  initialAgent={openSeed?.agent}
-                  initialModelNote={openSeed?.modelNote}
-                  initialEffortNote={openSeed?.effortNote}
-                  initialTurnStartedAt={openSeed?.turnStartedAt}
-                  onMarkedRead={markRead}
-                />
+                <DraftKeyContext.Provider
+                  value={conversationDraftKey(openConversationId)}
+                >
+                  <ResolvedSessionDetail
+                    conversationId={openConversationId}
+                    deviceParam={deviceParam}
+                    seed={detailSeed}
+                    form="embedded"
+                    initialTitle={detailTitle}
+                    initialUserText={openSeed?.userText}
+                    initialAgent={openSeed?.agent}
+                    initialModelNote={openSeed?.modelNote}
+                    initialEffortNote={openSeed?.effortNote}
+                    initialTurnStartedAt={openSeed?.turnStartedAt}
+                    onMarkedRead={markRead}
+                  />
+                </DraftKeyContext.Provider>
               </div>
             ) : (
               /* 未选中 / 没有真实会话：按 kpP7A 的空态层级呈现（共享 EmptyState）。
@@ -1647,13 +1947,33 @@ export default function Chat() {
           不弹层。 */}
       {isMobile && (
         <NewConversationSheet
-          open={compose?.step === "pick"}
-          onOpenChange={(open) => setCompose(open ? { step: "pick" } : null)}
+          open={
+            compose?.step === "pick" ||
+            (compose?.step === "draft" && compose.picking === true)
+          }
+          onOpenChange={(open) =>
+            compose?.step === "draft"
+              ? // 关掉选择器：回到原草稿，不收草稿。
+                setCompose({ ...compose, picking: open })
+              : setCompose(open ? { step: "pick" } : null)
+          }
           agents={agents}
           recentIds={recentIds}
-          onPick={(agent) => setCompose({ step: "draft", agent })}
-          onFromProject={() => setCompose({ step: "project" })}
+          onPick={(agent) =>
+            compose?.step === "draft"
+              ? setCompose({
+                  step: "draft",
+                  agent,
+                  // 同一个 Agent：就是关掉选择器；换人：把此刻的文字与图片带过去。
+                  ...(agent.sync_id === compose.agent.sync_id
+                    ? { projectSyncId: compose.projectSyncId }
+                    : { carry: liveNewDraft.current }),
+                })
+              : goStep({ step: "draft", agent })
+          }
+          onFromProject={() => goStep({ step: "project" })}
           settled={agentsSettled}
+          loadFailure={agentsLoadFailure}
         />
       )}
 

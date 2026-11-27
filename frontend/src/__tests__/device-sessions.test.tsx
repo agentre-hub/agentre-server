@@ -184,7 +184,7 @@ describe("设备下钻地址重定向进统一索引", () => {
 
     // 账号里一条都没保存，但这台机器上报的全量都在（决策 11）。
     expect(await screen.findByText("重构登录页")).toBeTruthy();
-    expect(screen.getByText("/var/proj · codex · Idle")).toBeTruthy();
+    expect(screen.getByText("Untitled conversation")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Save" }).length).toBe(2);
     // 「那台机器上有什么」只能问机器本身，与旧的下钻页同一条路。没在搜索时关键词是
     // 空串；页大小照发 —— 机器上可能有几千条，整份要回来正是机器轴卡住的原因。

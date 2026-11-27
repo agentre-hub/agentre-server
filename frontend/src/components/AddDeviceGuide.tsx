@@ -1,6 +1,6 @@
-import { useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
   Check,
@@ -32,6 +32,8 @@ import {
   PhonePageHeader,
 } from "@/components/PhonePageHeader";
 import { Card } from "@/components/ui/card";
+import { useIsMobile } from "@/components/use-is-mobile";
+import { backDismissLayerOf, useBackDismiss } from "@/hooks/use-back-dismiss";
 import { parseUserCode, toChars } from "@/lib/userCode";
 
 /** 能被「加进来」的设备类型。浏览器不是可管理设备；移动端没有可装的客户端。 */
@@ -178,6 +180,38 @@ export function AddDeviceGuide({
   const [incomplete, setIncomplete] = useState(false);
   const codeErrorId = useId();
 
+  /*
+    手机整屏三步进历史（规格 2026-11-25 D2）：整屏本身压一条记号，第 2、3 步各再压一条，
+    系统返回由内向外——第 3 步回第 2 步、第 2 步回第 1 步、第 1 步回到它盖住的列表。
+    第 k 步的记号要等第 k-1 层落地才压（`layer >= k - 1`），从步骤条一下跳到第 3 步时
+    两条才不会同时按同一个层数压出来。
+    ✕ 与「完成」是从界面关：先把几层记号都退掉（closing），退干净之后才通知宿主卸载——
+    宿主先卸载会把记号留在历史里。
+  */
+  const mobile = useIsMobile();
+  const layer = backDismissLayerOf(useLocation().state);
+  const history = compact && onClose !== undefined && mobile;
+  const [closing, setClosing] = useState(false);
+  const live = history && !closing;
+  useBackDismiss(live, () => onClose?.());
+  useBackDismiss(live && step >= 2 && layer >= 1, () => setStep(1));
+  useBackDismiss(live && step >= 3 && layer >= 2, () => setStep(2));
+  // 提交设备码要去别的路由：同样先退干净记号再去（push），否则目的地下面垫着几条
+  // 同地址的记号，从那里返回要多按几次才回到打开指引的页。
+  const [leaveTo, setLeaveTo] = useState<{
+    to: string;
+    state: unknown;
+  } | null>(null);
+  useEffect(() => {
+    if (!closing || layer !== 0) return;
+    if (leaveTo) void nav(leaveTo.to, { state: leaveTo.state });
+    else onClose?.();
+  }, [closing, layer, onClose, leaveTo, nav]);
+  const requestClose = () => {
+    if (history) setClosing(true);
+    else onClose?.();
+  };
+
   function finishStep(n: number) {
     setDone((prev) => (prev.includes(n) ? prev : [...prev, n]));
     // 最后一步没有「下一步」可去：只落一个勾，不要把 step 推到一个不存在的
@@ -203,9 +237,14 @@ export function AddDeviceGuide({
     }
     // 带上所选方式：批准后的成功页要按它出第 3 步的命令（引导的 state 离开
     // 本页就丢了，只能靠路由 state 带过去）。
-    nav(`/device?user_code=${encodeURIComponent(norm)}`, {
-      state: { from: "add-guide", method },
-    });
+    const to = `/device?user_code=${encodeURIComponent(norm)}`;
+    const state = { from: "add-guide", method };
+    if (history) {
+      setLeaveTo({ to, state });
+      setClosing(true);
+    } else {
+      nav(to, { state });
+    }
   }
 
   const server = consoleOrigin();
@@ -340,7 +379,7 @@ export function AddDeviceGuide({
           onClick={() => {
             finishStep(3);
             // 整屏形态里「完成」就是走完了：回到它盖住的那一页。
-            onClose?.();
+            requestClose();
           }}
         >
           {t("device.add.service.finish")}
@@ -487,7 +526,7 @@ export function AddDeviceGuide({
               <PhoneHeaderButton
                 edge="start"
                 aria-label={t("device.add.close")}
-                onClick={onClose}
+                onClick={requestClose}
               >
                 <X className="size-5" aria-hidden="true" />
               </PhoneHeaderButton>

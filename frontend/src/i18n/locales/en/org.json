@@ -99,6 +99,7 @@
       "savedJustNow": "Saved · just now",
       "savedAt": "Saved · {{time}}",
       "saveFailed": "Save failed",
+      "saveFailedAfterLeave": "Your edit wasn't saved",
       "retry": "Retry"
     },
     "prompt": {
@@ -120,7 +121,11 @@
     "cancel": "Cancel"
   },
   "errors": {
-    "loadFailed": "Could not load your organization chart.",
-    "generic": "Something went wrong. Please try again."
+    "loadFailedWhat": "Could not load your organization chart",
+    "generic": "Something went wrong. Please try again.",
+    "createTimeout": "The network timed out. It may already have been created.",
+    "createRefresh": "Refresh to check",
+    "createNotFound": "Not found. You can submit it again.",
+    "createRefreshFailed": "Couldn't refresh. Try again in a moment."
   }
 }

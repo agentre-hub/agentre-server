@@ -19,6 +19,10 @@ type DeviceRepo interface {
 	FindByFingerprint(ctx context.Context, userID int64, fingerprint string) (*device_entity.Device, error)
 	Upsert(ctx context.Context, d *device_entity.Device) error
 	Touch(ctx context.Context, id, nowMs int64) error
+	// TouchLastSeen 把 last_seen_at 推进到 nowMs，只进不退（WHERE last_seen_at < nowMs）：
+	// 多副本各自在连接连上 / 断开时写，迟到的旧时间戳不会把较新的值写回去。命中 0 行
+	// （护栏挡下、或设备已不存在）不是错误。
+	TouchLastSeen(ctx context.Context, id, nowMs int64) error
 	// UpdateVersion 按新值刷新这台设备的 version。调用方（mirror_svc，镜像握手成功后）
 	// 自己先比过当前值才决定要不要调它——这条方法本身不做条件判断，直接写。
 	UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error
@@ -26,6 +30,8 @@ type DeviceRepo interface {
 	// 归属由调用方（device_svc.Rename）判过才落到这里；这条 UPDATE 只按 id 写。
 	UpdateDisplayName(ctx context.Context, id int64, displayName string, nowMs int64) error
 	Revoke(ctx context.Context, id, nowMs int64) error
+	// ListActiveChildren 列出由 parentID 这台桌面代签、仍在用的 cli 子设备。
+	ListActiveChildren(ctx context.Context, parentID int64) ([]*device_entity.Device, error)
 	ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error)
 	// ListActiveByUsers 一次查一批账号的在用设备，含义与逐个调用 ListByUser 相同
 	// （同样的 status=ACTIVE 过滤、同样按 last_seen_at DESC 排序），只是把发往数据库
@@ -69,7 +75,7 @@ func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
 		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "user_id"}, {Name: "fingerprint"}},
 			DoUpdates: clause.AssignmentColumns([]string{
-				"name", "kind", "platform", "version",
+				"name", "kind", "platform", "version", "parent_device_id",
 				"last_seen_at", "status", "updatetime",
 			}),
 		}).Create(d).Error; err != nil {
@@ -86,6 +92,11 @@ func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
 
 func (r *repo) Touch(ctx context.Context, id, nowMs int64) error {
 	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=?", id).
+		Updates(map[string]interface{}{"last_seen_at": nowMs, "updatetime": nowMs}).Error
+}
+
+func (r *repo) TouchLastSeen(ctx context.Context, id, nowMs int64) error {
+	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=? AND last_seen_at < ?", id, nowMs).
 		Updates(map[string]interface{}{"last_seen_at": nowMs, "updatetime": nowMs}).Error
 }
 
@@ -133,6 +144,15 @@ func (r *repo) ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int6
 		for _, d := range rows {
 			out[d.UserID] = append(out[d.UserID], d)
 		}
+	}
+	return out, nil
+}
+
+func (r *repo) ListActiveChildren(ctx context.Context, parentID int64) ([]*device_entity.Device, error) {
+	var out []*device_entity.Device
+	if err := db.Ctx(ctx).Where("parent_device_id=? AND status=?", parentID, consts.ACTIVE).
+		Find(&out).Error; err != nil {
+		return nil, err
 	}
 	return out, nil
 }

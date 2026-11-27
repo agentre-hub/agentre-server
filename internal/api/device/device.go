@@ -4,7 +4,7 @@ import "github.com/cago-frame/cago/server/mux"
 
 type DeviceAuthorizeRequest struct {
 	mux.Meta    `path:"/v1/oauth/device/authorize" method:"POST"`
-	DeviceKind  string `json:"device_kind"  binding:"required,oneof=desktop agentred mobile"`
+	DeviceKind  string `json:"device_kind"  binding:"required,oneof=desktop agentred mobile cli"`
 	Fingerprint string `json:"fingerprint"  binding:"required,min=8,max=128"`
 	Platform    string `json:"platform"     binding:"max=64"`
 	Version     string `json:"version"`
@@ -196,4 +196,30 @@ type RenameDeviceResponse struct {
 	// DisplayName 是这一改之后**生效**的显示名：设了备注名就是它，清空之后是设备自报名。
 	// 调用方可以直接拿它刷新那一行，不必自己再算一遍回落。
 	DisplayName string `json:"display_name"`
+}
+
+// CLIChildDeviceRequest 是桌面为自己代签一台 agrctl（cli）子设备的请求：无需浏览器批准，
+// 调用方凭自己的桌面设备 access token 就是账号授权过的。
+//
+// 只认桌面设备的 bearer：cli 设备、个人 token 与其余设备一律 403。账号与调用设备取自令牌
+// 解析出的身份，请求体里没有、也不接受它们。
+type CLIChildDeviceRequest struct {
+	mux.Meta `path:"/v1/devices/cli-children" method:"POST"`
+	// Fingerprint 是**子设备自己的**指纹，由桌面生成：不能与调用方桌面相同（devices 按
+	// (账号, 指纹) upsert 并会覆盖 kind，复用桌面指纹会把桌面那一行改写成 cli），也不能
+	// 撞上别的设备。同一指纹再次申请 = 为同一个子设备重新签发（旧凭据链作废）。
+	Fingerprint string `json:"fingerprint" binding:"required,min=8,max=128"`
+	// Name 是子设备的显示名，可空（回退到指纹缩写）。
+	Name string `json:"name" binding:"max=128"`
+}
+
+// CLIChildDeviceResponse 与 DeviceTokenResponse 同形：子设备拿到的就是一对普通设备令牌，
+// 之后的刷新、撤销走同一批 /v1/oauth/token/* 端点。
+type CLIChildDeviceResponse struct {
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshToken     string `json:"refresh_token"`
+	RefreshExpiresIn int    `json:"refresh_expires_in"`
+	DeviceID         int64  `json:"device_id"`
 }

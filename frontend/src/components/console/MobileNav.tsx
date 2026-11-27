@@ -9,6 +9,7 @@ import {
   DialogTitle,
   cn,
 } from "@agentre-hub/agentre-ui";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { PHONE_HEADER_BUTTON_CLASS } from "@/components/PhonePageHeader";
 
 /**
@@ -36,6 +37,19 @@ function isTopLevelPath(pathname: string): boolean {
   const normalized =
     pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   return TOP_LEVEL_PATHS.has(normalized);
+}
+
+/**
+ * `/chat?axis=machine&machine=<设备>` 是从设备详情「查看这台机器的对话」下钻进来的
+ * （App.tsx 的 DeviceSessionsRedirect 落成这个地址）：它虽在 /chat 下，却是设备的子页，
+ * 页头给 ‹ 回设备（D3、I20）。不带 `machine` 的机器轴是抽屉进来的整页范围，仍是 ☰。
+ */
+function deviceDrillDownOf(pathname: string, search: string): string | null {
+  if (pathname.replace(/\/+$/, "") !== "/chat") return null;
+  const params = new URLSearchParams(search);
+  if (params.get("axis") !== "machine") return null;
+  const id = Number(params.get("machine"));
+  return Number.isInteger(id) && id > 0 ? `/devices/${id}` : null;
 }
 
 /** 没有可退的历史（直接打开深链、PWA 冷启动）时，返回落到它所属的顶层页。 */
@@ -68,11 +82,12 @@ const BUTTON_CLASS = cn(PHONE_HEADER_BUTTON_CLASS, "-ml-2");
 /** 页头左侧：顶层页 ☰（开抽屉），非顶层页返回。命中区 44px。 */
 export function MobileNavButton() {
   const { t } = useTranslation();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const back = useMobileBack();
   const drawer = useContext(MobileDrawerContext);
+  const drillDownParent = deviceDrillDownOf(pathname, search);
 
-  if (isTopLevelPath(pathname) && drawer) {
+  if (isTopLevelPath(pathname) && drawer && !drillDownParent) {
     return (
       <button
         type="button"
@@ -88,7 +103,7 @@ export function MobileNavButton() {
     <button
       type="button"
       aria-label={t("appShell.drawer.back")}
-      onClick={() => back(parentOf(pathname))}
+      onClick={() => back(drillDownParent ?? parentOf(pathname))}
       className={BUTTON_CLASS}
     >
       <ChevronLeft className="size-5" aria-hidden="true" />
@@ -122,13 +137,43 @@ export function MobileDrawer({
   account: ReactNode;
   children: ReactNode;
 }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  // 系统返回先关抽屉（D1）：抽屉开着时历史里有它的一条记号。
+  useBackDismiss(open, () => onOpenChange(false));
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
-        onClick={(e) => {
-          if ((e.target as HTMLElement).closest("a")) onOpenChange(false);
+        // 打开时焦点落在当前页那一项（D5），而不是 DOM 里最后一个可聚焦的（语言）。
+        onOpenAutoFocus={(e) => {
+          const current =
+            e.currentTarget instanceof HTMLElement
+              ? e.currentTarget.querySelector<HTMLElement>(
+                  '[aria-current="page"]',
+                )
+              : null;
+          if (!current) return;
+          e.preventDefault();
+          current.focus();
+        }}
+        // 抽屉里的链接：跳转改成 replace，换掉抽屉压在历史里的那条记号——从新页返回一
+        // 次就回到打开抽屉的那页（抽屉关着），不会先落在一条抽屉的残留上。换掉记号后
+        // useBackDismiss 看到路由变了自己会收抽屉；这里不直接关，退记号的 navigate(-1)
+        // 会把刚跳的页退回来。点到的就是当前页：拦下跳转，当作普通的关闭。
+        onClickCapture={(e) => {
+          const link = (e.target as HTMLElement).closest("a");
+          if (!link || link.target) return;
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          if (link.origin !== window.location.origin) return;
+          e.preventDefault();
+          const to = link.pathname + link.search + link.hash;
+          if (to === location.pathname + location.search + location.hash) {
+            onOpenChange(false);
+          } else {
+            void navigate(to, { replace: true });
+          }
         }}
         className={cn(
           "left-0 top-0 h-dvh w-[84%] max-w-[320px] translate-x-0 translate-y-0 rounded-none rounded-r-xl bg-chrome",

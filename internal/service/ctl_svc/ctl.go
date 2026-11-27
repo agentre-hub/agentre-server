@@ -15,17 +15,43 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
+	"github.com/agentre-hub/agentre-server/internal/model/entity/personal_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/engine_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
-// Caller 是出示设备 Bearer 的那台机器。账号与设备都取自鉴权上下文。
+// Caller 是出示 Bearer 的调用方：一台设备，或一枚个人 token（DeviceID 为 0）。账号、设备、
+// 形态与范围都取自鉴权上下文。
 type Caller struct {
 	UserID   int64
 	DeviceID int64
+	// Kind 是调用方形态（devices.kind，或 device_svc.KindPersonalToken）。
+	Kind string
+	// Scopes 只对个人 token 有意义；设备调用方的能力由 Kind 决定，不按范围裁。
+	Scopes []string
+}
+
+// isPersonalToken 报告调用方是不是一枚个人 token——唯一按范围裁剪能力的调用方。
+func (c Caller) isPersonalToken() bool { return c.Kind == device_svc.KindPersonalToken }
+
+// requireScope 在调用方是个人 token 时要求它带着 scopes 中任一个；设备调用方不按范围裁
+// （agentred 在会话里已审批过，cli 设备是账号登录态），一律放行。拒绝时点名第一个，文案与
+// HTTP 中间件逐字相同。
+func (c Caller) requireScope(scopes ...string) error {
+	if !c.isPersonalToken() {
+		return nil
+	}
+	for _, s := range scopes {
+		if slices.Contains(c.Scopes, s) {
+			return nil
+		}
+	}
+	return &Error{Status: http.StatusForbidden, Msg: "token lacks scope " + scopes[0]}
 }
 
 // CtlSvc 执行一次 ctl 请求。preview 为真时写请求只算变更清单、不落库——agentred 在
@@ -85,15 +111,16 @@ func notFound(kind agentrewire.CtlKind, id int64) error {
 	return &Error{Status: http.StatusNotFound, Msg: fmt.Sprintf("%s id %d not found", kindNames[kind], id)}
 }
 
-// unsupported 是本 spec 在 server 路径上明确不做的操作（send、OpenClaw token、桌面
-// 设备的本机路径）。
+// unsupported 是本 spec 在 server 路径上明确不做的操作（OpenClaw token、桌面设备的本机路径）。
 func unsupported(format string, a ...any) error {
 	return &Error{Status: http.StatusUnprocessableEntity, Msg: fmt.Sprintf(format, a...)}
 }
 
-// ErrSendUnsupported 是 `agrctl send` 打到 server 上时的回答。
-var ErrSendUnsupported = unsupported(
-	"send is not supported for sessions dispatched from the web console; dispatch the task from the console instead")
+// ErrSendHandledByAgentred 是 `agrctl send` 打到 server 上时的回答：控制台会话里的 send 由会话
+// 所在的 agentred 以账号对端身份执行（spec 2026-11-25 决策 12），server 从不派发。还在打这里的
+// 是旧版 agentred（421，agrctl 按执行失败退出）。
+var ErrSendHandledByAgentred = &Error{Status: http.StatusMisdirectedRequest, Msg: "send from a session is handled by the agentred that owns the session, " +
+	"not by the account server; upgrade that agentred"}
 
 // kindNames 是错误消息与变更清单里的资源名，与 agrctl 的资源名一致。
 var kindNames = map[agentrewire.CtlKind]string{
@@ -111,6 +138,9 @@ func (s *ctlSvc) Handle(
 ) (*agentrewire.CtlResponse, error) {
 	switch op := req.GetOp().(type) {
 	case *agentrewire.CtlRequest_List:
+		if err := caller.requireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
+			return nil, err
+		}
 		st, err := loadState(ctx, caller)
 		if err != nil {
 			return nil, err
@@ -123,6 +153,9 @@ func (s *ctlSvc) Handle(
 			List: &agentrewire.CtlListResponse{Items: items},
 		}}, nil
 	case *agentrewire.CtlRequest_Get:
+		if err := caller.requireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat); err != nil {
+			return nil, err
+		}
 		st, err := loadState(ctx, caller)
 		if err != nil {
 			return nil, err
@@ -135,6 +168,9 @@ func (s *ctlSvc) Handle(
 			Get: &agentrewire.CtlGetResponse{Resource: res},
 		}}, nil
 	case *agentrewire.CtlRequest_Write:
+		if err := caller.requireScope(personal_token_entity.ScopeResourcesWrite); err != nil {
+			return nil, err
+		}
 		resp, err := s.write(ctx, caller, op.Write, preview)
 		if err != nil {
 			return nil, err

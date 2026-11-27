@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/pkg/i18n"
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/cago-frame/cago/pkg/utils/httputils"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
@@ -161,7 +163,9 @@ func (d *Device) Revoke(c *gin.Context, req *api.TokenRevokeRequest) (*api.Token
 	if target == 0 {
 		return nil, i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
 	}
-	if callerID != 0 {
+	// 设备调用方只能撤销自己；agrctl 的 cli 设备是账号登录态，与浏览器会话同权：能撤销
+	// 账号下任一台在用的设备（范围只裁个人 token，路由上已判）。
+	if callerID != 0 && ginctx.DeviceKind(c) != device_entity.KindCLI {
 		if target != callerID {
 			return nil, i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
 		}
@@ -262,8 +266,8 @@ func (d *Device) Rename(c *gin.Context, req *api.RenameDeviceRequest) (*api.Rena
 // Upgrade 让控制台点名的那台 agentred 把自己升上去（规格 2026-09-03
 // 「控制台呈现与 latest 来源」）。
 //
-// 鉴权沿用既有的两条：浏览器会话 + CSRF 圈定账号，归属判定圈定机器——升级借的是那台
-// 机器上**已经鉴权的**镜像连接，本身不引入新的授权面（决策 15）。
+// 鉴权：浏览器会话 + CSRF、cli 设备或带 devices:write 的个人 token 圈定账号，归属判定
+// 圈定机器——升级借的是那台机器上**已经鉴权的**镜像连接，本身不引入新的授权面（决策 15）。
 //
 // 受理判定完全归 daemon：这里既不判「有没有对话在跑」，也不重写它给出的那句人话
 // （决策 22）——两端与命令行对同一件事只说一句话，前提是中间这几层谁都不改口。
@@ -272,6 +276,11 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 	userID, err := ginctx.RequireUserID(c)
 	if err != nil {
 		return nil, err
+	}
+	// 升级只开放给人这一侧：浏览器会话、cli 设备、带 devices:write 的个人 token（路由上已判
+	// 范围）。桌面与 agentred 设备拿着自己的 access token 不能去重启别的机器。
+	if kind := ginctx.DeviceKind(c); kind != "" && kind != device_entity.KindCLI && kind != device_svc.KindPersonalToken {
+		return nil, i18n.NewForbiddenError(ctx, code.Forbidden)
 	}
 	// 不是本账号在用的设备、或者根本不是一台 agentred：一次调用都不发。自更新方法只有
 	// agentred 认，对着桌面端发等于拿一个必然的协议错误当业务答复。
@@ -288,7 +297,14 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 		// 离线不是「升级被拒绝」：用户该做的事不一样（等它回来，而不是换个说法再点
 		// 一次）。与 relay_ctr 对 daemon 离线的答复同一形状。
 		return nil, i18n.NewErrorWithStatus(ctx, http.StatusConflict, code.RelayDaemonOffline)
+	case errors.Is(err, mirror_svc.ErrProtocolVersionMismatch):
+		// 对端按协议版本拒了握手：不是服务器故障，远程也升不动——只能在那台机器上自己升。
+		logger.Ctx(ctx).Warn("device_ctr.Upgrade: device runs an incompatible release",
+			zap.Int64("userId", userID), zap.Int64("deviceId", req.DeviceID), zap.Error(err))
+		return nil, i18n.NewErrorWithStatus(ctx, http.StatusConflict, code.DeviceIncompatibleRelease)
 	case err != nil:
+		logger.Ctx(ctx).Error("device_ctr.Upgrade: upgrade failed",
+			zap.Int64("userId", userID), zap.Int64("deviceId", req.DeviceID), zap.Error(err))
 		return nil, i18n.NewInternalError(ctx, code.ServerError)
 	}
 	return &api.DeviceUpgradeResponse{
@@ -297,6 +313,30 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 		Message:       result.Message,
 		ActiveTurns:   result.ActiveTurns,
 		TargetVersion: result.TargetVersion,
+	}, nil
+}
+
+// MintCLIChild 让桌面设备为自己代签一台 agrctl（cli）子设备，无需浏览器批准：调用方凭
+// 自己的设备 access token 就是账号授权过的（规格 2026-11-25「身份与登录 → 桌面代签」）。
+//
+// 路由组已经在绑定请求体之前拒掉 cli 设备与个人 token；其余不是桌面的设备（agentred 等）
+// 由服务层按调用设备的库内 kind 拒掉。账号与调用设备只取自令牌身份。
+func (d *Device) MintCLIChild(c *gin.Context, req *api.CLIChildDeviceRequest) (*api.CLIChildDeviceResponse, error) {
+	ctx := device_svc.WithClientInfo(c.Request.Context(), c.ClientIP(), c.GetHeader("User-Agent"))
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
+	}
+	out, err := device_svc.Default().MintCLIChild(ctx, device_svc.MintCLIChildInput{
+		UserID: userID, CallerDeviceID: ginctx.DeviceID(c), Fingerprint: req.Fingerprint, Name: req.Name,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &api.CLIChildDeviceResponse{
+		AccessToken: out.AccessToken, TokenType: "Bearer",
+		ExpiresIn: out.ExpiresIn, RefreshToken: out.RefreshToken,
+		RefreshExpiresIn: out.RefreshExpiresIn, DeviceID: out.DeviceID,
 	}, nil
 }
 

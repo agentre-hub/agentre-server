@@ -18,7 +18,7 @@ import {
   ErrCodeUnauthorized,
 } from "@agentre-hub/agentre-wire";
 
-import { ApiError, ApiTimeoutError } from "@/lib/api";
+import { ApiError, ApiTimeoutError, ApiUnavailableError } from "@/lib/api";
 import { DispatchConnectionError } from "@/lib/dispatch";
 import { FAILURE_CODES } from "@/lib/errorCodes";
 import { readProtocolRejection } from "@/lib/protocolMismatch";
@@ -27,7 +27,7 @@ import { RelayError } from "@/lib/relayClient";
 export type FailureCategory =
   "offline" | "peerRefused" | "versionTooOld" | "permission" | "unknown";
 
-export type FailureExit = "retry" | "devices" | "none";
+export type FailureExit = "retry" | "devices" | "signIn" | "none";
 
 export interface Failure {
   category: FailureCategory;
@@ -67,6 +67,7 @@ type Reason =
   | "common.failure.pageOutdated"
   | "common.failure.versionMismatch"
   | "common.failure.signedOut"
+  | "common.failure.serviceUnavailable"
   | "common.failure.denied"
   | "common.failure.unknown";
 
@@ -84,8 +85,13 @@ const OFFLINE_MACHINE: Verdict = {
 };
 const SIGNED_OUT: Verdict = {
   category: "permission",
-  exit: "none",
+  exit: "signIn",
   reason: "common.failure.signedOut",
+};
+const SERVICE_UNAVAILABLE: Verdict = {
+  category: "offline",
+  exit: "retry",
+  reason: "common.failure.serviceUnavailable",
 };
 const DENIED: Verdict = {
   category: "permission",
@@ -111,9 +117,18 @@ export function describeFailure(
     message: t(verdict.reason, {
       what: context.what,
       machine,
+      status: statusOf(err),
     }),
     diagnostic: diagnose(err),
   };
+}
+
+/** 「服务暂时不可用（502）」里的那个状态码；别的失败用不到它。 */
+function statusOf(err: unknown): number | undefined {
+  return findInChain(
+    err,
+    (e): e is ApiUnavailableError => e instanceof ApiUnavailableError,
+  )?.status;
 }
 
 function classify(err: unknown): Verdict {
@@ -132,6 +147,9 @@ function classify(err: unknown): Verdict {
   if (coded instanceof RelayError) return classifyRelay(coded);
   if (findInChain(err, (e) => e instanceof DispatchConnectionError)) {
     return OFFLINE_MACHINE;
+  }
+  if (findInChain(err, (e) => e instanceof ApiUnavailableError)) {
+    return SERVICE_UNAVAILABLE;
   }
   // REST 超时：与断网同一种呈现（可重试），不另起文案。
   if (findInChain(err, (e) => e instanceof ApiTimeoutError)) {
@@ -276,6 +294,9 @@ function diagnose(err: unknown): string {
 function describeOne(e: unknown): string {
   if (e instanceof ApiError) {
     return `ApiError [code=${e.code} status=${e.status}]: ${e.message}`;
+  }
+  if (e instanceof ApiUnavailableError) {
+    return `ApiUnavailableError [status=${e.status}] ${e.path}: ${e.raw}`;
   }
   if (e instanceof RelayError)
     return `${e.name} [code=${e.code}]: ${e.message}`;

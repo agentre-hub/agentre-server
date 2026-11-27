@@ -20,6 +20,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/engine_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/healthz_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/passkey_ctr"
+	"github.com/agentre-hub/agentre-server/internal/controller/personal_token_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/portforward_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
@@ -30,11 +31,13 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/sync_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/workspace_ctr"
 	"github.com/agentre-hub/agentre-server/internal/middleware"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/personal_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/ctl_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/personal_token_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
@@ -73,6 +76,9 @@ type RouterDeps struct {
 	Bearer middleware.BearerResolver
 	// Ctl 是 agrctl 资源接口的执行者。留给测试注入；为空时每次请求取 ctl_svc.Default()。
 	Ctl ctl_svc.CtlSvc
+	// PersonalTokens 是个人 token 的管理与解析。留给测试注入；为空时取
+	// personal_token_svc.Default()。
+	PersonalTokens personal_token_svc.PersonalTokenSvc
 
 	// drainer 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
 	// 长连接逐条礼貌关掉(见 DrainRelays)。
@@ -150,6 +156,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	engine := root.IRouter.(*gin.Engine)
 	engine.RedirectTrailingSlash = false
 	engine.Use(portForwardHost.Dispatch)
+	// 错误消息的语言（agrctl 点名 en）：同样装在路由注册之前，每条路由的处理链都带上它。
+	engine.Use(middleware.Language())
 
 	g := root.Group("/")
 	// 写请求来源校验的名单（spec 2026-09-21「控制台加固」）：控制台自己的 origin 加已
@@ -184,10 +192,18 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if redisClient == nil {
 		redisClient = redis.Default()
 	}
-	relayBearer := auth_svc.NewCredentialResolver(bearer, auth_svc.Default())
+	// 个人 token 只进这个组合解析方（中继客户端入口与核验端点），不进上面那个设备解析方：
+	// DeviceJWT 与 SessionOrDeviceAuth 因此照旧只认设备 access token。
+	personalTokens := r.PersonalTokens
+	if personalTokens == nil {
+		personalTokens = personal_token_svc.Default()
+	}
+	// 账号调用方入口的解析方：设备 access token + 个人 token，不含中继票据与 server 自用凭据。
+	accountBearer := auth_svc.NewCredentialResolver(bearer, nil).WithPersonalTokens(personalTokens)
+	relayBearer := auth_svc.NewCredentialResolver(bearer, auth_svc.Default()).WithPersonalTokens(personalTokens)
 	relayTickets := credstore.New(redisClient)
 	// 核验端点认得 server 签发的全部 Bearer 凭据——待核验的那一枚可能是设备 access
-	// token、中继票据或 server 自用凭据，与 /v1/relay/client 用的是同一个解析方
+	// token、个人 token、中继票据或 server 自用凭据，与 /v1/relay/client 用的是同一个解析方
 	// （规格 2026-09-11-opaque-credentials-auto-direct，S5）。
 	credentialsCtr := credentials_ctr.New(relayBearer)
 	// 账号信号没有自己的端点了（决策 13）：它跑在中继客户端连接的保留通道上，
@@ -203,6 +219,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	sessionImportCtr := sessionimport_ctr.New()
 	statsCtr := stats_ctr.New()
 	releaseCtr := release_ctr.New()
+	personalTokenCtr := personal_token_ctr.New(r.PersonalTokens)
 	// 端口转发子域链接（spec 2026-09-21-port-forward-subdomain「地址与路由」）：
 	// 归属判定复用 device_svc.Default()（与 portforward_ctr.New 那一份同一个
 	// DeviceLookup 口径），分配器留给测试注入；为空时取本进程那份
@@ -249,9 +266,6 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		deviceCtr.Approve,
 		deviceCtr.Deny,
 		deviceCtr.RelayTicket,
-		// 一键升级会重启用户的机器：浏览器会话 + CSRF 那一组，与撤销设备同级。
-		// 它只走 web 控制台这条路——桌面端有自己那条直连（remote_device_svc）。
-		deviceCtr.Upgrade,
 		engineCtr.ListProviders,
 		engineCtr.CreateProvider,
 		engineCtr.UpdateProvider,
@@ -307,16 +321,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// session 或设备 access token 都可以
 	g.Group("/", middleware.SessionOrDeviceAuth(bearer, consoleOrigins)).Bind(
 		authCtr.Me,
-		deviceCtr.Revoke,
-		deviceCtr.List,
-		// 账号级备注名：设备名是那台机器自报的主机名，同一台电脑上的几个 checkout
-		// 在账号里就是几行同名设备。能读到这份清单的调用方就能给清单里的行起名字。
-		deviceCtr.Rename,
 		// web 控制台两屏的只读端点（决策 13）：账号级 Agent 清单、设备展开详情。
 		workspaceCtr.ListAgents,
 		workspaceCtr.DeviceDetail,
-		// R15：从 web 给「某 Agent + 某项目」取派发计划（哪台 agentred、逐档原因）。
-		workspaceCtr.DispatchTarget,
 		// 执行目标的派发顺序：把某个 Agent 的执行目标排成调用方要的次序，改的是
 		// 账号默认顺序（决策 14）。本组鉴权的是用户，写入范围因此完全由 JWT / 会话
 		// 里的账号圈定，请求体里没有任何身份字段。
@@ -379,22 +386,12 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		workspaceCtr.CreateIssueLabel,
 		workspaceCtr.UpdateIssueLabel,
 		workspaceCtr.DeleteIssueLabel,
-		// 账号里保存的对话（决策 5：保存 / 删除取代关注 / 取消关注）：账号级，
-		// 任一端（会话或设备 JWT）都可操作。保存把一条对话收进账号并开始镜像；
-		// 删除清掉 server 那份，并让执行那条对话的机器也删掉它自己那一份。
-		savedSessionCtr.Save,
+
+		// 账号里保存的对话的删除：清掉 server 那份，并让执行那条对话的机器也删掉它自己
+		// 那一份。个人 token 不进这一条（保存那条在下面带范围的组里）。
 		savedSessionCtr.Delete,
 		savedSessionCtr.CleanupPreview,
 		savedSessionCtr.Cleanup,
-		// 账号里 agent 会话的两个只读端点（/v1/agent-sessions*）：索引读会话摘要
-		// （项目归属就地判定，决策 12），
-		// 详情页按游标翻转录。cwd 不出现在任一响应里（R19，见 workspace 包守卫）。
-		agentSessionCtr.SavedSessions,
-		agentSessionCtr.Transcript,
-		// 侧栏「对话」那颗角标要的那两个数字（等你处理 / 未读）。它单独成一条端点
-		// 而不是让外壳去拉一页索引：这条路在每一次进入任何页面时都会跑一遍，而一页
-		// 摘要里的标题、游标、项目归属一个都用不上。
-		agentSessionCtr.AttentionCount,
 		// 记下「读到这条对话为止」，供索引的「未读」那一档判定。它是写方法，
 		// 本组的 session 分支已经强制 CSRF（session_or_device_auth.go）。
 		agentSessionCtr.MarkSessionRead,
@@ -409,12 +406,61 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		sessionImportCtr.Candidates,
 		sessionImportCtr.Preview,
 		sessionImportCtr.Run,
+		// 个人 token 管理（规格 2026-11-25「个人 token 与范围」）：只有人能管——浏览器会话
+		// 或 cli 设备（agrctl 登录态）；桌面、agentred 与个人 token 自己由 personal_token_svc
+		// 判 403。个人 token 本来也解析不进本组（bearer 只认设备 access token）。写方法的
+		// 会话分支照常强制 CSRF。
+		personalTokenCtr.Create,
+		personalTokenCtr.List,
+		personalTokenCtr.Rotate,
+		personalTokenCtr.Delete,
+	)
+
+	// 账号调用方：浏览器会话、设备 access token（含 agrctl 的 cli 设备）与个人 token
+	// （规格 2026-11-25「个人 token 与范围」）。个人 token 只进这一组、且逐条带范围——这里
+	// 不放 org 写、项目、看板等其余路由，它们仍在上面那组，个人 token 解析不到。
+	// RequireScope 对会话与设备一律放行，只裁个人 token（决策 16）。
+	accountCallers := g.Group("/", middleware.SessionOrAccountAuth(accountBearer, consoleOrigins))
+	// 设备列表：agrctl 的账号 send 要借它挑执行设备，只带 chat 的 token 也得能读。
+	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat)).Bind(
+		deviceCtr.List,
+	)
+	// 个人 token 查自己（agrctl whoami）：不要求任何具体范围——每枚 token 都该能看见自己的
+	// 名字、范围与到期；非个人 token 的调用方由 personal_token_svc.Self 判 403。
+	accountCallers.Bind(personalTokenCtr.Self)
+	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeRead, personal_token_entity.ScopeChat)).Bind(
+		// R15：从 web 给「某 Agent + 某项目」取派发计划（哪台 agentred、逐档原因）。
+		workspaceCtr.DispatchTarget,
+		// 账号里 agent 会话的只读端点（/v1/agent-sessions*）：索引读会话摘要（项目归属
+		// 就地判定，决策 12），详情页按游标翻转录；cwd 不出现在任一响应里（R19，见
+		// workspace 包守卫）。
+		agentSessionCtr.SavedSessions,
+		agentSessionCtr.Transcript,
+		// 侧栏「对话」那颗角标要的两个数字（等你处理 / 未读）。
+		agentSessionCtr.AttentionCount,
+	)
+	// 保存一条对话 = 把它收进账号并开始镜像（决策 5）。
+	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeChat)).Bind(
+		savedSessionCtr.Save,
+	)
+	accountCallers.Group("/", middleware.RequireScope(personal_token_entity.ScopeDevicesWrite)).Bind(
+		deviceCtr.Revoke,
+		// 账号级备注名：设备名是那台机器自报的主机名，同一台电脑上的几个 checkout 在账号里
+		// 就是几行同名设备。
+		deviceCtr.Rename,
+		// 一键升级会重启用户的机器：浏览器会话、cli 设备或带 devices:write 的个人 token；
+		// 其余设备（桌面、agentred）由控制器拒绝。桌面端有自己那条直连（remote_device_svc）。
+		deviceCtr.Upgrade,
 	)
 
 	// 设备 access token
 	deviceJWT := g.Group("/", middleware.DeviceJWT(bearer))
 	// 工作区多端同步：账号与设备一律取自令牌解析出的身份，不接受参数里的身份。
-	deviceJWT.Bind(
+	//
+	// cli 设备与个人 token 在路由组上就被拒（403，先于请求体绑定）：快照带提供方明文
+	// API key，同步是执行机的事，agrctl 与外部程序都不在此列（规格决策 15）。
+	syncGroup := g.Group("/", middleware.AccountBearerAuth(accountBearer), middleware.DenyCLIAndTokens())
+	syncGroup.Bind(
 		syncCtr.Push,
 		syncCtr.Pull,
 		syncCtr.ReportLocalPaths,
@@ -422,13 +468,20 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.GetAvatar,
 		engineCtr.Snapshot,
 	)
+	// 桌面代签 agrctl 子设备：只认设备 access token，cli 设备与个人 token 在路由组上 403
+	// （先于请求体绑定）；agentred 等其余设备由服务层按库内 kind 拒。
+	g.Group("/", middleware.AccountBearerAuth(accountBearer), middleware.DenyCLIAndTokens()).Bind(
+		deviceCtr.MintCLIChild,
+	)
 	// agrctl 资源管理（规格 2026-09-22 agrctl-resource-management「server 执行者」）：
 	// 控制台派发到 agentred 的会话里，agent 调 agrctl，agentred 在会话里审批后转过来。
 	// **只认设备 access token**——浏览器会话进不来，所以不需要 CSRF；提供方与后端的写入
 	// 因此能以设备身份执行，而浏览器那一组（SessionAuth + CSRF）原样不动。正文是
 	// protojson、错误是 {"error": …}，与桌面端的 /ctl/v1/resources 同形，不走 mux 信封。
 	ctlCtr := ctl_ctr.New(r.Ctl)
-	deviceJWT.POST(ctl_ctr.ResourcesPath, ctlCtr.Resources)
+	// 资源接口另认个人 token：范围依请求是读还是写而定，由 ctl 执行者按调用方形态检查
+	// （read / resources:write），agentred 转来的请求（设备身份）行为不变。
+	g.Group("/", middleware.AccountBearerAuth(accountBearer)).POST(ctl_ctr.ResourcesPath, ctlCtr.Resources)
 	deviceJWT.POST(ctl_ctr.SendPath, ctlCtr.Send)
 	// 核验一枚别人出示的凭据（S5）：调用方必须先出示自己的设备 access token
 	// （DeviceJWT 那组已经做到），再按调用方账号限流——挂在 DeviceJWT 之后，
@@ -437,7 +490,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		middleware.CredentialsIntrospectPerAccountLimit(r.Cfg.RateLimit.CredentialsIntrospectPerAccountPerMin),
 	).Bind(credentialsCtr.Introspect)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受设备
-	// access token；client 同时接受原生端设备 access token 与浏览器短效 relay ticket。
+	// access token；client 接受原生端设备 access token、个人 token 与浏览器短效 relay ticket。
 	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
 	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(relayBearer, relayTickets))

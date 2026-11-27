@@ -14,6 +14,7 @@
 import * as React from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import {
   BoardFilterBar,
@@ -37,11 +38,13 @@ import {
   type TaskFormValue,
 } from "@agentre-hub/agentre-ui";
 
-import AppShell from "@/components/AppShell";
+import AppShell, { IdentityUnstableStrip } from "@/components/AppShell";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { orderProjectTree } from "@/components/session/newconv/ProjectAgentPane";
 import type { NewConvAgent } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
+import { useMe } from "@/hooks/use-me";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
@@ -96,12 +99,22 @@ const STAGES: BoardStage[] = ["todo", "doing", "review", "done"];
 export default function Issues() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const { status: identityStatus } = useMe();
   // 代号本只在本页这一次生命周期里有效，所以它必须比任何一次取数活得久：懒初始化
   // 一次，之后每张卡、每个标签、每个项目都从同一本册子里认号。
   const [ids] = React.useState(createSyncIdRegistry);
   const [query, setQuery] = React.useState<BoardQuery>(EMPTY_BOARD_QUERY);
   const [editing, setEditing] = React.useState<TaskFormValue | null>(null);
   const [labelsOpen, setLabelsOpen] = React.useState(false);
+  // 标签管理框在手机上是浮层：系统返回先关它、停在看板（D1）。
+  useBackDismiss(labelsOpen, () => setLabelsOpen(false));
+  // 筛选 / 范围弹层、卡片 ⋯ 菜单同理：包经受控开合告知开关，宿主登记返回记号（D1）。
+  const [filterOpen, setFilterOpen] = React.useState(false);
+  useBackDismiss(filterOpen, () => setFilterOpen(false));
+  const [scopeOpen, setScopeOpen] = React.useState(false);
+  useBackDismiss(scopeOpen, () => setScopeOpen(false));
+  const [cardMenuId, setCardMenuId] = React.useState<number | null>(null);
+  useBackDismiss(cardMenuId !== null, () => setCardMenuId(null));
 
   const [projects, setProjects] = React.useState<ProjectNode[]>([]);
   const [agents, setAgents] = React.useState<NewConvAgent[]>([]);
@@ -219,6 +232,28 @@ export default function Issues() {
     [board],
   );
 
+  // 打开新建表单：同时去读那次新建的「提交前」基线（见 useBoard 的 saveTask）。
+  const openCreate = (value: TaskFormValue) => {
+    board.prepareCreate();
+    setEditing(value);
+  };
+
+  // 新建超时后的「刷新看看」：认出刚提交的那条就换成编辑它；刷新失败说一声。
+  const refreshCreated = React.useCallback(async (): Promise<
+    "found" | "notFound" | "failed"
+  > => {
+    try {
+      const found = await board.findSubmitted();
+      if (found) setEditing(found);
+      return found ? "found" : "notFound";
+    } catch (cause) {
+      toast.error(
+        describeFailure(cause, { t, what: t("issues.loadFailedWhat") }).message,
+      );
+      return "failed";
+    }
+  }, [board, t]);
+
   const columns = board.viewModel.columns;
   const totalTasks = STAGES.reduce(
     (sum, stage) => sum + (columns[stage]?.total ?? 0),
@@ -226,7 +261,13 @@ export default function Issues() {
   );
 
   return (
-    <AppShell title={t("issues.title")} flush ownHeader={isMobile}>
+    <AppShell
+      title={t("issues.title")}
+      flush
+      ownHeader={isMobile}
+      // 手机页头自己画，「网络不稳定」细条由它摆在页头正下方（任务 10 遗留）。
+      ownStrip={isMobile}
+    >
       <div
         data-testid="issues-page"
         className="flex h-full min-h-0 min-w-0 flex-col"
@@ -241,6 +282,8 @@ export default function Issues() {
               title={
                 <ProjectScopePicker
                   sheet
+                  open={scopeOpen}
+                  onOpenChange={setScopeOpen}
                   scope={query.scope}
                   projects={scopeProjects}
                   unassignedCount={board.unassignedCount}
@@ -256,21 +299,25 @@ export default function Issues() {
                   edge="end"
                   aria-label={t("issues.actions.newTask")}
                   onClick={() =>
-                    setEditing(initialTaskFormValue({ scope: query.scope }))
+                    openCreate(initialTaskFormValue({ scope: query.scope }))
                   }
                 >
                   <Plus className="size-5" aria-hidden="true" />
                 </PhoneHeaderButton>
               }
             />
+            {identityStatus === "unstable" ? <IdentityUnstableStrip /> : null}
             <div className="flex min-h-12 shrink-0 items-center gap-2 px-4 py-1">
               <BoardFilterBar
                 sheet
+                open={filterOpen}
+                onOpenChange={setFilterOpen}
                 query={query}
                 labels={board.labels}
                 projects={scopeProjects}
                 matchedCount={board.matchedCount}
                 searching={board.searching}
+                searchPlaceholder={t("issues.searchPlaceholder")}
                 ports={{ onQueryChange: setQuery }}
                 onManageLabels={() => setLabelsOpen(true)}
                 className="min-w-0 flex-1"
@@ -304,7 +351,7 @@ export default function Issues() {
                 size="sm"
                 className="h-[30px] max-[860px]:ml-auto"
                 onClick={() =>
-                  setEditing(initialTaskFormValue({ scope: query.scope }))
+                  openCreate(initialTaskFormValue({ scope: query.scope }))
                 }
               >
                 <Plus data-icon="inline-start" aria-hidden="true" />
@@ -321,6 +368,7 @@ export default function Issues() {
                   board.viewModel.filtering ? board.matchedCount : undefined
                 }
                 searching={board.searching}
+                searchPlaceholder={t("issues.searchPlaceholder")}
                 ports={{ onQueryChange: setQuery }}
                 onManageLabels={() => setLabelsOpen(true)}
                 className="min-w-0 flex-1"
@@ -337,19 +385,31 @@ export default function Issues() {
           />
         ) : null}
 
-        <IssueBoard
-          viewModel={board.viewModel}
-          drag={isMobile ? undefined : bindings}
-          layout={isMobile ? "stage" : "columns"}
-          ports={{
-            onEdit: openTask,
-            onDelete: (taskId) => void board.deleteTask(taskId),
-            onMove: (taskId, stage) => void board.moveTask(taskId, stage, 0),
-            onCreateTask: (stage) =>
-              setEditing(initialTaskFormValue({ stage, scope: query.scope })),
-            onClearFilters: () => setQuery(EMPTY_BOARD_QUERY),
-          }}
-        />
+        {/*
+          读失败且手上一张卡都没有：不画看板——它会摆出「还没有任务」，而任务一个没少
+          （规格 G1）。已经读到过的内容照旧留着，上面那行失败提示说明它可能是旧的。
+        */}
+        {board.error && totalTasks === 0 ? null : (
+          <IssueBoard
+            viewModel={board.viewModel}
+            // `#N` 是本页的临时代号、不是稳定编号，控制台不显示（桌面端保留真 id）。
+            hideCardNumber
+            drag={isMobile ? undefined : bindings}
+            layout={isMobile ? "stage" : "columns"}
+            openCardMenuId={cardMenuId}
+            onCardMenuOpenChange={(id, open) =>
+              setCardMenuId((cur) => (open ? id : cur === id ? null : cur))
+            }
+            ports={{
+              onEdit: openTask,
+              onDelete: (taskId) => void board.deleteTask(taskId),
+              onMove: (taskId, stage) => void board.moveTask(taskId, stage, 0),
+              onCreateTask: (stage) =>
+                openCreate(initialTaskFormValue({ stage, scope: query.scope })),
+              onClearFilters: () => setQuery(EMPTY_BOARD_QUERY),
+            }}
+          />
+        )}
 
         <TaskFormDialog
           value={editing}
@@ -362,6 +422,7 @@ export default function Issues() {
           catalog={catalog}
           ids={ids}
           page={isMobile}
+          onRefreshCreated={refreshCreated}
           onClose={() => setEditing(null)}
           onSave={async (next) => {
             await board.saveTask(next);
@@ -381,6 +442,7 @@ export default function Issues() {
             <LabelManagerPanel
               labels={board.labels}
               onLabelMutate={board.mutateLabel}
+              onCreateTimeoutRecheck={board.recheckLabelCreate}
               className="max-h-[60vh]"
             />
           </DialogContent>

@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import App, { ChatPage } from "@/App";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 
@@ -217,6 +217,37 @@ describe("App shell wiring", () => {
           "API keys are hosted for your account and synced only to your own devices.",
         ),
       ).toBeTruthy();
+    });
+
+    it("401 from /v1/auth/me sends a protected page to /login?next (mirrors e2e smoke)", async () => {
+      await i18n.changeLanguage("en");
+      mockedApi.mockImplementation(async (path: string) => {
+        if (path === "/v1/auth/me")
+          throw new ApiError(30004, "unauthorized", 401);
+        throw new Error(`unexpected api call: ${path}`);
+      });
+      // 先落地址再替 location：BrowserRouter 读的是替换后那份的 pathname。
+      window.history.pushState({}, "", "/overview");
+      const realLocation = window.location;
+      const replace = vi.fn();
+      Object.defineProperty(window, "location", {
+        value: { ...realLocation, replace },
+        writable: true,
+        configurable: true,
+      });
+      onTestFinished(() => {
+        Object.defineProperty(window, "location", {
+          value: realLocation,
+          writable: true,
+          configurable: true,
+        });
+      });
+
+      render(<App />, { wrapper: ThemeProvider });
+
+      await waitFor(() =>
+        expect(replace).toHaveBeenCalledWith("/login?next=%2Foverview"),
+      );
     });
 
     it("does not add /account to the main navigation (only reachable from the account menu)", async () => {

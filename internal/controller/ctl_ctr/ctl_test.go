@@ -80,7 +80,7 @@ func TestResources_GivenDeviceBearer_ThenCallerComesFromTokenAndBodyIsProtojson(
 	rec := post(newEngine(t, fake), "/v1/ctl/resources?preview=1", agentredToken(), `{"get":{"kind":"CTL_KIND_AGENT","id":"20"}}`)
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, ctl_svc.Caller{UserID: 7, DeviceID: 3}, fake.caller)
+	assert.Equal(t, ctl_svc.Caller{UserID: 7, DeviceID: 3, Kind: device_entity.KindAgentred}, fake.caller)
 	assert.True(t, fake.preview)
 	assert.Equal(t, int64(20), fake.req.GetGet().GetId())
 	var got agentrewire.CtlResponse
@@ -138,8 +138,11 @@ func TestResources_GivenErrors_ThenStatusAndErrorBodyFollowTheContract(t *testin
 	assert.Equal(t, "invalid request body", errorOf(t, rec))
 }
 
-func TestSend_GivenServerPath_ThenClearlyUnsupported(t *testing.T) {
+func TestSend_GivenServerPath_ThenItPointsAtTheAgentredThatOwnsTheSession(t *testing.T) {
+	// 控制台会话里的 send 由会话所在的 agentred 以账号对端身份执行(spec 2026-11-25 决策 12):
+	// server 不派发,只说清楚该由谁处理——不再是「不支持」的用法错误。
 	rec := post(newEngine(t, &fakeCtl{}), "/v1/ctl/send", agentredToken(), `{"agent":"Eva","text":"hi"}`)
-	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
-	assert.Contains(t, errorOf(t, rec), "send is not supported")
+	assert.Equal(t, http.StatusMisdirectedRequest, rec.Code)
+	assert.Contains(t, errorOf(t, rec), "handled by the agentred that owns the session")
+	assert.NotContains(t, errorOf(t, rec), "not supported")
 }

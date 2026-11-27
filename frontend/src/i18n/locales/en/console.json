@@ -1,5 +1,11 @@
 {
   "aria": {
     "rowActionsNamed": "Actions for {{name}}"
+  },
+  "sendFailure": {
+    "sessionRunning": {
+      "titleUnknown": "That conversation is already running",
+      "body": "A turn is already in progress on this conversation and it couldn't take this message. Nothing was sent — resend once it finishes."
+    }
   }
 }

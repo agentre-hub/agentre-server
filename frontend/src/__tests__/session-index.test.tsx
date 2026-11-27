@@ -21,12 +21,12 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
-import SessionIndex from "@/components/session/SessionIndex";
+import SessionIndex, { LoadMore } from "@/components/session/SessionIndex";
 import { edgeClasses } from "./helpers/edge-classes";
 import { formatRelativeTime, matchesSessionFilter } from "@/lib/sessionView";
 import i18n from "@/i18n";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
-import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { ThemeProvider, TouchProvider } from "@agentre-hub/agentre-ui";
 
 /**
  * 导入对话框整个是共享包的（候选扫描、预览都要真机器）；这里只替掉它，好让「导完了」
@@ -2404,6 +2404,34 @@ describe("会话索引：空态与失败的出路", () => {
     expect(edgeClasses(bar)).toEqual([]);
     within(bar).getByTestId("index-load-more").click();
     expect(onLoadMore).toHaveBeenCalledOnce();
+  });
+
+  it("触屏档：加载更多失败条里的「重试」点按区 44px；桌面不变", () => {
+    // 规格 2026-11-25「所有「重试」…按钮 44px」：手机首页的 LoadMore 也是它。
+    const { unmount } = render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <TouchProvider>
+            <LoadMore loading={false} failed onLoadMore={vi.fn()} />
+          </TouchProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("index-load-more").className).toContain(
+      "min-h-11",
+    );
+    unmount();
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <LoadMore loading={false} failed onLoadMore={vi.fn()} />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("index-load-more").className).not.toContain(
+      "min-h-11",
+    );
   });
 });
 

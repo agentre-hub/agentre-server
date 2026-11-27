@@ -4,9 +4,10 @@ go 1.26.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/agentre-hub/agentre/pkg/syncwire v0.0.0-20261113061847-48a285b23e91
-	github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261127021556-d91b22a2faa9
+	github.com/agentre-hub/agentre/pkg/syncwire v0.0.0-20261127094200-a11d60d14220
+	github.com/agentre-hub/agentre/pkg/wire v0.0.0-20261127131942-461743c159cb
 	github.com/alicebob/miniredis/v2 v2.38.0
+	github.com/andybalholm/brotli v1.2.2
 	github.com/cago-frame/cago v0.0.0-20260904093313-91f5dd45559c
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.6
@@ -35,7 +36,6 @@ require (
 	github.com/ClickHouse/ch-go v0.73.0 // indirect
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
-	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.2 // indirect

@@ -606,6 +606,60 @@ describe("状态横幅:三档形态", () => {
  * 不去猜它，只把「对端明说执行目标不可用」「对端拒绝了」「请求没走到对端」
  * 三者分开；正忙由 SessionDetailView 的选路 + 一次回落收敛。
  */
+describe("E：账号已登出与触屏出口", () => {
+  it("中继取票 401（relayState=signedOut）：读作 loggedOut，而不是 lost / connecting", () => {
+    const status = deriveSessionViewStatus({
+      relayState: "signedOut",
+      meValid: true,
+      machineOnline: true,
+      targetKind: "agentred",
+    });
+    expect(status).toBe("loggedOut");
+  });
+
+  it("signedOut 压过目标不可达与设备撤销之外的一切中继态，且横幅给「重新登录」", () => {
+    renderStatus("loggedOut");
+    const link = screen.getByRole("link", { name: /sign in/i });
+    expect(link.getAttribute("href")).toBe("/login");
+  });
+
+  describe("触屏：横幅出口按钮不小于 44px", () => {
+    const original = window.matchMedia;
+    beforeEach(() => {
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes("max-width: 767px"),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as typeof window.matchMedia;
+    });
+    afterEach(() => {
+      window.matchMedia = original;
+    });
+
+    const cases: [SessionViewStatus, "link" | "button", string][] = [
+      ["lost", "button", "Reconnect"],
+      ["loggedOut", "link", "Sign in again"],
+      ["pinnedAgentredUnavailable", "link", "View device"],
+    ];
+    it.each(cases)("%s 的出口有 min-h-11", (status, role, name) => {
+      renderStatus(status, { onReconnect: () => {} });
+      expect(screen.getByRole(role, { name }).className).toContain("min-h-11");
+    });
+
+    it("桌面不带 min-h-11", () => {
+      window.matchMedia = original;
+      renderStatus("lost", { onReconnect: () => {} });
+      const action = screen.getByText(/Reconnect/i).closest("button");
+      expect(action?.className).not.toContain("min-h-11");
+    });
+  });
+});
+
 describe("写入失败分类:三类互不相同", () => {
   it("Given -32015 When 分类 Then executionUnavailable(唯一可确定的「agentred 不可用」)", () => {
     expect(
@@ -734,7 +788,7 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
     expect(matchesSessionFilter(idle, "running")).toBe(false);
   });
 
-  it("sessionTitle:有标题就用标题;还没有标题的会话退化为「工作目录 · 后端 · 状态」", () => {
+  it("sessionTitle:有标题就用标题;还没有标题的会话叫「未命名对话」", () => {
     const t = i18n.t.bind(i18n);
     expect(
       sessionTitle(
@@ -757,14 +811,14 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
         },
         t,
       ),
-    ).toBe("/var/proj · codex · Idle");
-    // 连工作目录 / 后端都没有时不编造，用破折号占位；不认识的旧状态如实照抄。
+    ).toBe("Untitled conversation");
+    // 工作目录到不了本端，不再拼「— · 后端 · 状态」：统一叫「未命名对话」（H6）。
     expect(
       sessionTitle(
         { title: "", cwd: "", backendType: "", lifecycleState: "weird" },
         t,
       ),
-    ).toBe("— · — · weird");
+    ).toBe("Untitled conversation");
   });
 
   /**

@@ -12,6 +12,7 @@ import {
   type TranscriptMessage,
   Alert,
   AlertDescription,
+  Button,
   SessionHeaderAgentMark,
   SessionHeaderBand,
   cn,
@@ -28,7 +29,14 @@ import {
   Monitor,
   Sparkles,
 } from "lucide-react";
-import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -41,6 +49,7 @@ import { pendingUserMessage } from "@/components/session/transcriptFrame";
 import { useSessionCLIModel } from "@/components/session/useSessionCLIModel";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
@@ -50,9 +59,11 @@ import {
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
 import { describeFailure } from "@/lib/describeFailure";
+import { NEW_CONVERSATION_DRAFT_KEY, type Draft } from "@/lib/drafts";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import {
   deriveTitle,
+  DispatchTimeoutError,
   dispatchNewConversation,
   fetchDispatchPlan,
   type DispatchPlan,
@@ -96,6 +107,8 @@ export function DraftSession({
   onStarted,
   onBack,
   onChangeRecipient,
+  initialDraft,
+  onDraftChange,
 }: {
   agent: NewConvAgent;
   /** 账号里全部 Agent，供输入框的 @ 菜单用（第一句同样能提及别人）。 */
@@ -115,6 +128,10 @@ export function DraftSession({
    * 的话那条 effect 会用只剩 compose 的地址替掉当前地址，列表的范围随之丢掉。
    */
   onChangeRecipient?: () => void;
+  /** 换 Agent 时带过来的草稿（文字 + 图片），优先于库里存的那份。 */
+  initialDraft?: Draft;
+  /** 草稿每次变化都报上去，宿主换 Agent 时据此带走它。 */
+  onDraftChange?: (draft: Draft) => void;
 }) {
   const { t } = useTranslation();
   /**
@@ -174,6 +191,11 @@ export function DraftSession({
    * 上一组入参的响应晚于新的一组回来时，它带的 key 已经不是当前这组，覆盖不上。
    */
   /** 手动重试的轮次。并进 planKey：按一次就对不上，界面当场回到「还在算」。 */
+  /**
+   * 手机上「模型」那一行在输入框还是空胶囊时没有 pill 可点：每点一次加一，据此挂一只
+   * 开着选择器的实例（key 变就重挂重开）；选择器关掉时由它回调收掉（置 0）。
+   */
+  const [modelSheetToken, setModelSheetToken] = useState(0);
   const [planAttempt, setPlanAttempt] = useState(0);
   const planKey = `${agent.sync_id}|${projectSyncId ?? ""}|${targetBackendSyncId ?? ""}|${planAttempt}`;
   const [planState, setPlanState] = useState<{
@@ -602,6 +624,38 @@ export function DraftSession({
       )
     ) : null;
 
+  const renderModelControl = (
+    extra?: Partial<ComponentProps<typeof SessionModelControl>>,
+  ) =>
+    chosen ? (
+      <SessionModelControl
+        {...extra}
+        backendType={chosen.backend_type}
+        catalog={catalog}
+        boundProviderKey={engineBackend?.provider_key}
+        boundModelKey={engineBackend?.model_key}
+        target={effectiveTarget}
+        onChange={changeModelTarget}
+        cliModels={cli.cliModels}
+        cliPillState={effectiveTarget.providerKey ? undefined : cli.pillState}
+        cliBound={{
+          resolutionLabel: cli.boundResolutionLabel,
+          modelId: cli.boundModelId,
+        }}
+        deviceLabel={chosen.device_name}
+      />
+    ) : undefined;
+  const modelControlEl = renderModelControl();
+
+  /** 回到列表并按这个 Agent 收窄；先收掉草稿再改地址：Chat 的草稿态不随地址变，留着它会盖住列表。 */
+  const goToList = () => {
+    onBack?.();
+    void nav(
+      `/chat?${new URLSearchParams({ axis: "agent", agent: agent.sync_id })}`,
+    );
+  };
+  const onCheckList = goToList;
+
   /** 手机的三行事实：每一行都可点，选择语义与桌面那两枚 chip 同一份。 */
   const modelPill = resolveProviderPillState({
     boundProviderKey: engineBackend?.provider_key,
@@ -687,13 +741,14 @@ export function DraftSession({
         label={t("chat.draftFactModel")}
         value={<span className="truncate">{modelLabel}</span>}
         // 模型选择器就是输入框底栏那颗 pill：这一行只是把它递到拇指够得着的地方。
-        onClick={() =>
-          composerAreaRef.current
-            ?.querySelector<HTMLElement>(
-              '[data-testid="composer-model-target"]',
-            )
-            ?.click()
-        }
+        onClick={() => {
+          const pill = composerAreaRef.current?.querySelector<HTMLElement>(
+            '[data-testid="composer-model-target"]',
+          );
+          // 输入框还是空胶囊时那颗 pill 没有渲染：不能指望点它，直接挂一只开着的选择器。
+          if (pill) pill.click();
+          else setModelSheetToken((n) => n + 1);
+        }}
       />
     </>
   );
@@ -763,13 +818,7 @@ export function DraftSession({
           facts={phoneFacts}
           notice={planFailed ?? targetUnavailable}
           busy={!settled}
-          onContinueRecent={() => {
-            // 先收掉草稿再改地址：Chat 的草稿态不随地址变，留着它会盖住列表。
-            onBack?.();
-            void nav(
-              `/chat?${new URLSearchParams({ axis: "agent", agent: agent.sync_id })}`,
-            );
-          }}
+          onContinueRecent={goToList}
         />
       ) : starting ? (
         <DraftPending
@@ -821,6 +870,16 @@ export function DraftSession({
         </div>
       )}
 
+      {modelSheetToken > 0 && chosen ? (
+        // 只为打开选择器而挂的那一只：不占版面（sr-only），关掉即卸。
+        <div key={modelSheetToken} className="sr-only">
+          {renderModelControl({
+            openOnMount: true,
+            onSheetClosed: () => setModelSheetToken(0),
+          })}
+        </div>
+      ) : null}
+
       <div
         ref={composerAreaRef}
         className={cn("shrink-0 px-5 py-3", oneRow && "px-3")}
@@ -840,6 +899,10 @@ export function DraftSession({
               agents={mentionAgents}
               composerHandleRef={composerRef}
               submitHandleRef={submitRef}
+              // 新对话草稿全账号一份：退出、重载、换 Agent 都不丢，发出或清空才清除。
+              draftKey={NEW_CONVERSATION_DRAFT_KEY}
+              initialDraft={initialDraft}
+              onDraftChange={onDraftChange}
               // 手机用触屏档（回车换行、空时胶囊），与对话页底部停靠区同一个输入框形态。
               touch={oneRow}
               // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧
@@ -864,27 +927,7 @@ export function DraftSession({
                   />
                 ) : undefined
               }
-              modelControl={
-                chosen ? (
-                  <SessionModelControl
-                    backendType={chosen.backend_type}
-                    catalog={catalog}
-                    boundProviderKey={engineBackend?.provider_key}
-                    boundModelKey={engineBackend?.model_key}
-                    target={effectiveTarget}
-                    onChange={changeModelTarget}
-                    cliModels={cli.cliModels}
-                    cliPillState={
-                      effectiveTarget.providerKey ? undefined : cli.pillState
-                    }
-                    cliBound={{
-                      resolutionLabel: cli.boundResolutionLabel,
-                      modelId: cli.boundModelId,
-                    }}
-                    deviceLabel={chosen.device_name}
-                  />
-                ) : undefined
-              }
+              modelControl={modelControlEl}
               // 发不出去时如实说是哪一种：还在算计划、这次没问到、还是问到了但
               // 一档都不可用。后两者是两件事，合并等于替服务端下一个它没下的结论。
               disabledReason={
@@ -903,18 +946,38 @@ export function DraftSession({
                     role="alert"
                     className="flex flex-wrap items-center gap-2 px-3.5 py-1.5 text-xs text-destructive-text"
                   >
-                    <FailureNotice
-                      failure={describeFailure(startFailure.error, {
-                        t,
-                        what: t("chat.startFailedWhat", {
+                    {startFailure.error instanceof DispatchTimeoutError ? (
+                      // 派发等应答超时：那条对话可能已经在那台机器上开了。不给「重试」
+                      // （重发会铸新编号，一条变两条），引导去列表看；字已还回输入框，
+                      // 看过之后要重发仍是用户自己按发送。
+                      <>
+                        <span className="min-w-0">
+                          {t("chat.startMaybeStarted")}
+                        </span>
+                        <span className="flex-1" />
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          className={oneRow ? "min-h-11 px-4" : undefined}
+                          onClick={onCheckList}
+                        >
+                          {t("chat.startMaybeStartedAction")}
+                        </Button>
+                      </>
+                    ) : (
+                      <FailureNotice
+                        failure={describeFailure(startFailure.error, {
+                          t,
+                          what: t("chat.startFailedWhat", {
+                            machine: startFailure.machine,
+                          }),
                           machine: startFailure.machine,
-                        }),
-                        machine: startFailure.machine,
-                      })}
-                      // 计划重算期间这一条还交不出去（start 会原地返回），按钮先停着。
-                      retryDisabled={!readyPlan?.chosen}
-                      onRetry={() => submitRef.current?.submit()}
-                    />
+                        })}
+                        // 计划重算期间这一条还交不出去（start 会原地返回），按钮先停着。
+                        retryDisabled={!readyPlan?.chosen}
+                        onRetry={() => submitRef.current?.submit()}
+                      />
+                    )}
                   </div>
                 ) : undefined
               }
@@ -1008,6 +1071,8 @@ function ExecTargetPopover({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // 手机草稿页上是浮层：系统返回先关它、停在草稿页（D1）。
+  useBackDismiss(open, () => setOpen(false));
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
@@ -1169,6 +1234,8 @@ function ProjectChip({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // 手机草稿页上是浮层：系统返回先关它、停在草稿页（D1）。
+  useBackDismiss(open, () => setOpen(false));
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>

@@ -23,10 +23,12 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { SessionCarrier } from "@/components/session/useSteerAutoContinue";
 import { cliOverlayPath, listCLIModelsOn } from "@/lib/cliModels";
 import type { EngineBackend } from "@/lib/engineCatalog";
 import { RelayError, type RelayClient } from "@/lib/relayClient";
+
+/** 承载机那一行里这里唯一要读的那一格。 */
+export type SessionCarrier = { kind?: string } | null | undefined;
 
 /**
  * 会话的 CLI 自带模型选择，与 wire 上 `cli_model_mode` / `cli_model` 两列逐字同义：

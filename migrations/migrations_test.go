@@ -142,13 +142,15 @@ func TestMigrationList_IDsAreUniqueAndStrictlyAscending(t *testing.T) {
 }
 
 // 清单的尾部依次是：agent_sessions 的 CLI 模型选择两列（每列一条 ALTER，schema 守卫才
-// 逐列看得见），以及删除待办身份键换成 (user_id, conversation_id, device_fingerprint) 的
-// 补丁迁移。它们必须按这个顺序排在清单**最后**。
-func TestMigrationList_EndsWithTheDeleteTodoMachineKey(t *testing.T) {
+// 逐列看得见）、删除待办身份键换成 (user_id, conversation_id, device_fingerprint) 的
+// 补丁迁移、个人 token 表，以及 devices.parent_device_id。它们必须按这个顺序排在清单**最后**。
+func TestMigrationList_EndsWithDevicesParentDeviceID(t *testing.T) {
 	list := migrationList()
 	require.NotEmpty(t, list)
-	require.GreaterOrEqual(t, len(list), 3)
-	assert.Equal(t, "202610270101", list[len(list)-3].ID)
-	assert.Equal(t, "202610270102", list[len(list)-2].ID)
-	assert.Equal(t, "202611130101", list[len(list)-1].ID)
+	require.GreaterOrEqual(t, len(list), 5)
+	assert.Equal(t, "202610270101", list[len(list)-5].ID)
+	assert.Equal(t, "202610270102", list[len(list)-4].ID)
+	assert.Equal(t, "202611130101", list[len(list)-3].ID)
+	assert.Equal(t, "202611250101", list[len(list)-2].ID)
+	assert.Equal(t, "202611250102", list[len(list)-1].ID)
 }

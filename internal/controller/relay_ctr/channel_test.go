@@ -52,6 +52,7 @@ func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanS
 
 	controller := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(controller)
+	devices.EXPECT().TouchLastSeen(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes() // 中继连上 / 断开会刷新最后在线
 	saves := mock_agent_session_repo.NewMockSaveRepo(controller)
 	config := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Minute}
 	redisClient := newRelayRedisClient(t, mini)
@@ -271,7 +272,7 @@ func TestRelayClient_GivenOneChannelTargetIsOffline_ThenOnlyThatChannelFails(t *
 	require.Equal(t, response, link.next(t, "c-alpha", "同连接另一条通道收不到应答了"))
 }
 
-// isAddressableKind 逐通道重查：两种目标形式解析出来的机器都要过它。
+// device_entity.RunsSessions 逐通道重查：两种目标形式解析出来的机器都要过它。
 //
 // 这里的设备存在、活跃、指纹也对得上，唯一不合格的是 kind，因此拒绝只可能出自
 // 那一次重查；而重查发生在 upgrade **之后**，所以它是通道级的，连接还活着。

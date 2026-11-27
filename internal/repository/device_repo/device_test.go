@@ -177,7 +177,7 @@ func TestUpsert_DoesNotReassignTheAccountLevelDisplayName(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
 		"ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`kind`=VALUES(`kind`),"+
-			"`platform`=VALUES(`platform`),`version`=VALUES(`version`),"+
+			"`platform`=VALUES(`platform`),`version`=VALUES(`version`),`parent_device_id`=VALUES(`parent_device_id`),"+
 			"`last_seen_at`=VALUES(`last_seen_at`),`status`=VALUES(`status`),"+
 			"`updatetime`=VALUES(`updatetime`)") + "$").
 		WillReturnResult(sqlmock.NewResult(100, 2))
@@ -191,4 +191,60 @@ func TestUpsert_DoesNotReassignTheAccountLevelDisplayName(t *testing.T) {
 	// 事务内读回最终行，备注名因此原样还在实体上。
 	assert.Equal(t, "办公室那台", d.DisplayName)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TouchLastSeen 是中继连上 / 断开时刷新「最后在线」的那一条写：单条幂等 UPDATE，
+// 带 last_seen_at < ? 的单调护栏——多副本下迟到的旧时间戳不能把较新的值写回去。
+func TestTouchLastSeen_IsAMonotonicIdempotentUpdate(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"UPDATE `devices` SET `last_seen_at`=?,`updatetime`=? WHERE id=? AND last_seen_at < ?")+"$").
+		WithArgs(int64(5000), int64(5000), int64(100), int64(5000)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	// 护栏挡掉（0 行受影响）不是错误。
+	assert.NoError(t, r.TouchLastSeen(ctx, 100, 5000))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTouchLastSeen_PropagatesDatabaseError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `devices` SET")).WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	assert.Error(t, r.TouchLastSeen(ctx, 100, 5000))
+}
+
+// 撤销桌面时要把它代签的子设备一并收回：只列这台桌面名下、仍在用的行。
+func TestListActiveChildren_FiltersByParentAndActiveStatus(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `devices` WHERE parent_device_id=? AND status=?")).
+		WithArgs(int64(10), consts.ACTIVE).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "kind", "parent_device_id", "status"}).
+			AddRow(int64(55), int64(7), "cli", int64(10), consts.ACTIVE))
+
+	out, err := r.ListActiveChildren(ctx, 10)
+	assert.NoError(t, err)
+	assert.Equal(t, []*device_entity.Device{
+		{ID: 55, UserID: 7, Kind: "cli", ParentDeviceID: 10, Status: consts.ACTIVE},
+	}, out)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListActiveChildren_QueryErrorIsReturned(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	mock.ExpectQuery("SELECT").WillReturnError(errors.New("boom"))
+
+	out, err := NewDevice().ListActiveChildren(ctx, 10)
+	assert.Error(t, err)
+	assert.Nil(t, out)
 }

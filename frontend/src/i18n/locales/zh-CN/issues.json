@@ -1,5 +1,6 @@
 {
   "title": "看板",
+  "searchPlaceholder": "搜索任务…",
   "labelsTitle": "标签",
   "summary": {
     "counts": "共 {{total}} 条 · 进行中 {{doing}}"
@@ -16,5 +17,11 @@
     "followShort": "跟随 Agent",
     "modelFollow": "模型 · 跟随 Agent"
   },
-  "loadFailedWhat": "看板没取回来"
+  "loadFailedWhat": "看板没取回来",
+  "unsaved": {
+    "title": "放弃未保存的修改？",
+    "body": "这条任务的修改还没有保存。",
+    "keep": "继续编辑",
+    "discard": "放弃"
+  }
 }

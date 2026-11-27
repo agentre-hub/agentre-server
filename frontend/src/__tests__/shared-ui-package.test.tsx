@@ -3,6 +3,9 @@ import {
   ThinkingBlock,
   TranscriptPortsProvider,
   TranscriptUIStateProvider,
+  ThemeProvider,
+  copyTextWithToast,
+  setClipboardWriter,
   type TranscriptBlock,
   type TranscriptPorts,
   cn,
@@ -12,7 +15,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import App from "@/App";
 
 import "@/i18n";
 
@@ -547,8 +553,73 @@ describe("shared UI package mobile-shell exports", () => {
       "phaseSections",
       "ToolPermissionDock",
       "ShortcutHintsProvider",
+      "TouchProvider",
+      "useTouch",
     ]) {
       expect(ui[name], name).toBeDefined();
     }
+  });
+});
+
+/**
+ * 触屏档与复制提示的宿主侧开关（规格 H7 / I1 / I2）。
+ * 包默认是桌面形态；手机壳由本站显式套 TouchProvider，桌面宽度不套。
+ */
+describe("手机形态下的触屏档与复制提示", () => {
+  const originalMatchMedia = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    setClipboardWriter(null);
+    toast.dismiss();
+    window.history.replaceState({}, "", "/");
+  });
+
+  function setPhone(phone: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: phone && query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  /** 登录页的主按钮：包的 Button 在触屏档才带「按下加深」。 */
+  function loginButtons(): HTMLElement[] {
+    window.history.replaceState({}, "", "/login");
+    render(<App />, { wrapper: ThemeProvider });
+    return Array.from(
+      document.querySelectorAll<HTMLElement>('[data-slot="button"]'),
+    );
+  }
+
+  it("手机：控制台套了 TouchProvider，包里的按钮带按下态", () => {
+    setPhone(true);
+    const buttons = loginButtons();
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(buttons.some((b) => b.className.includes("active:bg-"))).toBe(true);
+  });
+
+  it("桌面：没有 TouchProvider，按钮不带按下态", () => {
+    setPhone(false);
+    const buttons = loginButtons();
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(buttons.some((b) => b.className.includes("active:bg-"))).toBe(false);
+  });
+
+  it("手机：包发出的复制提示落在顶部，不盖输入框", async () => {
+    setPhone(true);
+    window.history.replaceState({}, "", "/terms");
+    render(<App />, { wrapper: ThemeProvider });
+    setClipboardWriter(async () => {});
+
+    await copyTextWithToast("hello", { successTitle: "已复制到剪贴板" });
+
+    await screen.findByText("已复制到剪贴板");
+    const list = document.querySelector("[data-sonner-toaster]");
+    expect(list?.getAttribute("data-y-position")).toBe("top");
   });
 });

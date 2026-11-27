@@ -29,6 +29,7 @@ import {
   type AccountChannelHandle,
   type AccountChannelState,
 } from "@/lib/accountChannel";
+import { noteRecovery } from "@/lib/recoverySignal";
 import { invalidateRosters } from "@/lib/rosterFetch";
 
 interface Subscriber {
@@ -79,7 +80,10 @@ function fanOut(signalType: string | null): void {
 }
 
 function fanOutState(state: AccountChannelState): void {
+  const recovered = state === "connected" && channelState !== "connected";
   channelState = state;
+  // 执行端那条连接（重）连上了：失败的读该再试一次（规格 2026-11-25 K3）。
+  if (recovered) noteRecovery();
   for (const notify of [...stateSubscribers]) notify(state);
 }
 

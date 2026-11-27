@@ -13,6 +13,8 @@
   "planFailed": "Could not check for an execution target.",
   "planFailedWhat": "Could not check for an execution target",
   "startFailedWhat": "{{machine}} couldn't start the agent",
+  "startMaybeStarted": "No reply came back. This conversation may have already started. Check the list before sending again.",
+  "startMaybeStartedAction": "Check the list",
   "cancel": "Cancel",
   "back": "Back",
   "searchSessions": "Search conversations",
@@ -22,6 +24,8 @@
   "searchAgents": "Search agents",
   "fromProject": "Pick an agent from a project",
   "projects": "Projects",
+  "agentsLoadFailedWhat": "Couldn't load your agents",
+  "projectsLoadFailedWhat": "Couldn't load your projects",
   "noProjects": "No projects yet.",
   "noProjectsYetHint": "Create a project and add an agent to it — then you can start a project conversation here.",
   "noAgentsInProject": "No agents in this project",
@@ -51,7 +55,9 @@
   "pickProjectTitle": "Which project it runs in",
   "willRunOn": "Will run on <1></1>",
   "noAgentsTitle": "No agents yet",
-  "noAgentsBody": "Agents are created in the desktop app. Register that computer to this account and they sync here.",
+  "noAgentsBody": "Create an agent in Organization, or in the desktop app — register that computer to this account and its agents sync here.",
+  "noDeviceBody": "Install the agent on your computer first, then you can talk to agents here.",
+  "untitled": "Untitled conversation",
   "noAgentsAction": "Go to devices",
   "noAgentMatchesTitle": "No agents match your search",
   "noAgentMatchesBody": "Try a different term, or clear the search.",
@@ -64,9 +70,15 @@
     "scopeMachines": "All machines",
     "scopeAria": "Switch scope, current: {{name}}",
     "machinesOnline": "{{online}} / {{total}} machines online",
+    "relayUnreachable": "Execution side unreachable · {{online}} / {{total}} machines online",
     "online": "Online",
     "offline": "Offline",
     "offlineSince": "No network · content from {{time}}",
+    "syncing": "Syncing",
+    "draftPrefix": "[Draft]",
+    "draftImageOnly": "[Image]",
+    "pendingPrefix": "Pending:",
+    "updatingSubtitle": "Updating · {{text}}",
     "search": "Search conversation titles",
     "searchScope": "Searching titles in “{{scope}}” · {{count}}",
     "searchNote": "Only titles are matched. To find by agent, project or machine, switch the scope at the top.",
@@ -82,6 +94,13 @@
     "loadFailed": {
       "title": "Couldn't load your conversations",
       "body": "The network or service is temporarily unavailable. Your conversations are still there."
-    }
-  }
+    },
+    "stopping": "Stopping…"
+  },
+  "stop": {
+    "failed": "Couldn't stop it",
+    "failedWhat": "The stop didn't go through",
+    "retry": "Retry"
+  },
+  "deleteFailedWhat": "Deleting the conversation didn't work"
 }

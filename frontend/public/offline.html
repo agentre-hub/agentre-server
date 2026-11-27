@@ -1,34 +1,106 @@
 <!doctype html>
-<html lang="zh-CN">
+<!--
+  sw.js 在拿不到页面时交出的离线页（规格 2026-11-25 决策 B3）。
+
+  - 自足：不依赖打包产物，样式与脚本都内联。地址栏里仍是用户要去的原地址，所以
+    「回来」就是 location.reload()。
+  - data-reason 由 sw.js 改写：offline（断网 / 10 秒拿不到）或 server（拿到 5xx）。
+  - 颜色是共享包 tokens.css 里同名 token 的抄本，pwa-install.test.ts 逐个对回包里的值；
+    除 :root / .dark 两块之外不许出现色值字面量。
+  - 文案按应用的语言偏好（localStorage agentre.lang，退回 navigator.language）只出一种，
+    不再中英并排。
+-->
+<html lang="zh-CN" data-reason="offline">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>需要网络连接 · Network required</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>Agentre</title>
+    <script>
+      // 主题跟应用同一个偏好（agentre.theme：light / dark / system），在首帧之前定下。
+      (function () {
+        var pref = null;
+        try {
+          pref = localStorage.getItem("agentre.theme");
+        } catch (e) {}
+        var dark =
+          pref === "dark" ||
+          (pref !== "light" &&
+            !!window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
     <style>
       :root {
-        color-scheme: light dark;
+        --background: #fafafa;
+        --foreground: #18181b;
+        --muted-foreground: #65656d;
+        --primary: #3b6896;
+        --primary-foreground: #ffffff;
+        --primary-soft: #eef4fa;
+        --primary-text: #3b6896;
+        --status-waiting-bg: #fdfaed;
+        --status-waiting-text: #aa5413;
+      }
+      .dark {
+        --background: #18191b;
+        --foreground: #e8e8e9;
+        --muted-foreground: #909399;
+        --primary: #5b8dbf;
+        --primary-foreground: #0a1420;
+        --primary-soft: #1a2738;
+        --primary-text: #8eb6dc;
+        --status-waiting-bg: #261d0d;
+        --status-waiting-text: #fbbf24;
+      }
+      * {
+        box-sizing: border-box;
       }
       body {
         margin: 0;
         min-height: 100vh;
+        min-height: 100dvh;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 24px;
-        background: #fafafa;
-        color: #18191b;
+        padding: 24px 24px max(24px, env(safe-area-inset-bottom, 0px));
+        background: var(--background);
+        color: var(--foreground);
         font-family:
-          system-ui,
-          -apple-system,
-          "Segoe UI",
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto,
           sans-serif;
         text-align: center;
       }
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: #18191b;
-          color: #fafafa;
-        }
+      main {
+        width: 100%;
+        max-width: 320px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 9999px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 16px;
+        background: var(--status-waiting-bg);
+        color: var(--status-waiting-text);
+      }
+      html[data-state="back"] .icon {
+        background: var(--primary-soft);
+        color: var(--primary-text);
+      }
+      .icon svg {
+        width: 24px;
+        height: 24px;
       }
       h1 {
         margin: 0 0 8px;
@@ -37,27 +109,257 @@
       }
       p {
         margin: 0;
-        font-size: 14px;
+        font-size: 13px;
         line-height: 1.6;
-        opacity: 0.75;
+        color: var(--muted-foreground);
+      }
+      .status {
+        margin-top: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--muted-foreground);
+      }
+      .spinner {
+        width: 12px;
+        height: 12px;
+        border-radius: 9999px;
+        border: 1.5px solid currentColor;
+        border-right-color: transparent;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .spinner {
+          animation: none;
+        }
       }
       button {
         margin-top: 20px;
-        padding: 8px 16px;
+        width: 100%;
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
         border: 0;
-        border-radius: 6px;
-        background: #0f2c4c;
-        color: #fafafa;
-        font-size: 14px;
+        border-radius: 8px;
+        background: var(--primary);
+        color: var(--primary-foreground);
+        font: inherit;
+        font-size: 15px;
+        font-weight: 600;
         cursor: pointer;
+      }
+      button svg {
+        width: 16px;
+        height: 16px;
+      }
+      html[data-state="back"] button {
+        display: none;
+      }
+      [hidden] {
+        display: none !important;
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>控制台需要网络连接</h1>
-      <p>The console needs a network connection.</p>
-      <button type="button" onclick="location.reload()">重试 · Retry</button>
+      <div class="icon" aria-hidden="true">
+        <!-- lucide wifi-off -->
+        <svg
+          data-icon="offline"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M12 20h.01" />
+          <path d="M8.5 16.429a5 5 0 0 1 7 0" />
+          <path d="M5 12.859a10 10 0 0 1 5.17-2.69" />
+          <path d="M19 12.859a10 10 0 0 0-2.007-1.523" />
+          <path d="M2 8.82a15 15 0 0 1 4.177-2.643" />
+          <path d="M22 8.82a15 15 0 0 0-11.288-3.764" />
+          <path d="m2 2 20 20" />
+        </svg>
+        <!-- lucide server-crash -->
+        <svg
+          data-icon="server"
+          hidden
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path
+            d="M6 10H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"
+          />
+          <path
+            d="M6 14H4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2h-2"
+          />
+          <path d="M6 6h.01" />
+          <path d="M6 18h.01" />
+          <path d="m13 6-4 6h6l-4 6" />
+        </svg>
+        <!-- lucide wifi -->
+        <svg
+          data-icon="back"
+          hidden
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M12 20h.01" />
+          <path d="M2 8.82a15 15 0 0 1 20 0" />
+          <path d="M5 12.859a10 10 0 0 1 14 0" />
+          <path d="M8.5 16.429a5 5 0 0 1 7 0" />
+        </svg>
+      </div>
+      <h1 id="title"></h1>
+      <p id="body"></p>
+      <div class="status" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="status"></span>
+      </div>
+      <button type="button" id="retry">
+        <!-- lucide rotate-cw -->
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+          <path d="M21 3v5h-5" />
+        </svg>
+        <span id="retry-label"></span>
+      </button>
     </main>
+    <script>
+      (function () {
+        var PROBE_EVERY_MS = 15000;
+        var PROBE_TIMEOUT_MS = 10000;
+        var COPY = {
+          "zh-CN": {
+            offline: {
+              title: "没有网络",
+              body: "网络恢复后会自动回来，不用做什么。",
+              status: "正在等网络…",
+            },
+            server: {
+              title: "服务器暂时不可用",
+              body: "不是你的网络问题。恢复后会自动回来，不用做什么。",
+              status: "每 15 秒自动再试一次",
+            },
+            back: {
+              title: "网络恢复了",
+              body: "正在回到刚才那一页。",
+              status: "正在进入…",
+            },
+            retry: "重试",
+          },
+          en: {
+            offline: {
+              title: "You're offline",
+              body: "The console comes back by itself once the connection returns.",
+              status: "Waiting for the connection…",
+            },
+            server: {
+              title: "The server is temporarily unavailable",
+              body: "It's not your connection. The console comes back by itself once the server recovers.",
+              status: "Retrying every 15 seconds",
+            },
+            back: {
+              title: "Back online",
+              body: "Returning to the page you were on.",
+              status: "Opening…",
+            },
+            retry: "Retry",
+          },
+        };
+
+        var root = document.documentElement;
+        var stored = null;
+        try {
+          stored = localStorage.getItem("agentre.lang");
+        } catch (e) {}
+        var lang = /^zh/i.test(stored || navigator.language || "")
+          ? "zh-CN"
+          : "en";
+        var copy = COPY[lang];
+        root.setAttribute("lang", lang);
+
+        var state =
+          root.getAttribute("data-reason") === "server" ? "server" : "offline";
+
+        function render() {
+          var text = copy[state];
+          document.getElementById("title").textContent = text.title;
+          document.getElementById("body").textContent = text.body;
+          document.getElementById("status").textContent = text.status;
+          document.getElementById("retry-label").textContent = copy.retry;
+          document.title = text.title + " · Agentre";
+          root.setAttribute("data-state", state);
+          var icons = document.querySelectorAll("[data-icon]");
+          for (var i = 0; i < icons.length; i++) {
+            icons[i].hidden = icons[i].getAttribute("data-icon") !== state;
+          }
+        }
+
+        var probing = false;
+        function probe() {
+          if (probing || state === "back") return;
+          probing = true;
+          var controller =
+            typeof AbortController === "function"
+              ? new AbortController()
+              : null;
+          var timer = setTimeout(function () {
+            if (controller) controller.abort();
+          }, PROBE_TIMEOUT_MS);
+          fetch("/", {
+            cache: "no-store",
+            signal: controller ? controller.signal : undefined,
+          })
+            .then(function (res) {
+              if (res.ok) {
+                state = "back";
+                render();
+                location.reload();
+              } else if (res.status >= 500 && state !== "server") {
+                state = "server";
+                render();
+              }
+            })
+            .catch(function () {})
+            .then(function () {
+              clearTimeout(timer);
+              probing = false;
+            });
+        }
+
+        document.getElementById("retry").addEventListener("click", function () {
+          location.reload();
+        });
+        window.addEventListener("online", probe);
+        setInterval(probe, PROBE_EVERY_MS);
+        render();
+      })();
+    </script>
   </body>
 </html>

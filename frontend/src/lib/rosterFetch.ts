@@ -19,7 +19,13 @@
  *    读到此刻的调用方（写完读回、断线探因）直接用各模块的 `fetch*`，不走这里。
  *
  * 失败不进缓存：下一次调用一定重新取，重试按钮不会被一次失败挡住。
+ *
+ * 本地优先（规格 2026-11-25 决策 A1、A5）：给了 `storeKind` 的名单，每次取成功都把结果
+ * 落进按账号隔离的本机存储（`@/lib/localStore`），`stored()` 读回最近那一份。它只给
+ * 对话页冷启动时先铺一层用；`get()` 从不交出存储里的旧数据——外壳、详情、目标设备
+ * 那几处要的仍是网络上的实情。
  */
+import { accountStore } from "@/lib/localStore";
 
 /** 取回来之后复用多久。 */
 export const RosterReuseMs = 10_000;
@@ -29,7 +35,15 @@ export interface Roster<T> {
   get(): Promise<T>;
   /** 丢掉手上那一份（含在飞的）：之后的 get 一定发新请求。 */
   invalidate(): void;
+  /**
+   * 本机存储里最近一次成功取回的那一份（当前账号）；没存过、没给 `storeKind`、存储
+   * 不可用时是 undefined。从不发请求，也从不拒绝。
+   */
+  stored(): Promise<T | undefined>;
 }
+
+/** 每份名单在存储里只占一条记录。 */
+const STORED_KEY = "latest";
 
 interface Entry<T> {
   promise: Promise<T>;
@@ -47,11 +61,13 @@ const registry = new Set<Registered>();
 /**
  * 声明一份共享名单。
  *
- * `invalidatedBy` 是让它过期的账号信号种类（见 `@/lib/accountChannel`）。
+ * `invalidatedBy` 是让它过期的账号信号种类（见 `@/lib/accountChannel`）；`storeKind`
+ * 是它在本机存储里的类别名，不给就不落盘。
  */
 export function createRoster<T>(
   load: () => Promise<T>,
   invalidatedBy: readonly string[],
+  storeKind?: string,
 ): Roster<T> {
   let entry: Entry<T> | null = null;
 
@@ -72,6 +88,7 @@ export function createRoster<T>(
     mine.promise = load().then(
       (value) => {
         if (entry === mine) mine.settledAt = Date.now();
+        if (storeKind) void accountStore.put(storeKind, STORED_KEY, value);
         return value;
       },
       (err: unknown) => {
@@ -83,8 +100,13 @@ export function createRoster<T>(
     return mine.promise;
   };
 
+  const stored = (): Promise<T | undefined> =>
+    storeKind
+      ? accountStore.get<T>(storeKind, STORED_KEY)
+      : Promise.resolve(undefined);
+
   registry.add({ invalidatedBy: new Set(invalidatedBy), invalidate });
-  return { get, invalidate };
+  return { get, invalidate, stored };
 }
 
 /**

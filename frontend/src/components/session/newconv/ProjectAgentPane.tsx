@@ -12,7 +12,11 @@ const COUNT_SEPARATOR = " · ";
 
 import { EmptyState } from "@/components/console";
 
-import { AgentPickSkeleton } from "./AgentPickList";
+import {
+  AgentPickSkeleton,
+  RosterFailureLine,
+  type RosterLoadFailure,
+} from "./AgentPickList";
 import { membersOfProject } from "./projectMembers";
 import { targetSummary, type NewConvAgent, type NewConvProject } from "./types";
 
@@ -31,6 +35,8 @@ export function ProjectAgentPane({
   stacked = false,
   projectsSettled = true,
   agentsSettled = true,
+  projectsFailure,
+  agentsFailure,
 }: {
   projects: NewConvProject[];
   agents: NewConvAgent[];
@@ -48,6 +54,9 @@ export function ProjectAgentPane({
    */
   projectsSettled?: boolean;
   agentsSettled?: boolean;
+  /** 两份名单各自读失败了（宿主给）：手上为空时原位说原因 + 重试，不说「还没有…」。 */
+  projectsFailure?: RosterLoadFailure | null;
+  agentsFailure?: RosterLoadFailure | null;
   /**
    * 窄屏：项目树改成顶上一条横向 chip 条。390px 上再摆一列 252px 的树，
    * 右边只剩 138px，两边都用不了。
@@ -123,6 +132,12 @@ export function ProjectAgentPane({
         >
           {projectsPending ? (
             <ProjectTreeSkeleton stacked={stacked} />
+          ) : ordered.length === 0 && projectsFailure ? (
+            <RosterFailureLine
+              failure={projectsFailure}
+              what={t("chat.projectsLoadFailedWhat")}
+              testId="project-tree-failed"
+            />
           ) : ordered.length === 0 ? (
             <p className="px-2 py-1.5 text-[11.5px] text-muted-foreground">
               {t("chat.noProjects")}
@@ -192,6 +207,14 @@ export function ProjectAgentPane({
                 空态之前——那两条都是**肯定**的结论，此刻还没有依据下。 */}
             {projectsPending || agentsPending ? (
               <AgentPickSkeleton columns={1} />
+            ) : !selectedProject && projectsFailure ? null : selectedProject &&
+              membersEmpty &&
+              agentsFailure ? (
+              <RosterFailureLine
+                failure={agentsFailure}
+                what={t("chat.agentsLoadFailedWhat")}
+                testId="project-members-failed"
+              />
             ) : /* 一个项目都还没有：这一半不能谈论「这个项目」——没有那个项目。
                 左边已经说了「还没有项目」，这里接着说该去哪儿建，而不是让两句话
                 一起把用户送去找一个不存在的项目。 */

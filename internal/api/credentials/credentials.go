@@ -25,12 +25,19 @@ type IntrospectResponse struct {
 	// 字符串是因为这条契约面向另一个仓库的 Go 代码，那边把它当不透明标识比对，
 	// 不该诱使谁拿它做数值运算。
 	AccountID string `json:"account_id"`
-	// DeviceID 只有设备 access token 非零；中继票据与 server 自用凭据固定为 0。
+	// DeviceID 只有设备 access token 非零；中继票据、server 自用凭据与个人 token 固定为 0。
 	DeviceID int64 `json:"device_id"`
-	// Kind 是设备 kind，或 relay_client / server_mirror。
+	// Kind 是设备 kind，或 relay_client / server_mirror / personal_token。
 	Kind string `json:"kind"`
-	// PeerFingerprint 是这枚令牌说了算的对端身份（决策 8）。
+	// PeerFingerprint 是这枚令牌说了算的对端身份（决策 8）。个人 token 是它自己的对端指纹
+	// （创建时生成、轮换不变），不是创建它的那台设备的。
 	PeerFingerprint string `json:"peer_fingerprint"`
-	// ExpiresIn 是这枚令牌的剩余有效期，整数秒。
+	// ExpiresIn 是这枚令牌的剩余有效期，整数秒。永不过期的个人 token 答 0（「没说剩多久」），
+	// 接收方按自己的缓存时长复查。
 	ExpiresIn int64 `json:"expires_in"`
+	// Scopes 是个人 token 被授予的范围（read / chat / approve / resources:write /
+	// devices:write）；其余凭据不带这一格，能力由 Kind 决定。
+	Scopes []string `json:"scopes,omitempty"`
+	// TokenName 是个人 token 在账号里的名字；其余凭据不带这一格。
+	TokenName string `json:"token_name,omitempty"`
 }

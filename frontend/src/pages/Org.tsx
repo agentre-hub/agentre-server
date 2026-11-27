@@ -16,9 +16,12 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 
 import AppShell from "@/components/AppShell";
+import { api, ApiTimeoutError } from "@/lib/api";
 import { errorText } from "@/lib/errorText";
+import { describeFailure } from "@/lib/describeFailure";
+import { transportFailureText } from "@/lib/writeFailure";
 import { useIsMobile } from "@/components/use-is-mobile";
-import { EmptyState } from "@/components/console";
+import { EmptyState, FailureNotice, useMobileBack } from "@/components/console";
 import {
   Button,
   Skeleton,
@@ -27,6 +30,11 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import { buildOrgModels } from "./org/adapter";
+import type {
+  AgentFields,
+  DepartmentFields,
+  OrgChartResponse,
+} from "./org/types";
 import {
   CreateAgentDialog,
   CreateDepartmentDialog,
@@ -98,9 +106,11 @@ type SyncSelection = { kind: "agent" | "department"; syncId: string } | null;
 
 export default function Org() {
   const { t } = useTranslation();
-  const { chart, backends, loading, error, reload } = useOrgData();
+  const { chart, backends, loading, error, failure, reload } = useOrgData();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  // ‹ = 回到上一处（D3）：有上一处退一步、没有则以替换回 /org；不 push，历史不变长。
+  const back = useMobileBack();
   const params = useParams<{ kind?: string; syncId?: string }>();
 
   // 选中态的真源是**地址**，不是页面内的一个 state。移动端下钻靠它才让手机的返回键
@@ -158,6 +168,95 @@ export default function Org() {
     [t],
   );
 
+  // 新建超时（F5）：请求可能已经写进去了。一行提示 + 「刷新看看」——先重读整份名单，
+  // 认出刚提交的那条就直接打开，认不出才允许再提交。基线取自内存里已有的那份 chart
+  // （不另发读），所以提交本身不等任何读；提交时 POST 与之后的一切都不被基线拖慢。
+  type PendingCreate = {
+    kind: "agent" | "department";
+    fields: AgentFields | DepartmentFields;
+    knownBefore: ReadonlySet<string>;
+    phase: "timeout" | "notFound" | "refreshFailed";
+  };
+  const [createNotice, setCreateNoticeState] =
+    React.useState<PendingCreate | null>(null);
+  const createNoticeRef = React.useRef<PendingCreate | null>(null);
+  const setCreateNotice = (next: PendingCreate | null) => {
+    createNoticeRef.current = next;
+    setCreateNoticeState(next);
+  };
+  const refreshRef = React.useRef<Promise<boolean> | null>(null);
+  const refreshCreated = (): Promise<boolean> => {
+    if (refreshRef.current) return refreshRef.current;
+    const pending = createNoticeRef.current;
+    if (!pending) return Promise.resolve(false);
+    const run = (async () => {
+      let fresh: OrgChartResponse;
+      try {
+        fresh = await api<OrgChartResponse>("/v1/workspace/org");
+      } catch {
+        setCreateNotice({ ...pending, phase: "refreshFailed" });
+        return false;
+      }
+      const found =
+        pending.kind === "agent"
+          ? writes.findCreatedAgent(
+              fresh,
+              pending.fields as AgentFields,
+              pending.knownBefore,
+            )
+          : writes.findCreatedDepartment(
+              fresh,
+              pending.fields as DepartmentFields,
+              pending.knownBefore,
+            );
+      if (!found) {
+        setCreateNotice({ ...pending, phase: "notFound" });
+        return false;
+      }
+      setCreateNotice(null);
+      await reload();
+      setSelection({ kind: pending.kind, syncId: found.sync_id });
+      return true;
+    })().finally(() => {
+      refreshRef.current = null;
+    });
+    refreshRef.current = run;
+    return run;
+  };
+  /** 提交一次新建；返回 false 表示这次提交作罢（上一次其实已经建好了）。 */
+  const createWithRecovery = async (
+    kind: PendingCreate["kind"],
+    fields: AgentFields | DepartmentFields,
+    write: () => Promise<{ sync_id: string }>,
+  ) => {
+    // 刷新在途、或上一次超时还没核实：先等核实；认出来了就不再发 POST。核实的那次读
+    // 本身失败（refreshFailed）仍是「不知道建没建」，也不发——找不到才允许再提交（F5）。
+    if (refreshRef.current && (await refreshRef.current)) return;
+    const unverified = () => {
+      const phase = createNoticeRef.current?.phase;
+      return phase === "timeout" || phase === "refreshFailed";
+    };
+    if (unverified() && (await refreshCreated())) return;
+    if (unverified()) return;
+    const knownBefore = new Set<string>([
+      ...(chart?.agents ?? []).map((a) => a.sync_id),
+      ...(chart?.departments ?? []).map((d) => d.sync_id),
+    ]);
+    let res: { sync_id: string };
+    try {
+      res = await write();
+    } catch (err) {
+      if (err instanceof ApiTimeoutError) {
+        setCreateNotice({ kind, fields, knownBefore, phase: "timeout" });
+        return;
+      }
+      throw err;
+    }
+    setCreateNotice(null);
+    await reload();
+    setSelection({ kind, syncId: res.sync_id });
+  };
+
   // 队列归页面而不是详情：关闭再打开同一行，也不能让新提交抢在旧提交前落库。
   const fieldQueue = React.useRef(Promise.resolve());
   const currentSelection = React.useRef(selection);
@@ -175,7 +274,10 @@ export default function Org() {
       // 原来的详情已卸载时，其局部保存态不再可见，由页面报告失败。
       if (currentSelection.current !== selection) {
         mutationErrorRevision.current += 1;
-        setMutationError(errorText(error, t("org.errors.generic")));
+        setMutationError(
+          transportFailureText(error) ??
+            errorText(error, t("org.errors.generic")),
+        );
       }
     });
     return write;
@@ -250,11 +352,45 @@ export default function Org() {
   // （移动端正看详情时，见下面传给两个详情组件的 alert 槽）。落点由「当前这一屏
   // 是哪个」决定，不是两处都画——两列在移动端本就一次只挂一个（showIndex /
   // showDetail），所以只要各自的宿主只在自己那一档渲染这条文案，就天然不会重复。
-  const alertMessage = initialFailed
-    ? null
-    : error
-      ? t("org.errors.generic")
-      : mutationError || null;
+  const createNoticeNode: React.ReactNode = createNotice ? (
+    <span className="flex flex-wrap items-center gap-2">
+      <span>
+        {createNotice.phase === "notFound"
+          ? t("org.errors.createNotFound")
+          : createNotice.phase === "refreshFailed"
+            ? t("org.errors.createRefreshFailed")
+            : t("org.errors.createTimeout")}
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className={isMobile ? "min-h-11" : undefined}
+        onClick={() => void refreshCreated()}
+      >
+        {t("org.errors.createRefresh")}
+      </Button>
+    </span>
+  ) : null;
+  // 读失败（规格 G1）：原因与出口由 describeFailure 分类——原位一行 + 重试（手机 44px），
+  // 401 给「重新登录」；原文只进「复制诊断信息」。首次失败与「已有数据时刷新失败」同一句。
+  const loadFailureNotice =
+    error !== null ? (
+      <FailureNotice
+        failure={describeFailure(failure, {
+          t,
+          what: t("org.errors.loadFailedWhat"),
+        })}
+        onRetry={() => void reload()}
+      />
+    ) : null;
+  const alertMessage: React.ReactNode = initialFailed ? null : error ? (
+    <span className="flex flex-wrap items-center gap-2">
+      {loadFailureNotice}
+    </span>
+  ) : (
+    createNoticeNode || mutationError || null
+  );
   // 只在移动端且真的在看详情（不是骨架/失败态）时才递下去——两个详情组件把它摆在
   // 自己的头部下方（OrgDetailHeader 之后、正文之前）；桌面端不传，桌面的这条错误
   // 只在索引底部那一处出现，形态不变。
@@ -279,14 +415,9 @@ export default function Org() {
       {initialFailed ? (
         <div
           data-testid="org-index-failed"
-          className="flex flex-col items-start gap-2.5 p-4"
+          className="flex flex-wrap items-center gap-2.5 p-4 text-sm text-muted-foreground"
         >
-          <p className="text-sm text-muted-foreground">
-            {t("org.errors.loadFailed")}
-          </p>
-          <Button size="sm" variant="outline" onClick={() => void reload()}>
-            {t("common.retry")}
-          </Button>
+          {loadFailureNotice}
         </div>
       ) : initialLoading ? (
         <OrgIndexSkeleton />
@@ -373,18 +504,9 @@ export default function Org() {
             {initialFailed ? (
               <div
                 data-testid="org-detail-failed"
-                className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 p-6"
+                className="flex min-h-0 flex-1 flex-wrap content-center items-center justify-center gap-2.5 p-6 text-sm text-muted-foreground"
               >
-                <p className="text-sm text-muted-foreground">
-                  {t("org.errors.loadFailed")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void reload()}
-                >
-                  {t("common.retry")}
-                </Button>
+                {loadFailureNotice}
               </div>
             ) : initialLoading ? (
               <OrgDetailSkeleton />
@@ -436,7 +558,7 @@ export default function Org() {
                   });
                 }}
                 onReload={() => void reload()}
-                onBack={isMobile ? () => setSelection(null) : undefined}
+                onBack={isMobile ? () => back("/org") : undefined}
                 onClose={() => setSelection(null)}
                 alert={detailAlert}
               />
@@ -465,7 +587,7 @@ export default function Org() {
                     await reload();
                   })
                 }
-                onBack={isMobile ? () => setSelection(null) : undefined}
+                onBack={isMobile ? () => back("/org") : undefined}
                 onClose={() => setSelection(null)}
               />
             ) : (
@@ -502,21 +624,22 @@ export default function Org() {
         onOpenChange={setCreateDeptOpen}
         onCreate={({ name, description, icon, color }) => {
           setCreateDeptOpen(false);
-          void runMutation(async () => {
-            const res = await writes.createDepartment({
-              name,
-              ...(description ? { description } : {}),
-              ...(icon ? { icon } : {}),
-              ...(color ? { accent_color: color } : {}),
-              // 组头的 ⋮ 进来时是子部门；空态进来时不带这个键（不是空串——空串是
-              // 「显式挂到根上」这个值，与「这次请求没提到」不同，见 types.ts）。
-              ...(createDeptParentSync
-                ? { parent_sync_id: createDeptParentSync }
-                : {}),
-            });
-            await reload();
-            setSelection({ kind: "department", syncId: res.sync_id });
-          });
+          // 组头的 ⋮ 进来时是子部门；空态进来时不带这个键（不是空串——空串是
+          // 「显式挂到根上」这个值，与「这次请求没提到」不同，见 types.ts）。
+          const fields: DepartmentFields = {
+            name,
+            ...(description ? { description } : {}),
+            ...(icon ? { icon } : {}),
+            ...(color ? { accent_color: color } : {}),
+            ...(createDeptParentSync
+              ? { parent_sync_id: createDeptParentSync }
+              : {}),
+          };
+          void runMutation(() =>
+            createWithRecovery("department", fields, () =>
+              writes.createDepartment(fields),
+            ),
+          );
         }}
       />
       <CreateAgentDialog
@@ -526,17 +649,18 @@ export default function Org() {
         defaultDepartmentSyncId={createAgentDeptSync}
         onCreate={({ name, description, icon, color }, departmentSyncId) => {
           setCreateAgentOpen(false);
-          void runMutation(async () => {
-            const res = await writes.createAgent({
-              name,
-              ...(description ? { description } : {}),
-              ...(icon ? { avatar_icon: icon } : {}),
-              ...(color ? { avatar_color: color } : {}),
-              department_sync_id: departmentSyncId || undefined,
-            });
-            await reload();
-            setSelection({ kind: "agent", syncId: res.sync_id });
-          });
+          const fields: AgentFields = {
+            name,
+            ...(description ? { description } : {}),
+            ...(icon ? { avatar_icon: icon } : {}),
+            ...(color ? { avatar_color: color } : {}),
+            department_sync_id: departmentSyncId || undefined,
+          };
+          void runMutation(() =>
+            createWithRecovery("agent", fields, () =>
+              writes.createAgent(fields),
+            ),
+          );
         }}
       />
     </AppShell>

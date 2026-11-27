@@ -1,4 +1,9 @@
 import { useEffect, useState, type ComponentType } from "react";
+import { useTranslation } from "react-i18next";
+import { RotateCw } from "lucide-react";
+
+import { Button } from "@agentre-hub/agentre-ui";
+import { reloadPage } from "@/hooks/use-update-available";
 
 type PageModule = { default: ComponentType };
 
@@ -58,25 +63,50 @@ export function lazyPage(load: () => Promise<PageModule>): PreloadablePage {
 
   function LazyPage() {
     const [mod, setMod] = useState<PageModule | null>(loaded);
+    const [failed, setFailed] = useState(false);
     useEffect(() => {
       if (loaded) return;
       let alive = true;
       void fetchOnce().then((m) => {
-        if (alive && m) setMod(m);
+        if (!alive) return;
+        if (m) setMod(m);
+        else setFailed(true);
       });
       return () => {
         alive = false;
       };
     }, []);
-    // 占位刻意是空的：页面自己带 AppShell，这里画任何骨架都会先摆出一个和真页面
-    // 对不上的外壳、再整个换掉，比空一瞬更晃眼。预热过之后这一支根本走不到。
-    if (!mod) return null;
-    return <mod.default />;
+    if (mod) return <mod.default />;
+    // 没取到（规格 2026-11-25 决策 B3）：原位说清楚并给「重新加载」。页面自己带外壳，
+    // 留空的话空掉的是整个视口，用户只能杀掉 App 重开。重新加载而不是原地重取：多半
+    // 是撞上了换版本，旧外壳引用的分包已经不在了，要的是新外壳（SW 已在后台存好）。
+    if (failed) return <PageLoadFailed />;
+    // 还在路上时刻意是空的：页面自己带 AppShell，这里画任何骨架都会先摆出一个和真
+    // 页面对不上的外壳、再整个换掉，比空一瞬更晃眼。冷启动时这一段由 index.html 的
+    // 启动壳盖住；预热过之后这一支根本走不到。
+    return null;
   }
 
   return Object.assign(LazyPage, {
     preload: () => fetchOnce().then(() => undefined),
   });
+}
+
+/** 分包没取到时铺满视口的那一屏：一句话 + 44px 的「重新加载」。 */
+function PageLoadFailed() {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-sheet px-6 text-center"
+    >
+      <p className="text-prose text-foreground">{t("common.pageLoadFailed")}</p>
+      <Button className="h-11 px-5" onClick={reloadPage}>
+        <RotateCw className="size-4" aria-hidden="true" />
+        {t("common.reload")}
+      </Button>
+    </div>
+  );
 }
 
 /**

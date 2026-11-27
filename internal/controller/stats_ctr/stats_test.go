@@ -19,6 +19,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/activity_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
@@ -174,7 +175,30 @@ func requireRejected(t *testing.T, resp *http.Response) {
 }
 
 func device(id int64, name, fingerprint string, online bool) device_svc.DeviceView {
-	return device_svc.DeviceView{ID: id, Name: name, Fingerprint: fingerprint, Online: online, Status: 1}
+	return device_svc.DeviceView{ID: id, Name: name, Kind: device_entity.KindAgentred, Fingerprint: fingerprint, Online: online, Status: 1}
+}
+
+func kindDevice(id int64, kind string, online bool) device_svc.DeviceView {
+	return device_svc.DeviceView{ID: id, Name: kind, Kind: kind, Fingerprint: "fp-" + kind, Online: online, Status: 1}
+}
+
+// agrctl 的 cli 设备不连中继、不是执行机，离线不算「设备在线」，总台数也不把它算进去。
+func TestOverview_CLIDevicesAreNotCountedAsOnlineOrTotal(t *testing.T) {
+	act := &stubActivity{overview: activity_svc.OverviewView{
+		Heatmap: activity_svc.HeatmapView{From: "2025-09-01", To: "2026-08-28"},
+	}}
+	dev := &stubDevices{items: []device_svc.DeviceView{
+		device(1, "mac-mini", "fp-a", true),
+		kindDevice(2, device_entity.KindDesktop, false),
+		kindDevice(3, device_entity.KindCLI, true),
+		kindDevice(4, device_entity.KindCLI, false),
+	}}
+	server, sid, csrf := serve(t, act, dev)
+
+	body := data(t, do(t, http.MethodGet, server.URL+"/v1/stats/overview", sid, csrf, ""))
+
+	assert.Contains(t, body, `"devices_online":1`)
+	assert.Contains(t, body, `"devices_total":2`)
 }
 
 // 在线台数与总台数是**设备域**的事实，服务层刻意不给；控制器从设备清单上数出来。
@@ -329,6 +353,28 @@ func TestSettings_DeviceReportedThroughOmittedWhenNeverReported(t *testing.T) {
 	assert.Equal(t, []string{"fp-a", "fp-b"}, act.reportedFPs)
 	assert.Contains(t, body, `"last_pull_at":1756368000000`)
 	assert.Contains(t, body, `"saved_conversations":128`)
+}
+
+// agrctl 的 cli 设备不上报活跃统计、也没有在线态：逐台进度里不列它，否则隐私页把它
+// 画成一台「离线」的机器。只剩 cli 时整段缺席，与一台设备都没有同一支。
+func TestSettings_CLIDevicesAreNotListedAsReportingMachines(t *testing.T) {
+	act := settingsStub()
+	dev := &stubDevices{items: []device_svc.DeviceView{
+		device(2, "mac-mini", "fp-a", true),
+		kindDevice(3, device_entity.KindCLI, false),
+	}}
+	server, sid, csrf := serve(t, act, dev)
+
+	body := data(t, do(t, http.MethodGet, server.URL+"/v1/stats/settings", sid, csrf, ""))
+	assert.Contains(t, body, `"device_id":2`)
+	assert.NotContains(t, body, `"device_id":3`)
+	assert.Equal(t, []string{"fp-a"}, act.reportedFPs)
+
+	only := settingsStub()
+	server, sid, csrf = serve(t, only, &stubDevices{items: []device_svc.DeviceView{kindDevice(3, device_entity.KindCLI, false)}})
+	body = data(t, do(t, http.MethodGet, server.URL+"/v1/stats/settings", sid, csrf, ""))
+	assert.NotContains(t, body, `"devices"`)
+	assert.Equal(t, 0, only.reportedCall)
 }
 
 // 一台设备都没有时 devices 整段缺席：前端据此**不画**这一段，而不是摆一排「未知」。

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { SearchInput } from "@agentre-hub/agentre-ui";
 
-import { AgentPickList } from "./AgentPickList";
+import { AgentPickList, type RosterLoadFailure } from "./AgentPickList";
 import type { NewConvAgent } from "./types";
 
 /**
@@ -18,6 +18,7 @@ export function NewConversationPane({
   onPick,
   onFromProject,
   settled = true,
+  loadFailure,
 }: {
   agents: NewConvAgent[];
   recentIds: string[];
@@ -26,6 +27,8 @@ export function NewConversationPane({
   onFromProject: () => void;
   /** 清单问回来了没有。没回来时清单那一格摆骨架，不说「一个都没有」。 */
   settled?: boolean;
+  /** Agent 名单读失败了：清单那一格原位说原因 + 重试，不说「还没有 Agent」。 */
+  loadFailure?: RosterLoadFailure | null;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
@@ -66,6 +69,7 @@ export function NewConversationPane({
           columns={2}
           search={{ query, onClear: () => setQuery("") }}
           settled={settled}
+          loadFailure={loadFailure}
         />
       </div>
 

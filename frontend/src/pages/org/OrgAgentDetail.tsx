@@ -14,10 +14,12 @@ import { useTranslation } from "react-i18next";
 import { useIsMobile } from "@/components/use-is-mobile";
 
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
-import { useOrgIdentityText } from "./useOrgIdentityText";
+import { useFlushOnLeave, useOrgIdentityText } from "./useOrgIdentityText";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
   IdentityFields,
+  cn,
   Button,
   DialogShell,
   DialogShellBody,
@@ -86,6 +88,8 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
     parsePromptJSON(agent.prompt_json),
   );
   const [promptOpen, setPromptOpen] = React.useState(false);
+  // 展开编辑框在手机上是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(promptOpen, () => setPromptOpen(false));
   const [promptDraft, setPromptDraft] = React.useState("");
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
@@ -143,10 +147,21 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
     saveIfChanged({ tools_json: JSON.stringify(next) });
   };
 
+  // 提示词的「已落库基线」：失焦、展开弹层保存、离开前 / 进后台的那一次都过 savePrompt，
+  // 而 agent 要等写完 reload 才刷新——只比 agent.prompt_json 会在这段空窗里把同一份文字
+  // 再存一遍。服务端那份换了（别处改的、重新载入）就跟着换。
+  const savedPromptRef = React.useRef(parsePromptJSON(agent.prompt_json));
+  const promptRef = React.useRef(prompt);
+  React.useLayoutEffect(() => {
+    savedPromptRef.current = parsePromptJSON(agent.prompt_json);
+  }, [agent.prompt_json]);
   const savePrompt = (text: string) => {
-    if (parsePromptJSON(agent.prompt_json) === text) return;
+    if (savedPromptRef.current === text) return;
+    savedPromptRef.current = text;
     saveIfChanged({ prompt_json: stringifyPromptJSON(text) });
   };
+  // 系统提示词离开页面时自动保存（F4、I12）：‹、系统返回、进后台都先存一次。
+  useFlushOnLeave(() => savePrompt(promptRef.current));
 
   // 头部身份区的附属信息只画真实算得出来的角色与归属。
   const leadsDepartments = props.departments.some(
@@ -178,6 +193,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
     <IdentityFields
       kind="agent"
       testIdPrefix="org-agent-identity"
+      touch={isMobile}
       {...identityText}
       mark={{
         iconKey: avatarIcon,
@@ -241,11 +257,18 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
       <Textarea
         id="org-agent-prompt"
         value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
+        onChange={(e) => {
+          promptRef.current = e.target.value;
+          setPrompt(e.target.value);
+        }}
         onBlur={() => savePrompt(prompt)}
         placeholder={t("org.detail.systemPromptPlaceholder")}
         aria-label={t("org.detail.systemPrompt")}
-        className="min-h-[232px] bg-transparent font-mono text-xs [overflow-wrap:anywhere]"
+        className={cn(
+          "min-h-[232px] bg-transparent font-mono [overflow-wrap:anywhere]",
+          // 手机 16px：iOS 聚焦字号 < 16px 的输入会放大整页（I3）。
+          isMobile ? "text-base" : "text-xs",
+        )}
       />
     </div>
   );
@@ -352,7 +375,10 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
             value={promptDraft}
             onChange={(e) => setPromptDraft(e.target.value)}
             aria-label={t("org.detail.systemPrompt")}
-            className="h-[50vh] min-h-[320px] bg-transparent font-mono text-xs shadow-none [overflow-wrap:anywhere]"
+            className={cn(
+              "h-[50vh] min-h-[320px] bg-transparent font-mono shadow-none [overflow-wrap:anywhere]",
+              isMobile ? "text-base" : "text-xs",
+            )}
           />
         </DialogShellBody>
         <DialogShellFooter>
@@ -366,6 +392,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
           <DialogShellSubmit
             size="sm"
             onClick={() => {
+              promptRef.current = promptDraft;
               setPrompt(promptDraft);
               savePrompt(promptDraft);
               setPromptOpen(false);

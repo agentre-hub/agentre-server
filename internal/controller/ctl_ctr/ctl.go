@@ -5,7 +5,8 @@
 // 响应是 protojson 的 CtlResponse，失败是 `{"error": "…"}`——agentred 的 ctl 代理因此
 // 可以原样转发正文。它不走 mux 的 code/msg/data 信封，所以是裸 gin 处理器。
 //
-// 只挂在设备 access token 那一组（DeviceJWT）：浏览器会话进不来，所以这里没有 CSRF。
+// 只挂在 Bearer 那一组（设备 access token 与个人 token）：浏览器会话进不来，所以这里没有
+// CSRF。个人 token 的范围（read / resources:write）由 ctl_svc 按调用方形态检查。
 package ctl_ctr
 
 import (
@@ -27,7 +28,7 @@ import (
 const (
 	// ResourcesPath 是资源读写；`?preview=1` 时写请求只回变更清单、不落库。
 	ResourcesPath = "/v1/ctl/resources"
-	// SendPath 接住 `agrctl send`，明确答「server 路径上不支持」。
+	// SendPath 接住旧版 agentred 转来的 `agrctl send`，答「由会话所在的 agentred 处理」。
 	SendPath = "/v1/ctl/send"
 	// maxBody 是请求正文上限：一次写入只是一份资源文档。
 	maxBody = 1 << 20
@@ -57,7 +58,10 @@ func (c *Ctl) Resources(g *gin.Context) {
 		writeErr(g, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	caller := ctl_svc.Caller{UserID: ginctx.UserID(g), DeviceID: ginctx.DeviceID(g)}
+	caller := ctl_svc.Caller{
+		UserID: ginctx.UserID(g), DeviceID: ginctx.DeviceID(g),
+		Kind: ginctx.DeviceKind(g), Scopes: ginctx.Scopes(g),
+	}
 	// preview 只要出现就是预览（fail closed）：写法不对不能落成一次没经审批的真写入。
 	_, preview := g.GetQuery("preview")
 	resp, err := c.service().Handle(g.Request.Context(), caller, &req, preview)
@@ -73,9 +77,9 @@ func (c *Ctl) Resources(g *gin.Context) {
 	g.Data(http.StatusOK, "application/json", out)
 }
 
-// Send 处理 POST /v1/ctl/send：本 spec 在 server 路径上不支持派发。
+// Send 处理 POST /v1/ctl/send：server 不派发，send 由会话所在的 agentred 执行。
 func (c *Ctl) Send(g *gin.Context) {
-	writeServiceErr(g, ctl_svc.ErrSendUnsupported)
+	writeServiceErr(g, ctl_svc.ErrSendHandledByAgentred)
 }
 
 // writeServiceErr：执行者的明确拒绝与服务层的业务错误原样透出（agrctl 印给用户）；

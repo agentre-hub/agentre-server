@@ -9,6 +9,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import SendAttachments from "@/components/session/SendAttachments";
+import { useIsMobile } from "@/components/use-is-mobile";
 import type { SendFailureKind } from "@/lib/sessionView";
 
 /**
@@ -47,11 +48,16 @@ export interface FailedSend {
    * 出去」——但**原因不是连接**:这一轮还在跑,而插话（`runtime.steer`）的参数里
    * 只有 `text`,图带不动。它此前混在 `transport` 里,于是气泡说「连接断了,可能
    * 已经送达,再发一次可能变成两条」,三件事全是假的。
+   *
+   * `sessionRunning` 是 agentred 明说的「会话运行中」（-32016）：这条会话上已经有一轮
+   * 在跑，而它拒绝再开一轮、回落的插话也没被收下。同样是「一次请求都没落地」，重发是
+   * 干净的 —— 等那一轮跑完。文案在 `console.sendFailure.sessionRunning`。
    */
   kind:
     | Exclude<SendFailureKind, "executionUnavailable">
     | "notSent"
-    | "imageWhileRunning";
+    | "imageWhileRunning"
+    | "sessionRunning";
   /** 对端自己的说明（仅 rejected 有），它已按自己的语言本地化过。 */
   detail?: string;
   /**
@@ -61,6 +67,12 @@ export interface FailedSend {
    * 的话它就真的没了,而那颗「重发」会发出一条**和用户写的不一样**的消息。
    */
   images?: ChatImageAttachment[];
+  /**
+   * 这条消息交给中继的那一刻（Unix 毫秒，本机钟）。只有 `transport` 带它：转录里出现
+   * 内容一致、时间不早于它的用户消息时，这条「可能已送达」就收起（规格 2026-11-25
+   * K4，见 deliveredFailureIds）。没有这一格的（旧记录）一直留着。
+   */
+  handedOffAt?: number;
 }
 
 export default function SendFailureBubble({
@@ -69,14 +81,22 @@ export default function SendFailureBubble({
   busy,
   onRetry,
   onDiscard,
+  align,
 }: {
   failure: FailedSend;
   machineName?: string;
   busy?: boolean;
+  /**
+   * 与发送中那一条同一个对齐（规格 2026-11-25 H8：手机 `end`）。发送失败时它就站在
+   * 发送中那一条原来的位置上，不该跳到另一侧。不传 = 起始侧。
+   */
+  align?: "start" | "end";
   onRetry: () => void;
   onDiscard: () => void;
 }) {
   const { t } = useTranslation();
+  // 手机上点按区 44px（规格 2026-11-25 硬约束）；桌面照旧。
+  const touchTarget = useIsMobile() ? "min-h-11" : undefined;
 
   /**
    * 把这条没发出去的文本交给剪贴板。
@@ -100,11 +120,18 @@ export default function SendFailureBubble({
   const transport = failure.kind === "transport";
   // 「没走到对端」的那几类:说的是一件还能重来的事,不用惊叹号那副样子。
   const neverLeft =
-    failure.kind === "notSent" || failure.kind === "imageWhileRunning";
+    failure.kind === "notSent" ||
+    failure.kind === "imageWhileRunning" ||
+    failure.kind === "sessionRunning";
+  // 前两类的文案在 session 模块；agentred 的「会话运行中」属控制台自己的口径。
+  const copyKey =
+    failure.kind === "sessionRunning"
+      ? "console.sendFailure.sessionRunning"
+      : `session.sendFailure.${failure.kind}`;
   const Icon = transport || neverLeft ? CircleAlert : TriangleAlert;
 
   const title = neverLeft
-    ? t(`session.sendFailure.${failure.kind}.titleUnknown`)
+    ? t(`${copyKey}.titleUnknown`)
     : machineName
       ? t(`session.sendFailure.${failure.kind}.title`, { machine: machineName })
       : t(`session.sendFailure.${failure.kind}.titleUnknown`);
@@ -112,6 +139,7 @@ export default function SendFailureBubble({
   return (
     <ChatMessage
       variant="user"
+      align={align}
       // author / avatar 在 user 档上不被使用（包自己画中性的「我」），类型上必填。
       author=""
       avatar={null}
@@ -131,6 +159,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant={transport ? "outline" : "default"}
+            className={touchTarget}
             data-testid="send-failure-retry"
             disabled={busy}
             onClick={onRetry}
@@ -145,6 +174,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant="ghost"
+            className={touchTarget}
             data-testid="send-failure-copy"
             onClick={() => void copyText()}
           >
@@ -154,6 +184,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant="ghost"
+            className={touchTarget}
             data-testid="send-failure-discard"
             onClick={onDiscard}
           >
@@ -179,7 +210,7 @@ export default function SendFailureBubble({
           {transport ? (
             t("session.sendFailure.transport.body")
           ) : neverLeft ? (
-            t(`session.sendFailure.${failure.kind}.body`)
+            t(`${copyKey}.body`)
           ) : failure.detail ? (
             // 「它说：」标出这是**那台机器的原话**，不是本站的判断。对端已经按它
             // 自己的语言本地化过，原样转述，不替换成我们编的故事。

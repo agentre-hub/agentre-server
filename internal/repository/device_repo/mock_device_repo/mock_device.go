@@ -86,6 +86,21 @@ func (mr *MockDeviceRepoMockRecorder) ListActiveByUsers(ctx, userIDs any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListActiveByUsers", reflect.TypeOf((*MockDeviceRepo)(nil).ListActiveByUsers), ctx, userIDs)
 }
 
+// ListActiveChildren mocks base method.
+func (m *MockDeviceRepo) ListActiveChildren(ctx context.Context, parentID int64) ([]*device_entity.Device, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListActiveChildren", ctx, parentID)
+	ret0, _ := ret[0].([]*device_entity.Device)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListActiveChildren indicates an expected call of ListActiveChildren.
+func (mr *MockDeviceRepoMockRecorder) ListActiveChildren(ctx, parentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListActiveChildren", reflect.TypeOf((*MockDeviceRepo)(nil).ListActiveChildren), ctx, parentID)
+}
+
 // ListByUser mocks base method.
 func (m *MockDeviceRepo) ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error) {
 	m.ctrl.T.Helper()
@@ -127,6 +142,20 @@ func (m *MockDeviceRepo) Touch(ctx context.Context, id, nowMs int64) error {
 func (mr *MockDeviceRepoMockRecorder) Touch(ctx, id, nowMs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Touch", reflect.TypeOf((*MockDeviceRepo)(nil).Touch), ctx, id, nowMs)
+}
+
+// TouchLastSeen mocks base method.
+func (m *MockDeviceRepo) TouchLastSeen(ctx context.Context, id, nowMs int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TouchLastSeen", ctx, id, nowMs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TouchLastSeen indicates an expected call of TouchLastSeen.
+func (mr *MockDeviceRepoMockRecorder) TouchLastSeen(ctx, id, nowMs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TouchLastSeen", reflect.TypeOf((*MockDeviceRepo)(nil).TouchLastSeen), ctx, id, nowMs)
 }
 
 // UpdateDisplayName mocks base method.

@@ -13,7 +13,11 @@
   },
   "status": {
     "connecting": "Connecting…",
-    "reconnecting": "Reconnecting…"
+    "reconnecting": "Reconnecting…",
+    "unreachable": "Can't connect",
+    "retryNow": "Retry now",
+    "unreachableRetry": "Can't connect · Retry now",
+    "retryCountdown": "The execution side is unreachable for now · next automatic retry in {{seconds}} s"
   },
   "banner": {
     "lost": {
@@ -51,8 +55,8 @@
   "relogin": "Sign in again",
   "sendFailure": {
     "transport": {
-      "title": "Did not reach {{machine}}",
-      "titleUnknown": "Did not reach that machine",
+      "title": "May have reached {{machine}}",
+      "titleUnknown": "May have reached that machine",
       "body": "The connection dropped on the way. It may already have arrived — sending again could produce two copies."
     },
     "rejected": {
@@ -79,7 +83,9 @@
   "sendPending": {
     "title": "Will send once connected",
     "sending": "Sending…",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "uploaded": "{{sent}} of {{total}} sent",
+    "uploadProgress": "Upload progress"
   },
   "compose": {
     "readonly": "Read-only",
@@ -101,8 +107,7 @@
     "idle": "Idle",
     "interrupted": "Interrupted",
     "failed": "Failed",
-    "waiting": "Waiting for your input",
-    "untitled": "{{cwd}} · {{backend}} · {{status}}"
+    "waiting": "Waiting for your input"
   },
   "transcript": {
     "empty": "No messages yet.",
@@ -116,7 +121,9 @@
   "decision": {
     "alreadyHandled": "This request has already been handled.",
     "submitFailed": "That decision could not be submitted. Nothing was sent — try again.",
-    "retry": "Retry"
+    "timedOut": "No confirmation received. It may already have taken effect.",
+    "retry": "Retry",
+    "confirmingWaiting": "Checking whether it's still waiting for you"
   },
   "phoneHeader": {
     "status": {
@@ -127,7 +134,8 @@
       "idle": "Idle",
       "offline": "Offline · {{time}}",
       "offlineNoTime": "Offline",
-      "connecting": "Connecting"
+      "connecting": "Connecting",
+      "syncing": "Syncing"
     },
     "info": {
       "title": "Conversation info",
@@ -151,5 +159,10 @@
       "body": "It may have been deleted, or it isn't in this account."
     },
     "loadError": "Couldn't load this conversation. Try again."
+  },
+  "stop": {
+    "failed": "Couldn't stop it",
+    "failedWhat": "The stop didn't go through",
+    "retry": "Retry"
   }
 }

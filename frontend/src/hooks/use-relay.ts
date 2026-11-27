@@ -7,12 +7,16 @@ import type {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { RedialTimer } from "@/lib/redialTimer";
+import { backoffDelay } from "@/lib/relayBackoff";
 import type { RelayClient, RelayState } from "@/lib/relayClient";
 import {
   acquireRelayClient,
   relayClientPool,
   type RelayLease,
+  type RelayListener,
 } from "@/lib/relayClientPool";
+import { isSignedOutError } from "@/lib/relayConnection";
 import type { RelayTicket } from "@/lib/relayTicket";
 
 /**
@@ -54,15 +58,20 @@ export interface UseRelayChannelResult {
    */
   handshakeRejection: string | null;
   /**
-   * 从头再连一次：重取 ticket、新建 RelayClient、connect。
+   * 下一次自动重试排在哪个时刻（Unix 毫秒）；没排着时是 null。界面据此画
+   * 「下次自动重试 N 秒后」。来源是这条通道（连接重拨 / 握手重试 / 通道重开），或
+   * 票没换到时本 hook 自己排的那次重取。
    *
-   * **不是**在旧 client 上重试。`relayState` 走到 "disconnected" 只有两条来历，
-   * 两条都没有可重试的东西：`RelayClient.close()` 已经被调用过（`handleClose` 里
-   * `closedByUser` 那一支），或者票根本没换到、client 压根没建出来。自动重连那
-   * 一路停在 "reconnecting"，永远不落到 "disconnected"。唯一能做的就是换一个。
+   * 本 hook 总会给出这一格；声明成可选只是为了既有的页面替身（不给即读作 null）。
+   */
+  nextRetryAt?: number | null;
+  /**
+   * 立即再试一次（「立即重试」），排着的那次作废、倒计时从头算。
    *
-   * 页面据此给「lost」那一档一个真的出路 —— 横幅说的是「已经不再自动重试」，
-   * 那句话必须配一个按钮，否则用户只能刷新整页而界面没说。
+   * 首选让池子把那条 socket 原地换掉；票都没换到时从取票重来。
+   *
+   * 自动重试那一路停在 "reconnecting"（网络错误永不进终态）；"disconnected" /
+   * "signedOut" 是终态，那里没有人在重试，这颗按钮是唯一的出路。
    */
   reconnect: () => void;
 }
@@ -95,10 +104,12 @@ export function useRelayChannel(
   const [handshakeRejection, setHandshakeRejection] = useState<string | null>(
     null,
   );
+  const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
   const [lastTarget, setLastTarget] = useState(target);
   if (lastTarget !== target) {
     setLastTarget(target);
     setRelayState(initialState(target));
+    setNextRetryAt(null);
     // 上一台机器的构建版本对不上，不代表下一台也对不上：不清的话，切过去的那一屏
     // 会挂着一条属于别人的横幅，而它那条通道可能好得很。
     setHandshakeRejection(null);
@@ -120,9 +131,12 @@ export function useRelayChannel(
   const reconnect = useCallback(() => {
     if (!target) return;
     setRelayState("connecting");
+    setNextRetryAt(null);
     void relayClientPool
       .reconnect(target)
-      .catch(() => false)
+      // 换连接失败（取票 5xx / 401）由连接自己落成退避重试或登出态，并经通道报上来；
+      // 这里再整只重跑只会多借一次租约。
+      .catch(() => true)
       .then((rebuilt) => {
         if (!rebuilt) setAttempt((n) => n + 1);
       });
@@ -143,45 +157,87 @@ export function useRelayChannel(
       // 这里在发请求前就把话说对:我们在连。
       setRelayState("connecting");
       let lease: RelayLease | null = null;
+      /** 票没换到时自己排的那次重取，见下面的 catch。 */
+      const retry = new RedialTimer();
+      let failures = 0;
       // waitForConnect:false —— 拿到 client 就挂上去，首次连不上交给 RelayClient
       // 自己退避重连，页面靠 relayState 的 reconnecting 去探测原因（R11）。等连上
       // 再交付会把这条路堵死：首次失败当场被说成 disconnected。
-      acquireRelayClient(
-        target,
-        {
-          onStateChange: setRelayState,
-          onHandshakeRejected: setHandshakeRejection,
-          onEvent: (frame, at) => optsRef.current.onEvent?.(frame, at),
-          onPreviewEvent: (frame, at) =>
-            optsRef.current.onPreviewEvent?.(frame, at),
-          onRunResultDone: (frame, at) =>
-            optsRef.current.onRunResultDone?.(frame, at),
-          onAutonomousTurnStarted: (frame, at) =>
-            optsRef.current.onAutonomousTurnStarted?.(frame, at),
-          onTurnStarted: (frame, at) =>
-            optsRef.current.onTurnStarted?.(frame, at),
-        },
-        { waitForConnect: false },
-      )
-        .then((acquired) => {
-          if (!alive()) {
-            acquired.release();
-            return;
-          }
-          lease = acquired;
-          setRelayTicket(acquired.ticket);
-          setClient(acquired.client);
-        })
-        .catch((e: unknown) => {
-          if (!alive()) return;
-          setRelayTicketError(e);
-          // 走到这里只有一种来路：票没换到（waitForConnect:false 不看握手成败）。
-          // 没有票就没有自动重连可言。退回 "disconnected" 让页面走「lost + 重新
-          // 连接」那一档 —— 否则上面那句 "connecting" 会把一次彻底的失败永远显示
-          // 成转圈。
-          setRelayState("disconnected");
-        });
+      const listener: RelayListener = {
+        onStateChange: setRelayState,
+        onHandshakeRejected: setHandshakeRejection,
+        onNextRetryAt: setNextRetryAt,
+        onEvent: (frame, at) => optsRef.current.onEvent?.(frame, at),
+        onPreviewEvent: (frame, at) =>
+          optsRef.current.onPreviewEvent?.(frame, at),
+        onRunResultDone: (frame, at) =>
+          optsRef.current.onRunResultDone?.(frame, at),
+        onAutonomousTurnStarted: (frame, at) =>
+          optsRef.current.onAutonomousTurnStarted?.(frame, at),
+        onTurnStarted: (frame, at) =>
+          optsRef.current.onTurnStarted?.(frame, at),
+      };
+      const tryAcquire = () => {
+        acquireRelayClient(target, listener, { waitForConnect: false })
+          .then((acquired) => {
+            if (!alive()) {
+              acquired.release();
+              return;
+            }
+            lease = acquired;
+            setRelayTicket(acquired.ticket);
+            setRelayTicketError(null);
+            setClient(acquired.client);
+          })
+          .catch((e: unknown) => {
+            if (!alive()) return;
+            setRelayTicketError(e);
+            // 走到这里只有一种来路：票没换到（waitForConnect:false 不看握手成败），
+            // 于是还没有连接替我们重试。401 是终态（已登出）；其余——网络错误、超时、
+            // 5xx——只是这一次没成，自己退避再取，永不进终态（E1）。
+            if (isSignedOutError(e)) {
+              setNextRetryAt(null);
+              setRelayState("signedOut");
+              return;
+            }
+            const delay = backoffDelay(failures, {
+              baseMs: 1000,
+              capMs: 30_000,
+            });
+            failures += 1;
+            setRelayState("reconnecting");
+            setNextRetryAt(Date.now() + delay);
+            retry.schedule(delay, () => {
+              if (!alive()) return;
+              setNextRetryAt(null);
+              setRelayState("connecting");
+              tryAcquire();
+            });
+          });
+      };
+      /*
+        联网、回到前台时立即重试（规格 E「网络恢复（online）、回到前台时立即重试」）。
+        连接建出来之后这件事归池子的前台监听（RelayClientPool.watchForeground）；票都
+        没换到时还没有连接，那份监听也还没装上，所以退避中的这一段由这里自己听。
+        只在排着重取时才动：取票途中再取一次只是多发一个请求。
+      */
+      const retryNow = () => {
+        if (!alive() || !retry.pending) return;
+        if (document.visibilityState === "hidden") return;
+        retry.cancel();
+        setNextRetryAt(null);
+        setRelayState("connecting");
+        tryAcquire();
+      };
+      window.addEventListener("online", retryNow);
+      window.addEventListener("pageshow", retryNow);
+      document.addEventListener("visibilitychange", retryNow);
+      tryAcquire();
       return () => {
+        window.removeEventListener("online", retryNow);
+        window.removeEventListener("pageshow", retryNow);
+        document.removeEventListener("visibilitychange", retryNow);
+        retry.cancel();
         // 还回去，不是关掉：同一台机器上目录选择器 / 派发可能正搭着这一条。
         lease?.release();
       };
@@ -196,6 +252,7 @@ export function useRelayChannel(
     relayTicket,
     relayTicketError,
     handshakeRejection,
+    nextRetryAt,
     reconnect,
   };
 }

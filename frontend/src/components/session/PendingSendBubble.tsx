@@ -8,6 +8,75 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import SendAttachments from "@/components/session/SendAttachments";
+import { useIsMobile } from "@/components/use-is-mobile";
+import type { UploadProgress } from "@/lib/relayClient";
+
+/** 字节数按当前语言写成「340 kB」「1.5 MB」（十进制单位，与系统文件大小同一口径）。 */
+function formatBytes(bytes: number, locale: string): string {
+  const mb = bytes >= 1_000_000;
+  return new Intl.NumberFormat(locale, {
+    style: "unit",
+    unit: mb ? "megabyte" : "kilobyte",
+    unitDisplay: "short",
+    maximumFractionDigits: 1,
+  }).format(bytes / (mb ? 1_000_000 : 1_000));
+}
+
+/**
+ * 大图发送中的进度环（规格 2026-11-25 决策 C4）：随实际已交给网络的字节推进，旁边写
+ * 「已传 / 共」。没有「取消」：已经交给 WebSocket 的帧浏览器撤不回，取消了再重发就是
+ * 两条。
+ */
+function UploadRing({ progress }: { progress: UploadProgress }) {
+  const { t, i18n } = useTranslation();
+  const ratio = progress.total > 0 ? progress.sent / progress.total : 0;
+  const percent = Math.round(ratio * 100);
+  const r = 7;
+  const circumference = 2 * Math.PI * r;
+  return (
+    <div
+      role="progressbar"
+      aria-label={t("session.sendPending.uploadProgress")}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      data-testid="send-upload-progress"
+      className="mb-1 flex items-center gap-1.5 text-2xs text-muted-foreground"
+    >
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 18 18"
+        className="size-4 shrink-0 -rotate-90"
+      >
+        <circle
+          cx="9"
+          cy="9"
+          r={r}
+          fill="none"
+          strokeWidth="2"
+          className="stroke-current opacity-25"
+        />
+        <circle
+          cx="9"
+          cy="9"
+          r={r}
+          fill="none"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - ratio)}
+          className="stroke-current text-primary-text"
+        />
+      </svg>
+      <span className="tabular-nums">
+        {t("session.sendPending.uploaded", {
+          sent: formatBytes(progress.sent, i18n.language),
+          total: formatBytes(progress.total, i18n.language),
+        })}
+      </span>
+    </div>
+  );
+}
 
 /**
  * 排着队等连接的那一条（规格 2026-08-21 决策 6）。
@@ -41,6 +110,7 @@ export default function PendingSendBubble({
   onCancel,
   state = "queued",
   align,
+  progress,
 }: {
   text: string;
   /** 排着的这条带着的图。不摆的话它在屏幕上看着是一条纯文本消息。 */
@@ -50,8 +120,11 @@ export default function PendingSendBubble({
   state?: "queued" | "sending";
   /** 与真用户消息同一个对齐（手机 `end`）。不传 = 起始侧。 */
   align?: "start" | "end";
+  /** `sending` 那一档：这一帧还在往外传（大图）。传完由宿主撤掉。 */
+  progress?: UploadProgress;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   if (state === "sending") {
     return (
       <ChatMessage
@@ -70,6 +143,7 @@ export default function PendingSendBubble({
           <p className="mb-1 text-2xs font-medium text-muted-foreground">
             {t("session.sendPending.sending")}
           </p>
+          {progress && <UploadRing progress={progress} />}
           <SendAttachments images={images} />
           {/* 用户自己写的那段字。动态内容，不进 t(...)。 */}
           <p className="whitespace-pre-wrap break-words text-foreground">
@@ -100,6 +174,8 @@ export default function PendingSendBubble({
         <Button
           size="xs"
           variant="ghost"
+          // 手机上点按区 44px（规格 2026-11-25 硬约束）；桌面照旧。
+          className={isMobile ? "min-h-11" : undefined}
           data-testid="send-pending-cancel"
           onClick={onCancel}
         >

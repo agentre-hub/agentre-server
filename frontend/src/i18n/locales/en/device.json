@@ -31,7 +31,8 @@
   "kind": {
     "desktop": "Desktop",
     "agentred": "Compute node",
-    "mobile": "Mobile"
+    "mobile": "Mobile",
+    "cli": "agrctl"
   },
   "success": {
     "title": "Device authorized",
@@ -99,9 +100,10 @@
     "share": "Send to computer"
   },
   "manage": {
-    "loadError": "Could not load your devices. Please try again.",
+    "loadError": "Could not load your devices. Please try again",
     "loadFailedWhat": "Could not load your devices",
     "statusOnline": "Online",
+    "statusLastUsed": "Last used {{time}}",
     "statusOffline": "Offline",
     "statusRevoked": "Revoked",
     "revokeConfirmBody": "This device can no longer refresh its credentials after you confirm. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation is not instant.",
@@ -196,7 +198,8 @@
     "loadFailedWhat": "Couldn't read this device's port mappings",
     "actionFailedWhat": "That didn't go through",
     "openFailedWhat": "Couldn't open the forwarded address",
-    "linkUnavailable": "This deployment can't offer port forwarding right now."
+    "linkUnavailable": "This deployment can't offer port forwarding right now.",
+    "openLink": "Open {{name}}"
   },
   "eyebrowWithCode": "Device authorization · {{code}}"
 }

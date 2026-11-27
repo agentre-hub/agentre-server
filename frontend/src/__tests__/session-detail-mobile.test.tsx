@@ -43,8 +43,15 @@ import {
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
+import SessionModelControl from "@/components/session/SessionModelControl";
 import ResolvedSessionDetail from "@/components/session/ResolvedSessionDetail";
+import { backDismissLayerOf } from "@/hooks/use-back-dismiss";
 import { FILE_PREVIEW_LAYER_STATE_KEY } from "@/components/session/useFilePreviewTabs";
+import { toTranscriptFrame } from "@/components/session/transcriptFrame";
+import { bindAccount } from "@/lib/localStore";
+import { relayRequestTimeoutError } from "@/lib/relayClient";
+import { transcriptCache } from "@/lib/transcriptCache";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -387,13 +394,14 @@ describe("移动端会话详情：一层头部", () => {
     expect(within(band).getAllByText("Connecting")).toHaveLength(1);
   });
 
-  it("机器离线时状态字写「Offline · 时间」", async () => {
+  // 规格 2026-11-25 H5：页头只写「离线」，「N 分钟前」是对话最后活动、与机器最后在线对不上。
+  it("机器离线时状态字只写「Offline」，不带时间", async () => {
     mockMobileViewport();
     stubWithIdentity({ online: false });
     renderPage();
 
     const status = await screen.findByTestId("session-detail-meta-status");
-    await waitFor(() => expect(status.textContent).toMatch(/Offline · /));
+    await waitFor(() => expect(status.textContent).toBe("Offline"));
   });
 
   it("⋯ 开「对话信息」弹层：项目 / 运行在 / 模型 / 最后活动，动作复制对话号", async () => {
@@ -677,6 +685,114 @@ describe("移动端会话详情：底部停靠区", () => {
     );
   });
 
+  it("审批：连接未就绪时三键禁用、上方写「正在连接」；连上的那条没有", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    renderPage({ relayState: "reconnecting" });
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    expect(
+      within(dock).getByTestId("tool-permission-dock-connecting"),
+    ).toBeTruthy();
+    for (const name of ["Allow", "Always Allow This Session", "Reject"]) {
+      expect(
+        (within(dock).getByRole("button", { name }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+    }
+  });
+
+  it("审批：连上之后没有「正在连接」，三键可点", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    renderPage({ relayState: "connected" });
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    expect(
+      within(dock).queryByTestId("tool-permission-dock-connecting"),
+    ).toBeNull();
+    expect(
+      (within(dock).getByRole("button", { name: "Allow" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("审批：提交超时写「没收到确认，可能已经生效」并给重试，重试再发一次", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    const base = fakeClient.request.getMockImplementation()!;
+    let submits = 0;
+    fakeClient.request.mockImplementation(async (method: unknown, ...rest) => {
+      if (method === rpcMethods.runtimeSubmitToolPermission) {
+        submits += 1;
+        if (submits === 1) throw relayRequestTimeoutError();
+        return {};
+      }
+      return (base as (...a: unknown[]) => unknown)(method, ...rest);
+    });
+    renderPage();
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    fireEvent.click(within(dock).getByRole("button", { name: "Allow" }));
+    expect(
+      await within(dock).findByText(
+        "No confirmation received. It may already have taken effect",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(within(dock).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(submits).toBe(2));
+  });
+
+  it("提问卡用触屏档：标题「Agent is asking you」；连上时可作答，掉线后提交禁用并说明", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    const view = renderPage({ relayState: "connected" });
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([
+      { kind: "user_message", text: "选个库" },
+      {
+        kind: "ask_user_question",
+        requestId: "aq-1",
+        questions: [
+          {
+            id: "q1",
+            question: "Which database?",
+            header: "Storage",
+            multiSelect: false,
+            options: [{ label: "Postgres" }, { label: "Redis" }],
+          },
+        ],
+      },
+    ]);
+    expect(await screen.findByText("Which database?")).toBeTruthy();
+    expect(await screen.findByText("Agent is asking you")).toBeTruthy();
+    expect(screen.queryByTestId("user-ask-connecting")).toBeNull();
+
+    // 连接掉了：同一张卡，提交 / 跳过禁用，卡上说明。
+    const impl = mockUseRelay.getMockImplementation()!;
+    mockUseRelay.mockImplementation(
+      (fp, o) => ({ ...impl(fp, o), relayState: "reconnecting" }) as never,
+    );
+    view.rerender(
+      <MemoryRouter initialEntries={[`/chat/${CID}`]}>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId={CID} form="page" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("user-ask-connecting")).toBeTruthy();
+  });
+
   it("机器离线：只读带写「{机器} 回来后可以继续发消息 · 查看设备」，转录顶部没有离线横幅", async () => {
     mockMobileViewport();
     stubDock({ online: false });
@@ -818,7 +934,6 @@ describe("移动端会话详情：轮末插话放回", () => {
         return { toolPermissions: [], askUserQuestions: [] };
       if (method === rpcMethods.runtimeSteer)
         return { queuedId: "q-1", cancellable: true };
-      if (method === rpcMethods.runtimeDrainPending) return { steers: [] };
       if (method === rpcMethods.runtimeSubmitToolPermission) return {};
       if (method === rpcMethods.runtimeAbort) return {};
       throw new Error("unexpected: " + method);
@@ -923,15 +1038,14 @@ describe("移动端会话详情：轮末插话放回", () => {
       await screen.findByTestId("tool-permission-dock");
     });
 
-    // 执行端的信箱问完了、没送到的那几条已经落进 dropped，输入框还被停靠占着。
-    await waitFor(() =>
-      expect(
-        fakeClient.request.mock.calls.some(
-          (c) => c[0] === rpcMethods.runtimeDrainPending,
-        ),
-      ).toBe(true),
-    );
+    // 没送到的那几条已经落进 dropped，输入框还被停靠占着。
     await act(async () => {});
+    // 浏览器不再问执行端取回插话（agentred 自己补发）：没被补发的就是已经落进 dropped 的。
+    expect(
+      fakeClient.request.mock.calls.some(
+        (c) => c[0] === rpcMethods.runtimeDrainPending,
+      ),
+    ).toBe(false);
     // 停靠占着输入框：没有输入框可放，说明不能谎称「已放回」。
     expect(screen.queryByText(NOTICE)).toBeNull();
     act(() =>
@@ -1014,14 +1128,13 @@ describe("移动端会话详情：轮末插话放回", () => {
       );
       await screen.findByTestId("tool-permission-dock");
     });
-    await waitFor(() =>
-      expect(
-        fakeClient.request.mock.calls.some(
-          (c) => c[0] === rpcMethods.runtimeDrainPending,
-        ),
-      ).toBe(true),
-    );
     await act(async () => {});
+    // 浏览器不再问执行端取回插话（agentred 自己补发）：没被补发的就是已经落进 dropped 的。
+    expect(
+      fakeClient.request.mock.calls.some(
+        (c) => c[0] === rpcMethods.runtimeDrainPending,
+      ),
+    ).toBe(false);
 
     const other = "22222222-2222-7222-8222-222222222222";
     view.rerender(
@@ -1617,5 +1730,652 @@ describe("移动端会话详情：还不是正式消息的那两条与真消息�
     const queued = await screen.findByTestId("send-pending");
     expect(queued.getAttribute("data-align")).toBe("end");
     expect(within(queued).getByTestId("send-pending-cancel")).toBeTruthy();
+  });
+});
+
+/**
+ * 最近打开的对话从本地立即显示（规格 2026-11-25 决策 A1 对话部分、A5、d9 审批）：
+ *   - 本地那一页先画出来，页头状态置灰「同步中」，新的到了按序号合并、不重复不跳号；
+ *   - 补齐的游标接在真正画到的那一格之后（镜像读到了按镜像，读不到按本地那一页）；
+ *   - 本地停在待审批卡上：停靠条置灰「正在确认是否还在等你」，确认仍在等才可点，
+ *     不再等就收起；连不上（离线打开）一直置灰；
+ *   - 别处删掉了这条对话：本地那一页撤掉、缓存一并丢掉。
+ */
+describe("移动端会话详情：本地先画（A1、A5、d9）", () => {
+  const g = globalThis as Record<string, unknown>;
+
+  beforeEach(() => {
+    g.indexedDB = new IDBFactory();
+    g.IDBKeyRange = IDBKeyRange;
+    bindAccount(1);
+  });
+
+  afterEach(() => {
+    bindAccount(null);
+    delete g.indexedDB;
+    delete g.IDBKeyRange;
+  });
+
+  const row = {
+    conversation_id: CID,
+    peer_fingerprint: "fp-1",
+    device_fingerprint: "fp-1",
+    title: "重构登录页",
+    agent_sync_id: "ag-1",
+    lifecycle_state: "idle",
+  };
+
+  type Ev = Record<string, unknown>;
+  const said = (text: string): Ev => ({ kind: "user_message", text });
+  const permission: Ev = {
+    kind: "tool_permission_request",
+    requestId: "tp-1",
+    toolName: "Bash",
+    input: { command: "pnpm add left-pad" },
+  };
+
+  async function seedCache(events: [number, Ev][], lastSeq?: number) {
+    await transcriptCache.open(
+      CID,
+      {
+        events: events.map(([seq, event]) =>
+          toTranscriptFrame({ conversationId: CID, seq, event } as never, 0),
+        ),
+        lastSeq: lastSeq ?? events.at(-1)![0],
+        oldestSeq: events[0][0],
+        hasBefore: false,
+        row: row as never,
+      },
+      1000,
+    );
+  }
+
+  function mirrorPage(events: [number, Ev][], cursor?: number) {
+    return {
+      frames: events.map(([seq, event]) => ({
+        seq,
+        method: "runtime.event",
+        params: { conversationId: CID, event },
+      })),
+      cursor: cursor ?? events.at(-1)?.[0] ?? 0,
+      oldest_seq: events[0]?.[0] ?? 0,
+      has_before: false,
+    };
+  }
+
+  function stubLocal(opts: {
+    transcript: () => Promise<unknown>;
+    rowItems?: unknown[];
+    devices?: () => Promise<unknown>;
+    waiters?: () => Promise<unknown>;
+    latestSeq?: number;
+  }) {
+    mockedApi.mockImplementation(async (path) => {
+      const p = String(path);
+      if (p === "/v1/devices")
+        return opts.devices ? opts.devices() : { devices: [deviceRow] };
+      if (p.startsWith("/v1/agent-sessions/transcript"))
+        return opts.transcript();
+      if (p.startsWith("/v1/agent-sessions?"))
+        return { items: opts.rowItems ?? [row] };
+      if (p === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      return new Promise(() => {});
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, latestSeq: opts.latestSeq ?? 0 }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return opts.waiters
+          ? opts.waiters()
+          : { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
+      return new Promise(() => {});
+    });
+  }
+
+  const hang = () => new Promise(() => {});
+
+  /** 被 fieldset 禁用的按钮 `.disabled` 仍是 false，按 :disabled 判。 */
+  const isDisabled = (el: HTMLElement) => el.matches(":disabled");
+
+  /** 镜像那一页由用例决定什么时候回来：先让本机那一页画出来。 */
+  function deferred() {
+    let answer!: (v: unknown) => void;
+    const promise = new Promise((r) => (answer = r));
+    return { promise, answer: (v: unknown) => answer(v) };
+  }
+
+  it("网络还没回来：本地那一页立即出现，页头状态置灰写「同步中」", async () => {
+    mockMobileViewport();
+    await seedCache([[1, said("缓存里的那句")]]);
+    stubLocal({ transcript: hang, devices: hang });
+    renderPage({ relayState: "connecting" });
+
+    expect(await screen.findByText("缓存里的那句")).toBeTruthy();
+    expect(screen.getByText("重构登录页")).toBeTruthy();
+    const status = screen.getByTestId("session-detail-status");
+    expect(status.textContent).toBe("Syncing");
+    expect(status.getAttribute("data-syncing")).toBe("true");
+  });
+
+  it("新的一页到了：按序号合并，不重复；补齐游标接在镜像那一页的末尾", async () => {
+    mockMobileViewport();
+    await seedCache([
+      [1, said("一")],
+      [2, said("二")],
+      [3, said("三")],
+    ]);
+    let answer!: (v: unknown) => void;
+    stubLocal({
+      transcript: () => new Promise((r) => (answer = r)),
+      latestSeq: 4,
+    });
+    renderPage();
+    expect(await screen.findByText("三")).toBeTruthy();
+
+    await act(async () =>
+      answer(
+        mirrorPage([
+          [2, said("二")],
+          [3, said("三")],
+          [4, said("四")],
+        ]),
+      ),
+    );
+    expect(await screen.findByText("四")).toBeTruthy();
+    for (const text of ["二", "三", "四"]) {
+      expect(screen.getAllByText(text)).toHaveLength(1);
+    }
+    await waitFor(() =>
+      expect(fakeClient.setCursor).toHaveBeenCalledWith(CID, 4, undefined),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-status").textContent).not.toBe(
+        "Syncing",
+      ),
+    );
+  });
+
+  it("本地比镜像新：多出来的那几帧留着，补齐从镜像末尾接，重放的那一帧不重复", async () => {
+    mockMobileViewport();
+    await seedCache([
+      [1, said("一")],
+      [2, said("二")],
+      [3, said("三")],
+      [4, said("四")],
+    ]);
+    const mirror = deferred();
+    stubLocal({ transcript: () => mirror.promise, latestSeq: 4 });
+    renderPage();
+    expect(await screen.findByText("四")).toBeTruthy();
+
+    await act(async () =>
+      mirror.answer(
+        mirrorPage([
+          [1, said("一")],
+          [2, said("二")],
+          [3, said("三")],
+        ]),
+      ),
+    );
+    await waitFor(() =>
+      expect(fakeClient.setCursor).toHaveBeenCalledWith(CID, 3, undefined),
+    );
+    expect(screen.getAllByText("四")).toHaveLength(1);
+    // 补齐把第 4 帧再送一遍：同一号只画一次。
+    act(() => {
+      pageOpts.onEvent?.({
+        conversationId: CID,
+        event: said("四"),
+        seq: 4,
+      } as never);
+    });
+    expect(screen.getAllByText("四")).toHaveLength(1);
+  });
+
+  it("镜像读不到（离线后恢复中继）：补齐从本地那一页的末尾接，不跳号", async () => {
+    mockMobileViewport();
+    await seedCache([
+      [6, said("六")],
+      [7, said("七")],
+    ]);
+    stubLocal({
+      transcript: async () => {
+        throw new TypeError("Failed to fetch");
+      },
+      latestSeq: 900,
+    });
+    renderPage();
+
+    expect(await screen.findByText("七")).toBeTruthy();
+    await waitFor(() =>
+      expect(fakeClient.setCursor).toHaveBeenCalledWith(CID, 7, undefined),
+    );
+    // 没有退回「只补最后 400 帧」的那一档：那会在 7 与 500 之间留一个洞。
+    expect(fakeClient.setCursor).not.toHaveBeenCalledWith(
+      CID,
+      900 - 400,
+      undefined,
+    );
+    expect(screen.queryByTestId("session-history-unavailable")).toBeNull();
+  });
+
+  it("离线打开、本地停在待审批卡上：停靠条置灰写「正在确认是否还在等你」，一直点不动", async () => {
+    mockMobileViewport();
+    await seedCache([
+      [1, said("装个依赖")],
+      [2, permission],
+    ]);
+    stubLocal({
+      transcript: async () => {
+        throw new TypeError("Failed to fetch");
+      },
+      devices: async () => {
+        throw new TypeError("Failed to fetch");
+      },
+    });
+    renderPage({ relayState: "connecting" });
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    expect(
+      within(dock).getByTestId("tool-permission-dock-confirming").textContent,
+    ).toBe("Checking whether it's still waiting for you");
+    const allow = within(dock).getByRole("button", { name: "Allow" });
+    expect(isDisabled(allow)).toBe(true);
+    expect(
+      isDisabled(within(dock).getByRole("button", { name: "Reject" })),
+    ).toBe(true);
+    // 一直连不上：一直置灰，那句话一直在。（点不动靠浏览器对 :disabled 的处理，
+    // jsdom 的 fireEvent 不经过它，所以这里只认 :disabled。）
+    await new Promise((r) => setTimeout(r, 100));
+    expect(isDisabled(allow)).toBe(true);
+    expect(screen.getByTestId("tool-permission-dock-confirming")).toBeTruthy();
+    expect(
+      fakeClient.request.mock.calls.some(
+        (c) => c[0] === rpcMethods.sessionPendingWaiters,
+      ),
+    ).toBe(false);
+  });
+
+  it("确认仍在等：停靠条变成可点，那句话撤掉", async () => {
+    mockMobileViewport();
+    await seedCache([
+      [1, said("装个依赖")],
+      [2, permission],
+    ]);
+    let answer!: (v: unknown) => void;
+    const mirror = deferred();
+    stubLocal({
+      transcript: () => mirror.promise,
+      latestSeq: 2,
+      waiters: () => new Promise((r) => (answer = r)),
+    });
+    renderPage();
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    expect(
+      isDisabled(within(dock).getByRole("button", { name: "Allow" })),
+    ).toBe(true);
+    await act(async () =>
+      mirror.answer(
+        mirrorPage([
+          [1, said("装个依赖")],
+          [2, permission],
+        ]),
+      ),
+    );
+    // 镜像那一页到了也还不算：要问过那台机器。
+    expect(
+      isDisabled(
+        within(screen.getByTestId("tool-permission-dock")).getByRole("button", {
+          name: "Allow",
+        }),
+      ),
+    ).toBe(true);
+    await waitFor(() => expect(answer).toBeTypeOf("function"));
+    await act(async () =>
+      answer({
+        toolPermissions: [{ RequestID: "tp-1", ToolName: "Bash" }],
+        askUserQuestions: [],
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        isDisabled(
+          within(screen.getByTestId("tool-permission-dock")).getByRole(
+            "button",
+            { name: "Allow" },
+          ),
+        ),
+      ).toBe(false),
+    );
+    expect(screen.queryByTestId("tool-permission-dock-confirming")).toBeNull();
+  });
+
+  it("不再等了（别处已经答过）：停靠条收起，输入框回来，转录里也不留一张能点的卡", async () => {
+    mockMobileViewport();
+    await seedCache([
+      [1, said("装个依赖")],
+      [2, permission],
+    ]);
+    const mirror = deferred();
+    stubLocal({ transcript: () => mirror.promise, latestSeq: 2 });
+    renderPage();
+
+    await screen.findByTestId("tool-permission-dock");
+    await act(async () =>
+      mirror.answer(
+        mirrorPage([
+          [1, said("装个依赖")],
+          [2, permission],
+        ]),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("tool-permission-dock")).toBeNull(),
+    );
+    const band = screen.getByTestId("session-composer-band");
+    await waitFor(() =>
+      expect(band.querySelector(".ProseMirror")).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("tool-permission-card")).toBeNull();
+  });
+
+  it("没在本地的对话照旧：不说「同步中」，新开的那一页存进本地", async () => {
+    mockMobileViewport();
+    stubLocal({
+      transcript: async () => mirrorPage([[5, said("五")]]),
+      latestSeq: 5,
+    });
+    renderPage();
+
+    expect(await screen.findByText("五")).toBeTruthy();
+    expect(screen.getByTestId("session-detail-status").textContent).not.toBe(
+      "Syncing",
+    );
+    await waitFor(async () => {
+      const got = await transcriptCache.get(CID);
+      expect(got?.lastSeq).toBe(5);
+      expect(got?.events.map((f) => f.seq)).toEqual([5]);
+      expect(got?.row?.title).toBe("重构登录页");
+    });
+  });
+
+  it("存回本机的只有最近一页：看着它时实时到的帧把最老的挤出去，页长同首屏那一页", async () => {
+    mockMobileViewport();
+    stubLocal({
+      transcript: async () =>
+        mirrorPage([
+          [1, said("一")],
+          [2, said("二")],
+        ]),
+      latestSeq: 2,
+    });
+    renderPage();
+    expect(await screen.findByText("二")).toBeTruthy();
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+
+    act(() => {
+      for (const [seq, text] of [
+        [3, "三"],
+        [4, "四"],
+        [5, "五"],
+      ] as const) {
+        pageOpts.onEvent?.({
+          conversationId: CID,
+          event: said(text),
+          seq,
+        } as never);
+      }
+    });
+    expect(await screen.findByText("五")).toBeTruthy();
+
+    await waitFor(async () => {
+      const got = await transcriptCache.get(CID);
+      expect(got?.events.map((f) => f.seq)).toEqual([4, 5]);
+      expect(got?.oldestSeq).toBe(4);
+      expect(got?.hasBefore).toBe(true);
+      expect(got?.lastSeq).toBe(5);
+    });
+  });
+
+  it("别处删掉了这条对话：本地那一页撤掉，缓存一并丢掉", async () => {
+    mockMobileViewport();
+    await seedCache([[1, said("已经删掉的那句")]]);
+    let answer!: (v: unknown) => void;
+    stubLocal({
+      transcript: () => new Promise((r) => (answer = r)),
+      rowItems: [],
+    });
+    renderPage();
+    expect(await screen.findByText("已经删掉的那句")).toBeTruthy();
+
+    await act(async () => answer(mirrorPage([])));
+    await waitFor(() =>
+      expect(screen.queryByText("已经删掉的那句")).toBeNull(),
+    );
+    await waitFor(async () =>
+      expect(await transcriptCache.get(CID)).toBeUndefined(),
+    );
+  });
+
+  it("桌面嵌入形态同样先画本地那一页（不加新样子）", async () => {
+    await seedCache([[1, said("桌面上的缓存")]]);
+    stubLocal({ transcript: hang, devices: hang });
+    mockUseRelay.mockImplementation(() => ({
+      client: fakeClient as never,
+      relayState: "connecting",
+      relayTicket: null,
+      relayTicketError: null,
+      handshakeRejection: null,
+      reconnect: vi.fn(),
+    }));
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId={CID}
+            form="embedded"
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("桌面上的缓存")).toBeTruthy();
+    expect(screen.queryByText("Syncing")).toBeNull();
+  });
+});
+
+/**
+ * 手机上的输入框与模型选择（规格 H2、H4）：模型选择是底部 sheet、打开不聚焦搜索框、
+ * 系统返回先关它；工具条上模型以短名代替人形图标；键盘升起时输入框最高约可视高度的 1/3。
+ * 桌面一律不变。
+ */
+describe("移动端：模型选择 sheet 与输入框（H2、H4）", () => {
+  const catalog = [
+    {
+      providerKey: "k-anthropic",
+      id: 1,
+      name: "Anthropic",
+      type: "anthropic",
+      enabled: true,
+      defaultModel: {
+        modelKey: "mk-1",
+        modelId: "claude-sonnet-4-6",
+        enabled: true,
+      },
+      models: [
+        { modelKey: "mk-1", modelId: "claude-sonnet-4-6", enabled: true },
+      ],
+    },
+  ];
+
+  function Probe() {
+    const location = useLocation();
+    const navigate = useNavigate();
+    return (
+      <div>
+        <span data-testid="probe-path">{location.pathname}</span>
+        <span data-testid="probe-layer">
+          {backDismissLayerOf(location.state)}
+        </span>
+        <button onClick={() => navigate(-1)}>system-back</button>
+      </div>
+    );
+  }
+
+  // sheet 画出来比历史记号落地早一拍；系统返回要等记号落地才退得掉它，
+  // 否则这一下返回会直接离开页面。等的是记号，不是时间。
+  const markerLanded = () =>
+    waitFor(() =>
+      expect(screen.getByTestId("probe-layer").textContent).toBe("1"),
+    );
+
+  function renderControl(
+    target = { providerKey: "", modelKey: "" },
+    cliModels?: React.ComponentProps<typeof SessionModelControl>["cliModels"],
+  ) {
+    return render(
+      <MemoryRouter initialEntries={["/prev", "/chat/x"]} initialIndex={1}>
+        <ThemeProvider>
+          <Probe />
+          <SessionModelControl
+            backendType="claudecode"
+            catalog={catalog}
+            boundProviderKey="k-anthropic"
+            boundModelKey="mk-1"
+            target={target}
+            onChange={() => {}}
+            cliModels={cliModels}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("手机：点模型 pill 开底部 sheet，搜索框不聚焦", async () => {
+    mockMobileViewport();
+    renderControl();
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    const sheet = await screen.findByTestId("model-target-sheet");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(document.activeElement).not.toBe(
+      within(sheet).getByPlaceholderText("Search providers or models…"),
+    );
+  });
+
+  it("手机：系统返回先关 sheet，停在原页", async () => {
+    mockMobileViewport();
+    renderControl();
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    await screen.findByTestId("model-target-sheet");
+    await markerLanded();
+    fireEvent.click(screen.getByText("system-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("model-target-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("probe-path").textContent).toBe("/chat/x");
+  });
+
+  it("手机：搜索框里有字时系统返回也一步关掉 sheet，停在原页；再返回才离开页面", async () => {
+    mockMobileViewport();
+    renderControl(undefined, {
+      models: [{ value: "sonnet", label: "Sonnet", modelId: "claude-sonnet" }],
+      onChange: () => {},
+      onRefresh: () => {},
+    });
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    const sheet = await screen.findByTestId("model-target-sheet");
+    fireEvent.change(
+      within(sheet).getByPlaceholderText("Search providers or models…"),
+      { target: { value: "son" } },
+    );
+    await markerLanded();
+    fireEvent.click(screen.getByText("system-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("model-target-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("probe-path").textContent).toBe("/chat/x");
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.getByTestId("probe-path").textContent).toBe("/prev");
+  });
+
+  it("桌面：仍是浮层，不是 sheet", async () => {
+    renderControl();
+    fireEvent.click(screen.getByTestId("composer-model-target"));
+    await screen.findByTestId("model-target-popover");
+    expect(screen.queryByTestId("model-target-sheet")).toBeNull();
+  });
+
+  it("手机：钉了模型时 pill 脸上是模型短名；桌面不画短名", () => {
+    mockMobileViewport();
+    const { unmount } = renderControl({
+      providerKey: "k-anthropic",
+      modelKey: "mk-1",
+    });
+    expect(screen.getByTestId("provider-pill-short-name").textContent).toBe(
+      "Sonnet",
+    );
+    unmount();
+    window.matchMedia = originalMatchMedia;
+    renderControl({ providerKey: "k-anthropic", modelKey: "mk-1" });
+    expect(screen.queryByTestId("provider-pill-short-name")).toBeNull();
+  });
+
+  describe("键盘升起时限高", () => {
+    const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    function setKeyboard(height: number | null) {
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value:
+          height === null
+            ? undefined
+            : {
+                height,
+                offsetTop: 0,
+                scale: 1,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+              },
+      });
+    }
+    afterEach(() => {
+      if (original) Object.defineProperty(window, "visualViewport", original);
+      else Reflect.deleteProperty(window, "visualViewport");
+    });
+
+    async function composerStyle() {
+      mockMobileViewport();
+      stubApi();
+      fakeClient.request.mockImplementation(async (method: unknown) => {
+        if (method === rpcMethods.sessionList) return { sessions: [summary] };
+        if (method === rpcMethods.sessionPendingWaiters)
+          return { toolPermissions: [], askUserQuestions: [] };
+        throw new Error("unexpected: " + method);
+      });
+      renderPage();
+      const band = await screen.findByTestId("session-composer-band");
+      await waitFor(() =>
+        expect(band.querySelector(".ProseMirror")).toBeTruthy(),
+      );
+      return band.querySelector<HTMLElement>(
+        '[style*="--chat-composer-max-h"]',
+      );
+    }
+
+    it("键盘弹着（可视区 300px）：输入框最高 100px", async () => {
+      setKeyboard(300);
+      const el = await composerStyle();
+      expect(el?.getAttribute("style")).toContain(
+        "--chat-composer-max-h: 100px",
+      );
+    });
+
+    it("键盘没弹：不限高，沿用包的默认", async () => {
+      setKeyboard(null);
+      expect(await composerStyle()).toBeNull();
+    });
   });
 });

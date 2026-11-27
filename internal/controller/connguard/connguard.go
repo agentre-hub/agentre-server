@@ -19,6 +19,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/personal_token_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
@@ -26,7 +27,8 @@ import (
 // 返回非 nil 即断开。撤销判定在建连时取一次（它自己内部会反复查），账号闸门则
 // 每次复查现取——一条长连接可能跨过装配完成的那一刻。
 //
-// deviceID 非 0 表示连接背后是设备 access token，否则是中继票据，handle 是票据的句柄。
+// deviceID 非 0 表示连接背后是设备 access token；否则 handle 是个人 token 的句柄
+// （personal_token_svc.IsHandle）或中继票据的句柄。
 func New(ctx context.Context, accountID, deviceID int64, handle string) func() error {
 	revoked := watch(ctx, accountID, deviceID, handle)
 	return func() error { return check(ctx, accountID, revoked, user_svc.Gate()) }
@@ -38,11 +40,24 @@ func watch(ctx context.Context, accountID, deviceID int64, handle string) auth_s
 	if deviceID != 0 {
 		return watchDevice(accountID, deviceID)
 	}
+	if personal_token_svc.IsHandle(handle) {
+		return watchPersonalToken(ctx, accountID, handle)
+	}
 	svc := auth_svc.Default()
 	if svc == nil || handle == "" {
 		return nil
 	}
 	return svc.WatchRelayCredential(ctx, handle)
+}
+
+// watchPersonalToken 是个人 token 那一侧的撤销判定：判据（吊销、轮换、到期）在
+// personal_token_svc.WatchRelayCredential，同样落在共享 MySQL 里。
+func watchPersonalToken(ctx context.Context, accountID int64, handle string) auth_svc.RelayCredentialWatch {
+	tokens := personal_token_svc.Default()
+	if tokens == nil {
+		return nil
+	}
+	return tokens.WatchRelayCredential(ctx, accountID, handle)
 }
 
 // watchDevice 是设备凭据那一侧的撤销判定。设备 access token 在 Redis 里不留痕迹，撤销的

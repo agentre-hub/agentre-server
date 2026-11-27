@@ -9,6 +9,8 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
+import { useIsMobile } from "@/components/use-is-mobile";
+
 /**
  * 组标题与计数之间的分隔符。是排版符号不是文案，因此不进 i18n——写成常量
  * 而不是 JSX 里的字面量，也是为了让 `i18next/no-literal-string` 不用为它开例外
@@ -16,9 +18,44 @@ import { Link } from "react-router-dom";
  */
 const COUNT_SEPARATOR = " · ";
 
-import { EmptyState } from "@/components/console";
+import { EmptyState, FailureNotice } from "@/components/console";
+import { describeFailure } from "@/lib/describeFailure";
 
 import { targetSummary, type NewConvAgent } from "./types";
+
+/** 名单这一次没读回来：原值（给 describeFailure 分类）与重读的入口。 */
+export interface RosterLoadFailure {
+  error: unknown;
+  onRetry: () => void;
+}
+
+/**
+ * 名单读失败时原位那一行（规格 G1）：说原因、给 44px 重试（401 给重新登录），
+ * 不说「还没有…」——空清单此刻说明不了账号里没有。
+ */
+export function RosterFailureLine({
+  failure,
+  what,
+  testId,
+}: {
+  failure: RosterLoadFailure;
+  what: string;
+  testId: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      data-testid={testId}
+      className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground"
+    >
+      <FailureNotice
+        failure={describeFailure(failure.error, { t, what })}
+        onRetry={failure.onRetry}
+      />
+    </div>
+  );
+}
 
 /**
  * 「挑一个 Agent」的清单。桌面右栏与移动底部弹层共用同一份——两处如果各写一遍，
@@ -37,6 +74,7 @@ export function AgentPickList({
   columns = 1,
   search,
   settled = true,
+  loadFailure,
 }: {
   agents: NewConvAgent[];
   recentIds: string[];
@@ -55,8 +93,12 @@ export function AgentPickList({
    * 没有搜索框，它不给）。
    */
   search?: { query: string; onClear: () => void };
+  /** 名单读失败了（宿主给）。手上一个都没有时整格换成原位失败行，不出空态。 */
+  loadFailure?: RosterLoadFailure | null;
 }) {
   const { t } = useTranslation();
+  // 触屏下空态的出口按钮不小于 44px（F18）；桌面仍是小号。
+  const phone = useIsMobile();
 
   const groups = useMemo(() => {
     // 分组与排序走共享包：桌面端命令面板的 `flattenAgents` 是同一条规则（判据是
@@ -91,6 +133,16 @@ export function AgentPickList({
   // 这一格是「新建对话」的主体区，不是索引窄栏：用页面级 `EmptyState`。
   // 两句都归 chat 命名空间——此前「账号里没有 Agent」借的是总览页的
   // `overview.empty`，借来的键别人改名时这里不报错，只在运行时印裸键号。
+  if (agents.length === 0 && loadFailure && !search?.query) {
+    return (
+      <RosterFailureLine
+        failure={loadFailure}
+        what={t("chat.agentsLoadFailedWhat")}
+        testId="agent-pick-failed"
+      />
+    );
+  }
+
   if (agents.length === 0) {
     return search?.query ? (
       <EmptyState
@@ -99,7 +151,12 @@ export function AgentPickList({
         title={t("chat.noAgentMatchesTitle")}
         body={t("chat.noAgentMatchesBody")}
         action={
-          <Button variant="outline" size="sm" onClick={search.onClear}>
+          <Button
+            variant="outline"
+            size="sm"
+            className={phone ? "h-11 px-4" : undefined}
+            onClick={search.onClear}
+          >
             {t("chat.clearAgentSearch")}
           </Button>
         }
@@ -114,7 +171,7 @@ export function AgentPickList({
         // 说完「从哪来」还差一条能走的路：登记设备在设备页，与设置页那条
         // 「先登记一台设备」同一个出口。
         action={
-          <Button asChild size="sm">
+          <Button asChild size="sm" className={phone ? "h-11 px-4" : undefined}>
             <Link to="/devices">{t("chat.noAgentsAction")}</Link>
           </Button>
         }

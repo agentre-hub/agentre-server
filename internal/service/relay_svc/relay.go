@@ -69,6 +69,10 @@ func (unavailableRelaySvc) RenewDaemon(context.Context, Route) error {
 	return ErrRelayUnconfigured
 }
 
+func (unavailableRelaySvc) TouchDaemonSeen(context.Context, int64) error {
+	return ErrRelayUnconfigured
+}
+
 func (unavailableRelaySvc) ConnectClient(context.Context, int64, string) (Route, error) {
 	return Route{}, ErrRelayUnconfigured
 }
@@ -147,6 +151,10 @@ type RelaySvc interface {
 	PrepareDaemon(ctx context.Context, accountID, deviceID int64, kind string) (Route, error)
 	RegisterDaemon(ctx context.Context, route Route) error
 	RenewDaemon(ctx context.Context, route Route) error
+	// TouchDaemonSeen 把这台设备的 last_seen_at 刷到「现在」。daemon 的中继连接连上与
+	// 断开时各调一次（不随帧 / 心跳）：控制台的「最后在线」就读它。单条带单调护栏的
+	// UPDATE，多副本同时写也只会前进。
+	TouchDaemonSeen(ctx context.Context, deviceID int64) error
 	ConnectClient(ctx context.Context, accountID int64, fingerprint string) (Route, error)
 	// ResolveTarget 解析一条**虚拟通道**声明的目标。中继连接本身不再有目标
 	// （决策 10），所以这件事逐通道发生，一条连接上的两条通道可以落在两台
@@ -189,14 +197,14 @@ func New(
 }
 
 func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64, kind string) (Route, error) {
-	if !isAddressableKind(kind) {
+	if !device_entity.RunsSessions(kind) {
 		return Route{}, ErrDaemonForbidden
 	}
 	device, err := s.devices.Find(ctx, deviceID)
 	if err != nil {
 		return Route{}, err
 	}
-	if !device.UsableBy(accountID) || !isAddressableKind(device.Kind) {
+	if !device.UsableBy(accountID) || !device_entity.RunsSessions(device.Kind) {
 		return Route{}, ErrDaemonForbidden
 	}
 	// 一条 websocket 一个 ConnID：PrepareDaemon 在 handler 里只跑一次，见 Route.ConnID。
@@ -210,10 +218,6 @@ func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64,
 	}, nil
 }
 
-func isAddressableKind(kind string) bool {
-	return kind == device_entity.KindAgentred || kind == device_entity.KindDesktop
-}
-
 func (s *relaySvc) RegisterDaemon(ctx context.Context, route Route) error {
 	if err := s.redis.Set(ctx, routeKey(route.AccountID, route.Fingerprint), routeValue(route), s.config.OnlineTTL).Err(); err != nil {
 		return fmt.Errorf("register relay daemon: %w", err)
@@ -224,6 +228,10 @@ func (s *relaySvc) RegisterDaemon(ctx context.Context, route Route) error {
 	// .FrameTypeDevicePresence）。
 	accountchan_svc.BroadcastSignalBestEffort(ctx, route.AccountID, accountchan_svc.FrameTypeDevicePresence)
 	return nil
+}
+
+func (s *relaySvc) TouchDaemonSeen(ctx context.Context, deviceID int64) error {
+	return s.devices.TouchLastSeen(ctx, deviceID, time.Now().UnixMilli())
 }
 
 func (s *relaySvc) RenewDaemon(ctx context.Context, route Route) error {
@@ -251,7 +259,7 @@ func (s *relaySvc) ConnectClient(ctx context.Context, accountID int64, fingerpri
 	if err != nil {
 		return Route{}, err
 	}
-	if device == nil || !isAddressableKind(device.Kind) || !device.IsActive() {
+	if device == nil || !device_entity.RunsSessions(device.Kind) || !device.IsActive() {
 		return Route{}, ErrDaemonNotFound
 	}
 

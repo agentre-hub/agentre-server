@@ -991,3 +991,26 @@ func TestRenewDaemon_SaysNothing(t *testing.T) {
 
 	require.Empty(t, signals.recorded())
 }
+
+// 执行端的中继连接连上 / 断开时刷新设备的 last_seen_at：服务层只把「现在」交给仓储，
+// 单调护栏在仓储那条 UPDATE 里，多副本各写各的也不会把时间写回去。
+func TestTouchDaemonSeen_WritesNowForThatDevice(t *testing.T) {
+	svc, _, devices := newRelayForTest(t, fakeForwarder{})
+	before := time.Now().UnixMilli()
+	devices.EXPECT().TouchLastSeen(gomock.Any(), int64(9), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ int64, nowMs int64) error {
+			require.GreaterOrEqual(t, nowMs, before)
+			require.LessOrEqual(t, nowMs, time.Now().UnixMilli())
+			return nil
+		})
+
+	require.NoError(t, svc.TouchDaemonSeen(context.Background(), 9))
+}
+
+func TestTouchDaemonSeen_ReturnsRepositoryError(t *testing.T) {
+	svc, _, devices := newRelayForTest(t, fakeForwarder{})
+	boom := errors.New("boom")
+	devices.EXPECT().TouchLastSeen(gomock.Any(), int64(9), gomock.Any()).Return(boom)
+
+	require.ErrorIs(t, svc.TouchDaemonSeen(context.Background(), 9), boom)
+}

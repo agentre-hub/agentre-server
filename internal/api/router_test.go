@@ -60,3 +60,24 @@ func TestRouter_LegacyPortForwardPathAnswersOrdinary404(t *testing.T) {
 		require.Equalf(t, http.StatusNotFound, recorder.Code, "GET %s must answer a plain 404", path)
 	}
 }
+
+// 桌面代签 cli 子设备的路由必须绑进路由树，且挂在 bearer 鉴权之后：无凭据答 401，
+// 而不是「压根没有这条路由」的 404。
+func TestRouter_CLIChildDeviceEndpointIsBoundBehindBearerAuth(t *testing.T) {
+	testMux := muxtest.NewTestMux()
+	require.NoError(t, (&RouterDeps{Cfg: &bootstrap.ServerConfig{}}).Router(context.Background(), testMux.Router))
+	recorder := httptest.NewRecorder()
+	testMux.IRouter.(*gin.Engine).ServeHTTP(recorder,
+		httptest.NewRequest(http.MethodPost, "/v1/devices/cli-children", nil))
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+// 个人 token 自查端点必须绑进路由树，且挂在账号调用方鉴权之后：无凭据答 401，而不是 404。
+func TestRouter_PersonalTokenSelfEndpointIsBoundBehindAccountAuth(t *testing.T) {
+	testMux := muxtest.NewTestMux()
+	require.NoError(t, (&RouterDeps{Cfg: &bootstrap.ServerConfig{}}).Router(context.Background(), testMux.Router))
+	recorder := httptest.NewRecorder()
+	testMux.IRouter.(*gin.Engine).ServeHTTP(recorder,
+		httptest.NewRequest(http.MethodGet, "/v1/personal-tokens/self", nil))
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+}

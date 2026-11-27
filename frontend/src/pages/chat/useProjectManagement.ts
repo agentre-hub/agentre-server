@@ -97,6 +97,18 @@ export function useProjectManagement({
   const createPorts = useMemo(() => createProjectCreatePorts(fsPort), [fsPort]);
   const deletePorts = useMemo(() => createProjectDeletePorts(), []);
 
+  /**
+   * 打开新建弹窗的**唯一**入口（顶层「新建项目」与组头「新建子项目」都从这里过）：
+   * 打开的同时去取「提交前」基线，POST 等它答完再发（F5）。
+   */
+  const openCreateFor = useCallback(
+    (parent: ApiProject | null) => {
+      createPorts.prepareCreate();
+      setCreateParent(parent);
+    },
+    [createPorts],
+  );
+
   /** 父项目下拉的候选；包会把「它自己」剔掉。 */
   const parentOptions = useMemo(
     () => projects.map((p) => ({ id: p.syncId, name: p.name })),
@@ -200,7 +212,7 @@ export function useProjectManagement({
           if (agent) onNewChat(agent, pid);
         },
         onOpenSettings: (pid, focus) => setSettingsFor({ syncId: pid, focus }),
-        onNewSubproject: () => setCreateParent(project),
+        onNewSubproject: () => openCreateFor(project),
         onDelete: () => {
           // 先获取离线机器列表，再打开确认框；获取失败时按空列表处理。
           setDeleteMachines([]);
@@ -213,10 +225,10 @@ export function useProjectManagement({
         },
       };
     },
-    [projects, newConvProjects, agents, onNewChat],
+    [projects, newConvProjects, agents, onNewChat, openCreateFor],
   );
 
-  const openCreate = useCallback(() => setCreateParent(null), []);
+  const openCreate = useCallback(() => openCreateFor(null), [openCreateFor]);
 
   return {
     handlers,
@@ -226,6 +238,7 @@ export function useProjectManagement({
         parent: createParent,
         parentOptions,
         ports: createPorts,
+        onTimeoutRecheck: createPorts.recheckCreate,
         close: () => setCreateParent(false),
         onCreated: () => {
           setCreateParent(false);

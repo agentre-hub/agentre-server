@@ -26,9 +26,12 @@ import {
   deleteProject,
   deleteProjectLocation,
   fetchProjectMachines,
+  readProjectBaseline,
   removeProjectMember,
   setProjectLocation,
   updateProject,
+  verifyProjectCreate,
+  ProjectCreateTimeoutError,
   type ProjectFields,
   type ProjectMachine,
 } from "@/lib/projects";
@@ -37,7 +40,7 @@ import {
   clearLocalPathOnMachine,
   setLocalPathOnMachine,
 } from "@/lib/projectLocalPath";
-import { fetchDevices } from "@/lib/devices";
+import { fetchDevices, runsSessions } from "@/lib/devices";
 import { projectFailureText } from "@/lib/projectErrors";
 import type { DisposableProjectFsPort } from "@/lib/projectFsPort";
 
@@ -189,23 +192,71 @@ function writeMachinePath(
     : relay(() => setLocalPathOnMachine(machine.id, projectId, path));
 }
 
+type ProjectCreateDraft = Parameters<ProjectCreatePorts["create"]>[0];
+
 export function createProjectCreatePorts(
   fs: DisposableProjectFsPort,
-): ProjectCreatePorts {
+): ProjectCreatePorts & {
+  /**
+   * 新建弹窗**打开时**调：先去取「提交前」基线，用户填名字的那段时间里它多半已经答完，
+   * POST 几乎不被拖慢。每个打开新建弹窗的入口都要调。
+   */
+  prepareCreate: () => void;
+  /** 「刷新看看」：认出上一次超时的那次新建就返回项目 id，确定没有返回 null，读失败拒绝。 */
+  recheckCreate: (draft: ProjectCreateDraft) => Promise<string | null>;
+} {
+  /**
+   * 下一次新建的「提交前」基线。POST **等它答完**才发：与 POST 并发的读在服务端没有先后
+   * 保证（多副本、连接各走各的），晚于落库被处理的话，刚建的那个进了基线，刷新时被当成
+   * 早就在的，界面放开再提交——建出第二个。
+   */
+  let baseline: Promise<ReadonlySet<string> | null> | null = null;
+  /** 上一次超时的那次新建的基线（没取到为 null）：核实要拿它认「提交前没见过」。 */
+  let lastKnown: ReadonlySet<string> | null = null;
+  const toFields = (draft: ProjectCreateDraft): ProjectFields => {
+    // 指针语义：**只送这次真的填了的键**，没填的不翻成空串送下去。
+    const fields: ProjectFields = { name: draft.name };
+    if (draft.description) fields.description = draft.description;
+    if (draft.icon) fields.icon = draft.icon;
+    if (draft.color) fields.color = draft.color;
+    if (draft.parentId) fields.parent_sync_id = draft.parentId;
+    return fields;
+  };
   return {
+    prepareCreate: () => {
+      baseline = readProjectBaseline();
+      lastKnown = null;
+    },
     create: async (draft) => {
-      // 指针语义：**只送这次真的填了的键**，没填的不翻成空串送下去。
-      const fields: ProjectFields = { name: draft.name };
-      if (draft.description) fields.description = draft.description;
-      if (draft.icon) fields.icon = draft.icon;
-      if (draft.color) fields.color = draft.color;
-      if (draft.parentId) fields.parent_sync_id = draft.parentId;
+      const pending = baseline ?? readProjectBaseline();
+      baseline = pending;
+      const knownBefore = await pending;
       try {
-        const created = await createProject(fields);
+        const created = await createProject(toFields(draft));
+        // 建成了：这份基线已经过时。被拒时它仍是「提交前」，留给再提交。
+        baseline = null;
         return { ok: true, id: created.sync_id };
       } catch (err) {
+        if (err instanceof ProjectCreateTimeoutError) {
+          lastKnown = knownBefore;
+          // 超时标记交给包认：它换成自己那句中文 + 「刷新看看」，这段原文不上屏。
+          return {
+            ok: false,
+            failure: { kind: "unknown", message: err.message },
+          };
+        }
         return { ok: false, failure: restFailure(err) };
       }
+    },
+    recheckCreate: async (draft) => {
+      // 每次都现读；读失败原样拒绝，包据此说「刷新没成功」、不放开再提交。
+      const { created, knownNow } = await verifyProjectCreate(
+        toFields(draft),
+        lastKnown,
+      );
+      // 认不出、用户再提交时，这份答完了的读就是那一次的「提交前」基线。
+      if (!created) baseline = Promise.resolve(knownNow);
+      return created ? created.sync_id : null;
     },
     // 本机路径与 git 探测都是「摸得到本机文件系统」才有的能力，浏览器上没有。
     // 路径不必填是两端共同的规则（决策 9），不是这一端的特例。
@@ -216,7 +267,8 @@ export function createProjectCreatePorts(
       // 读不上来就回空，包据此把那一格整格收掉 —— 一个点开是空的入口比没有更糟。
       list: () =>
         fetchDevices().then(
-          (rows) => rows.map(toPickerMachine),
+          // agrctl 的 cli 设备不是机器：没有路径可配，也不该被当成一台离线的桌面。
+          (rows) => rows.filter(runsSessions).map(toPickerMachine),
           () => [],
         ),
       fs,

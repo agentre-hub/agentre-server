@@ -285,6 +285,29 @@ describe("Settings", () => {
     expect(await screen.findByText("Add First Provider")).toBeTruthy();
   });
 
+  it("does not count an agrctl cli device as a device the configuration syncs to", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return session;
+      if (path.startsWith("/v1/agent-sessions?")) return { total: 0 };
+      if (path === "/v1/devices")
+        return {
+          devices: [{ id: 3, kind: "cli", name: "mac.local", online: false }],
+        };
+      if (path === "/v1/engine/providers") return { providers: [] };
+      throw new Error(`unexpected api call: ${path}`);
+    });
+    renderSettings();
+
+    expect(
+      await screen.findByText("Account configuration · synced to 0 devices"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Configuration stays in your account and will sync after you register a device.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("sends the user to register a device instead of offering a backend nothing can run", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return session;

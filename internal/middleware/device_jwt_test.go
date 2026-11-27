@@ -92,6 +92,13 @@ func TestDeviceJWT(t *testing.T) {
 			So(call("Bearer "+ticket).Code, ShouldEqual, http.StatusUnauthorized)
 		})
 
+		Convey("personal token cannot enter ordinary device endpoints", func() {
+			tok := bearertest.Issue(device_svc.Principal{
+				AccountID: 7, Kind: device_svc.KindPersonalToken, Handle: "pat:11", Scopes: []string{"read"},
+			})
+			So(call("Bearer "+tok).Code, ShouldEqual, http.StatusUnauthorized)
+		})
+
 		Convey("server credential cannot enter ordinary device endpoints", func() {
 			tok, err := credstore.New(redis.Default()).IssueServerMirror(context.Background(), 7, "server-mirror:a")
 			So(err, ShouldBeNil)
@@ -127,6 +134,12 @@ func TestRelayClientJWTBoundary(t *testing.T) {
 		{name: "agentred device access token",
 			token: bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 42, Kind: "agentred", Handle: "42"}),
 			want:  identity{UID: 7, DID: 42, Kind: "agentred"}, wantStatus: http.StatusOK},
+		{name: "personal token (no device, scoped)",
+			token: bearertest.Issue(device_svc.Principal{
+				AccountID: 7, Kind: device_svc.KindPersonalToken, PeerFingerprint: "pat:fp", Handle: "pat:11",
+				Scopes: []string{"chat"}, TokenName: "ci",
+			}),
+			want: identity{UID: 7, Kind: device_svc.KindPersonalToken}, wantStatus: http.StatusOK},
 		{name: "server credential cannot pose as a browser ticket", token: serverCredential,
 			wantStatus: http.StatusUnauthorized},
 		{name: "ticket of an ended session", token: endedTicket, wantStatus: http.StatusUnauthorized},

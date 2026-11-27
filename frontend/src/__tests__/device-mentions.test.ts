@@ -56,6 +56,22 @@ describe("toDeviceMentionItems", () => {
   it("Given a device with no fingerprint, When the @ menu is built, Then it is left out", () => {
     expect(toDeviceMentionItems([device({ fingerprint: "" })])).toEqual([]);
   });
+
+  // agrctl 的 cli 设备是调用方而不是机器：没有在线态（菜单那枚点会把它画成离线），
+  // 也不是能被指着干活的地方。
+  it("Given an agrctl cli device, When the @ menu is built, Then it is left out", () => {
+    expect(
+      toDeviceMentionItems([
+        device(),
+        device({
+          id: 3,
+          kind: "cli",
+          fingerprint: "sha256:cli",
+          online: false,
+        }),
+      ]),
+    ).toEqual([{ fp: "sha256:lan", name: "linux-srv", online: true }]);
+  });
 });
 
 // 这一端的宿主接缝就是「/v1/devices 的响应 → `@` 菜单的视图契约」。菜单弹层本身

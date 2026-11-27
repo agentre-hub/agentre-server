@@ -6,10 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/cago-frame/cago/database/db"
+	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -38,6 +40,8 @@ type DeviceSvc interface {
 	ExchangeToken(ctx context.Context, deviceCode string) (*TokenOutput, error)
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
+	// MintCLIChild 让一台在用的桌面设备为自己签发一台 cli 子设备（无需浏览器批准）。
+	MintCLIChild(ctx context.Context, in MintCLIChildInput) (*TokenOutput, error)
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]DeviceView, error)
 	// ResolveBearer 把一枚设备 access token 解析成调用方身份，见实现处说明。
 	ResolveBearer(ctx context.Context, token string) (*Principal, error)
@@ -575,11 +579,20 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	// 撤销立即生效靠的是这里落库的设备状态：ResolveBearer 逐请求查它，该设备名下全部
 	// access token（含刷新轮换出的旧令牌）当场解析不出身份，已建好的中继连接由 connguard
 	// 的心跳复查断开。判据全在 MySQL，不写也不读 Redis。
-	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
+	if err := s.revokeCredentials(ctx, deviceID, nowMs); err != nil {
 		return err
 	}
-	if err := device_repo.Device().Revoke(ctx, deviceID, nowMs); err != nil {
+	// 桌面代签出去的 cli 子设备跟着一起收回：桌面离线时在控制台删掉它，子设备也不能留着
+	// 一条仍然有效的账号凭据。列不出来就把错抛回去——撤销是幂等的，调用方重试即可，比悄悄
+	// 留下几条撤不掉的子凭据便宜。
+	children, err := device_repo.Device().ListActiveChildren(ctx, deviceID)
+	if err != nil {
 		return err
+	}
+	for _, child := range children {
+		if err := s.revokeCredentials(ctx, child.ID, nowMs); err != nil {
+			return err
+		}
 	}
 	// 以下两步都是撤销的**从属后果**，不是撤销本身：取不到 purger、查不到设备行、
 	// 或落库失败，都不该让「设备与刷新链已撤销」这个已经生效的结果回滚，
@@ -592,6 +605,83 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	}
 	s.purgeDeviceScopedData(ctx, deviceID)
 	return nil
+}
+
+// revokeCredentials 撤销一台设备的凭据：整条刷新链与设备状态。
+func (s *deviceSvc) revokeCredentials(ctx context.Context, deviceID, nowMs int64) error {
+	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
+		return err
+	}
+	return device_repo.Device().Revoke(ctx, deviceID, nowMs)
+}
+
+// MintCLIChild 让一台在用的桌面设备为自己签发一台 cli 子设备，省掉浏览器批准：调用方凭
+// 自己的设备身份就已经是账号授权过的（规格「身份与登录 → 桌面代签」）。
+//
+// 子设备用**它自己的指纹**（桌面生成）：devices 按 (user_id, fingerprint) 做 upsert 并会
+// 覆盖 kind，复用桌面指纹会把桌面那一行改写成 cli。因此指纹与调用方相同、或已被别的设备
+// 占用（哪怕是已撤销的）一律拒绝；只有「本桌面自己的子设备」同指纹再来才算幂等重发，
+// 此时旧凭据链整条作废，同一个孩子始终只有一条在用的链。
+func (s *deviceSvc) MintCLIChild(ctx context.Context, in MintCLIChildInput) (*TokenOutput, error) {
+	forbidden := func() error { return i18n.NewForbiddenError(ctx, code.Forbidden) }
+	if in.CallerDeviceID == 0 {
+		return nil, forbidden()
+	}
+	caller, err := device_repo.Device().Find(ctx, in.CallerDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if !caller.UsableBy(in.UserID) || caller.Kind != device_entity.KindDesktop {
+		return nil, forbidden()
+	}
+	if in.Fingerprint == caller.Fingerprint {
+		return nil, i18n.NewError(ctx, code.InvalidParameter)
+	}
+	nowMs := s.now()
+	out := &TokenOutput{}
+	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := db.WithContextDB(ctx, tx)
+		previous, err := device_repo.Device().FindByFingerprint(txCtx, caller.UserID, in.Fingerprint)
+		if err != nil {
+			return err
+		}
+		if previous != nil {
+			if previous.Kind != device_entity.KindCLI || previous.ParentDeviceID != caller.ID {
+				return i18n.NewErrorWithStatus(ctx, http.StatusConflict, code.InvalidParameter)
+			}
+			if err := device_token_repo.DeviceToken().DeleteByDevice(txCtx, previous.ID); err != nil {
+				return err
+			}
+		}
+		d := &device_entity.Device{
+			UserID:         caller.UserID,
+			Name:           device_entity.DisplayName(in.Name, in.Fingerprint),
+			Kind:           device_entity.KindCLI,
+			Platform:       caller.Platform,
+			Version:        caller.Version,
+			Fingerprint:    in.Fingerprint,
+			ParentDeviceID: caller.ID,
+			LastSeenAt:     nowMs,
+			Status:         consts.ACTIVE,
+			Createtime:     nowMs,
+			Updatetime:     nowMs,
+		}
+		if err := device_repo.Device().Upsert(txCtx, d); err != nil {
+			return err
+		}
+		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs)
+		if err != nil {
+			return err
+		}
+		*out = *pair
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Ctx(ctx).Info("cli child device minted", zap.Int64("userId", caller.UserID),
+		zap.Int64("parentDeviceId", caller.ID), zap.Int64("deviceId", out.DeviceID))
+	return out, nil
 }
 
 // purgeDeviceScopedData 让「只属于这台设备」的东西跟着它一起离开账号：它的 CLI 路径
@@ -691,16 +781,17 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 	out := make([]DeviceView, 0, len(rows))
 	for i, d := range rows {
 		out = append(out, DeviceView{
-			ID:               d.ID,
-			Name:             d.Name,
-			DisplayName:      d.DisplayName,
-			Kind:             d.Kind,
-			Platform:         d.Platform,
-			Version:          d.Version,
-			Fingerprint:      d.Fingerprint,
-			LastSeenAt:       d.LastSeenAt,
-			Status:           d.Status,
-			Online:           online[i],
+			ID:          d.ID,
+			Name:        d.Name,
+			DisplayName: d.DisplayName,
+			Kind:        d.Kind,
+			Platform:    d.Platform,
+			Version:     d.Version,
+			Fingerprint: d.Fingerprint,
+			LastSeenAt:  d.LastSeenAt,
+			Status:      d.Status,
+			// cli 设备不连中继，没有「在线」这个概念，只有最近使用时间（LastSeenAt）。
+			Online:           online[i] && d.Kind != device_entity.KindCLI,
 			IsThisDevice:     d.ID == callerDeviceID,
 			ProtocolMismatch: states[i].ProtocolMismatch,
 			DaemonCommit:     states[i].DaemonCommit,

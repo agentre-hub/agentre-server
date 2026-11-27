@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
 import { attentionReasonOf } from "@/lib/attentionAdapter";
 import { api } from "@/lib/api";
 import type { DeviceItem } from "@/lib/devices";
+import { accountStore } from "@/lib/localStore";
 import type { IndexAxis } from "@/lib/sessionAxes";
 import type { SessionFilter } from "@/lib/sessionView";
 import {
@@ -27,6 +36,13 @@ import {
  * 响应体大一点——它本来就不上屏。
  */
 const MIRROR_MAX_PER_GROUP = "50";
+
+/**
+ * 列表在本机存储里的类别名（规格 2026-11-25 决策 A1）：键是范围键，值是 `StoredRange`。
+ * 每个看过的「范围 + 筛选 + 搜索词」各存一份第一页；带搜索词的只留最近的若干份
+ * （`persistRange`）。
+ */
+const STORE_KIND = "session-index";
 
 /** 索引数据层要向页面借的东西。 */
 export interface SessionIndexInput {
@@ -50,6 +66,12 @@ export interface SessionIndexInput {
    * 保存的重试两条路都报，因此只交身份。
    */
   onSaved?: (conversationId: string) => void;
+  /**
+   * 此刻历史上的浮层层数，由住在 Router 里的宿主读出来给（backDismissLayerOf(location.state)）。
+   * 删成之后要等它回 0（确认 sheet 的历史记号退干净）才通知 onDeleted。
+   * 本 hook 不碰 Router；不给就按 0，即不等。
+   */
+  overlayLayer?: number;
 }
 
 /**
@@ -92,6 +114,21 @@ export type SaveFailure = {
 interface RangeSnapshot {
   groups: IndexGroupPayload[];
   unreadTotal: number;
+  /**
+   * 这一份是从本机存储读回来的（决策 A5）时，它当初取回的时刻；本页内存里取回的
+   * 没有这一格。有它就是「新数据到达之前的旧样子」：实时标记置灰、标「同步中」。
+   */
+  savedAt?: number;
+  /** 从存储读回时一并带回的账号总数（本页还没问出来之前先用它）。 */
+  accountTotal?: number;
+}
+
+/** 落进本机存储的那一份：取回的时刻是必填的，读回来才分得清有多旧。 */
+interface StoredRange {
+  groups: IndexGroupPayload[];
+  unreadTotal: number;
+  accountTotal: number;
+  savedAt: number;
 }
 
 /** 「对话」页与索引数据层之间的全部契约。 */
@@ -104,8 +141,16 @@ export interface SessionIndexData {
   accountTotal: number | null;
   /** 「未读」chip 上那个数。 */
   unreadTotal: number;
-  /** 这一次取数成功过没有。 */
+  /** 这一次取数成功过没有（或者手上已有从本机存储读回的这一范围，见 `stale`）。 */
   loaded: boolean;
+  /**
+   * 摆着的是从本机存储读回来的这一范围（规格 2026-11-25 决策 A5）：这一遍取数还没
+   * 落地，行上的实时标记（等你 / 运行中 / 出错）说的是上次的样子。落地即为假；取数
+   * 失败时仍为真（旧样子还在屏上）。机器轴恒为假：那一档不落盘。
+   */
+  stale: boolean;
+  /** `stale` 时那一份当初取回的时刻（离线副行用它）；否则 null。 */
+  freshAt: number | null;
   /**
    * 当前范围这一遍的取数还没落地；旧范围不能参与机器快照 reconciliation。
    *
@@ -198,6 +243,40 @@ export interface SessionIndexData {
 }
 
 /**
+ * 上一次删除没成功的原因（规格 2026-11-25 F2）。确认层（`DeleteSessionDialog`）在页面里
+ * 与这只 hook 隔着一层，原因经这一格流过去：同一时刻只有一个删除确认挡着，不会串。
+ * 开始删除 / 取消 / 成功都清空；确认层留在原地、按钮恢复可点，原因写在层内一行。
+ */
+let deleteFailure: unknown = null;
+const deleteFailureListeners = new Set<() => void>();
+
+function emitDeleteFailure(next: unknown) {
+  deleteFailure = next;
+  deleteFailureListeners.forEach((l) => l());
+}
+
+export function setDeleteFailure(err: unknown): void {
+  emitDeleteFailure(err ?? new Error("delete failed"));
+}
+
+export function clearDeleteFailure(): void {
+  if (deleteFailure !== null) emitDeleteFailure(null);
+}
+
+export function useDeleteFailure(): unknown {
+  return useSyncExternalStore(
+    (l) => {
+      deleteFailureListeners.add(l);
+      return () => {
+        deleteFailureListeners.delete(l);
+      };
+    },
+    () => deleteFailure,
+    () => deleteFailure,
+  );
+}
+
+/**
  * 索引的数据层：取数、分页、计数，以及保存 / 删除那两个乐观动作。
  *
  * 四件事合成一个 hook 是**故意**的，它们共用同一批状态：保存 / 删除要把服务端在完整
@@ -211,6 +290,7 @@ export function useSessionIndex({
   scope,
   onDeleted,
   onSaved,
+  overlayLayer = 0,
 }: SessionIndexInput): SessionIndexData {
   /** 服务端按当前轴给的组骨架（不带 scope 那一次的应答）。 */
   const [indexGroups, setIndexGroups] = useState<IndexGroupPayload[]>([]);
@@ -263,11 +343,18 @@ export function useSessionIndex({
     null,
   );
   const [deleting, setDeleting] = useState(false);
+  /**
+   * 删成了、等确认层的历史记号退干净再通知宿主的那一条。手机上确认 sheet 开着时在历史里
+   * 压了一条同地址的记号；宿主的删后导航（退回列表 / replace，D3）必须在记号退掉之后
+   * 才跑，否则它们会和记号抢退格，落到错的一页。见下面的 effect。
+   */
+  const deletedRef = useRef<MirrorIndexRow | null>(null);
   // 搜索词：真实过滤索引里的行，不是假交互。
   const [searchQuery, setSearchQuery] = useState("");
 
   /**
-   * 每个范围上一次的结果（决策 6）。只活在这一页的内存里，不落手机存储。
+   * 每个范围上一次的结果（决策 6）。本页内存里的这一份是快路；本机存储里的那一份
+   * （决策 A1）只在内存里还没有这一范围时读回来补上，并带着 savedAt 标成旧的。
    * 放 state 而不是 ref：切回看过的范围时渲染就要读它。
    */
   const [rangeCache, setRangeCache] = useState<Map<string, RangeSnapshot>>(
@@ -349,10 +436,33 @@ export function useSessionIndex({
   const rangeKey = `${axis}|${scope ?? ""}|${debouncedSearch}|${filter}`;
   /** 平铺那一档的组身份：收了 scope 就是那一组，否则是时间轴那唯一的一组。 */
   const flatScope = scope ?? "time";
+
+  // 本机存储里这一范围上次的样子（决策 A1、A5）：内存里还没有它时读回来先摆上，不等
+  // 这一遍取数。网络先回来了就不要它（内存里已有这一范围、且是新的）。存储不可用、
+  // 换了账号时读到的是 undefined，照旧骨架等网络（A6）。机器轴不读：那一档不落盘。
+  useEffect(() => {
+    if (axis === "machine") return;
+    let current = true;
+    const key = rangeKey;
+    void accountStore.get<StoredRange>(STORE_KIND, key).then((stored) => {
+      if (!current || !stored) return;
+      setRangeCache((prev) =>
+        prev.has(key) ? prev : new Map(prev).set(key, stored),
+      );
+    });
+    return () => {
+      current = false;
+    };
+  }, [axis, rangeKey]);
   // pending 必须与这一次 render 的范围同步，不能等 passive effect 再补一拍；否则
   // 新控件会短暂配上旧行，A→B→A 也可能被 B 留下的布尔状态永久卡住。
   const rangePending = appliedRangeKey !== rangeKey;
   const visibleLoadError = loadErrorRangeKey === rangeKey ? loadError : null;
+  // 网络恢复 / 回前台 / 通道重连时，取不出来的这一范围自己再取一次（规格 2026-11-25
+  // K3）。已有一轮在飞就让它答：它答完会清掉（或换上）这条失败。
+  useRetryOnRecovery(visibleLoadError, () => {
+    if (!roundInFlightRef.current) refetch();
+  });
   // 切回本页看过的组合：这一遍落地之前先摆上一次的结果（决策 6）。机器轴不用它，
   // 那一档的行等这一遍的镜像落地后才与机器快照对账，行为保持原样。
   const cached =
@@ -525,6 +635,15 @@ export function useSessionIndex({
               unreadTotal: unread.total ?? 0,
             }),
           );
+          // 下一次冷启动先摆这一份（决策 A1）。机器轴的行来自机器快照，不落盘。
+          if (axis !== "machine") {
+            void persistRange(rangeKey, {
+              groups,
+              unreadTotal: unread.total ?? 0,
+              accountTotal: account.total ?? 0,
+              savedAt: Date.now(),
+            });
+          }
           settleRound();
         })
         .catch((e: unknown) => {
@@ -847,11 +966,14 @@ export function useSessionIndex({
     if (row) void doSave(row);
   }, [pendingSave, doSave]);
 
-  const askDelete = useCallback(
-    (row: MirrorIndexRow) => setPendingDelete(row),
-    [],
-  );
-  const cancelDelete = useCallback(() => setPendingDelete(null), []);
+  const askDelete = useCallback((row: MirrorIndexRow) => {
+    clearDeleteFailure();
+    setPendingDelete(row);
+  }, []);
+  const cancelDelete = useCallback(() => {
+    clearDeleteFailure();
+    setPendingDelete(null);
+  }, []);
 
   /**
    * 删除（决策 6）：账号那份当场清掉，执行端那份由服务端负责（在线即删、离线记
@@ -861,6 +983,7 @@ export function useSessionIndex({
     const row = pendingDelete;
     if (!row) return;
     setDeleting(true);
+    clearDeleteFailure();
     try {
       await api("/v1/saved-sessions/delete", {
         method: "POST",
@@ -868,24 +991,39 @@ export function useSessionIndex({
       });
       setOptimisticRemoved((prev) => [...prev, rowKey(row.conversationId)]);
       // 别的范围的缓存里也可能有它：整份作废，免得切过去时删掉的那条又闪回来。
+      // 本机存储里各范围的那几份同理，从里面摘掉这一条（下次冷启动不闪回）。
       setRangeCache(new Map());
+      void forgetStored(row.conversationId);
       shiftTotals(row, -1);
-      onDeleted(row);
+      // 先收确认层（它的历史记号随之退掉），宿主的删后导航等层数回 0 再跑。
+      deletedRef.current = row;
       setPendingDelete(null);
-    } catch {
+    } catch (err) {
       // 删除没成功：确认层留在原地、按钮重新可按，那条对话也还在列表里——
-      // 界面不装作它没了。
+      // 界面不装作它没了；原因写进确认层（见 deleteFailure）。
+      setDeleteFailure(err);
     } finally {
       setDeleting(false);
     }
-  }, [pendingDelete, shiftTotals, onDeleted]);
+  }, [pendingDelete, shiftTotals]);
+
+  useEffect(() => {
+    const row = deletedRef.current;
+    if (!row || pendingDelete !== null || overlayLayer > 0) return;
+    deletedRef.current = null;
+    onDeleted(row);
+  }, [pendingDelete, overlayLayer, onDeleted]);
+
+  const stale = cached?.savedAt !== undefined;
 
   return {
     indexGroups: shownGroups,
     mirrorRows,
-    accountTotal,
+    accountTotal: accountTotal ?? cached?.accountTotal ?? null,
     unreadTotal: cached ? cached.unreadTotal : unreadTotal,
-    loaded,
+    loaded: loaded || stale,
+    stale,
+    freshAt: cached?.savedAt ?? null,
     rangePending,
     refreshing,
     loadError: visibleLoadError,
@@ -920,4 +1058,51 @@ export function useSessionIndex({
     deleting,
     confirmDelete,
   };
+}
+
+/** 带搜索词的范围在本机最多留这么多份（最近存的优先）。 */
+export const SEARCH_RANGES_KEPT = 20;
+
+/** 范围键（`轴|scope|搜索词|筛选`）里的搜索词；搜索词自己可能含 `|`，取中间那几段。 */
+function searchOfRangeKey(key: string): string {
+  return key.split("|").slice(2, -1).join("|");
+}
+
+/**
+ * 存一个范围的第一页（键见 `rangeKey`）。带搜索词的范围每停手一次就是一个新键：存完把
+ * 超出 `SEARCH_RANGES_KEPT` 的最老那几份删掉，本机存储不随搜索次数无限长下去。不带搜索
+ * 词的（范围 × 筛选，有限个）不在此列。
+ */
+export async function persistRange(
+  key: string,
+  value: StoredRange,
+): Promise<void> {
+  await accountStore.put<StoredRange>(STORE_KIND, key, value);
+  if (!searchOfRangeKey(key)) return;
+  const searched = (await accountStore.list<StoredRange>(STORE_KIND))
+    .filter((entry) => searchOfRangeKey(entry.key) !== "")
+    .sort((a, b) => (b.value.savedAt ?? 0) - (a.value.savedAt ?? 0));
+  await Promise.all(
+    searched
+      .slice(SEARCH_RANGES_KEPT)
+      .map((entry) => accountStore.delete(STORE_KIND, entry.key)),
+  );
+}
+
+/** 把一条删掉的对话从本机存储里每个范围的那一份里摘掉。 */
+async function forgetStored(conversationId: string): Promise<void> {
+  const entries = await accountStore.list<StoredRange>(STORE_KIND);
+  await Promise.all(
+    entries.map(({ key, value }) =>
+      accountStore.put<StoredRange>(STORE_KIND, key, {
+        ...value,
+        groups: value.groups.map((g) => ({
+          ...g,
+          items: (g.items ?? []).filter(
+            (item) => item.conversation_id !== conversationId,
+          ),
+        })),
+      }),
+    ),
+  );
 }

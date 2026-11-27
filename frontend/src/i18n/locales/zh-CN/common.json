@@ -4,12 +4,20 @@
   "cancel": "取消",
   "loading": "加载中…",
   "retry": "重试",
+  "reload": "重新加载",
+  "pageLoadFailed": "页面没加载出来",
   "language": {
     "label": "语言"
   },
   "apiError": {
     "signedOut": "登录已过期，请重新登录。",
     "denied": "你没有权限做这件事。"
+  },
+  "writeFailure": {
+    "createTimeout": "网络超时，可能已经建好了，先刷新列表看看再重试。",
+    "timeout": "网络超时，没收到确认，可能已经生效，刷新看看。",
+    "unavailable": "服务暂时不可用（{{status}}），请稍后再试。",
+    "network": "网络好像断了，请稍后再试。"
   },
   "projectError": {
     "fallback": "操作没有完成，请重试。"
@@ -22,11 +30,19 @@
     "pageOutdated": "{{what}}，这个页面比 {{machine}} 上的 agentred 旧，刷新一下页面。",
     "versionMismatch": "{{what}}，这个页面与 {{machine}} 上的 agentred 版本对不上。",
     "signedOut": "{{what}}，登录状态已失效，请重新登录。",
+    "serviceUnavailable": "{{what}}，服务暂时不可用（{{status}}）。",
     "denied": "{{what}}，你没有权限这样做。",
     "unknown": "{{what}}。",
     "thatMachine": "那台机器",
     "goDevices": "去设备页",
     "copyDiagnostics": "复制诊断信息",
-    "copied": "诊断信息已复制"
+    "copied": "诊断信息已复制",
+    "signIn": "重新登录"
+  },
+  "serverUnreachable": {
+    "title": "连不上服务器",
+    "body": "网络回来后会自动进入，不用重新登录。",
+    "retrying": "正在自动重试 · 第 {{n}} 次",
+    "retryNow": "立即重试"
   }
 }
