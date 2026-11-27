@@ -15,8 +15,7 @@ import (
 // 全小写的 "zh-cn"。middleware.Language 只在 Accept-Language 首选标签确切是某个语言包
 // 时放进语言，绝大多数调用（没带头、浏览器的区域标签）都走那条回落分支。一旦语言包注册
 // 在别的标签下，langs[DefaultLang] 就是 nil map，langMap[code] 取回零值，客户端拿到的
-// 是 {"code":30300,"msg":""} ——
-// 有码无文案，而且是**所有**错误码、**所有**客户端。
+// 是 {"code":30300,"msg":""} —— 有码无文案，而且是**所有**错误码、**所有**客户端。
 func TestT_GivenNoLanguageInContext_ThenEveryRegisteredCodeResolves(t *testing.T) {
 	ctx := context.Background()
 
@@ -37,11 +36,20 @@ func TestT_GivenExplicitLanguage_ThenResolvesInThatLanguage(t *testing.T) {
 		i18n.T(i18n.WithLanguage(context.Background(), "en"), DeviceNotFound))
 }
 
-// 英文包如今会被取到（middleware.Language，agrctl 点名 en）：中文包里的每个码都要有英文文案，
-// 漏一个，agrctl 拿到的就是空的 msg。
-func TestT_GivenEnglish_ThenEveryRegisteredCodeResolves(t *testing.T) {
-	ctx := i18n.WithLanguage(context.Background(), "en")
+// 英文包如今会被取到（middleware.Language，agrctl 点名 en）：任一语言包里登记过的码，
+// 两种语言都要有文案。只遍历中文包时，一个只写了英文的码在默认（中文）路径上取回空串
+// 而不被发现；漏一个，对应那一端拿到的就是空的 msg。
+func TestT_GivenEitherLanguage_ThenEveryRegisteredCodeResolvesInBoth(t *testing.T) {
+	enCtx := i18n.WithLanguage(context.Background(), "en")
+	codes := map[int]struct{}{}
 	for c := range zhCN {
-		assert.NotEmptyf(t, i18n.T(ctx, c), "code %d has no English text", c)
+		codes[c] = struct{}{}
+	}
+	for c := range en {
+		codes[c] = struct{}{}
+	}
+	for c := range codes {
+		assert.NotEmptyf(t, i18n.T(enCtx, c), "code %d has no English text", c)
+		assert.NotEmptyf(t, i18n.T(context.Background(), c), "code %d has no Chinese text", c)
 	}
 }
