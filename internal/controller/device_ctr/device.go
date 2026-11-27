@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/pkg/i18n"
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/cago-frame/cago/pkg/utils/httputils"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
@@ -295,7 +297,14 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 		// 离线不是「升级被拒绝」：用户该做的事不一样（等它回来，而不是换个说法再点
 		// 一次）。与 relay_ctr 对 daemon 离线的答复同一形状。
 		return nil, i18n.NewErrorWithStatus(ctx, http.StatusConflict, code.RelayDaemonOffline)
+	case errors.Is(err, mirror_svc.ErrProtocolVersionMismatch):
+		// 对端按协议版本拒了握手：不是服务器故障，远程也升不动——只能在那台机器上自己升。
+		logger.Ctx(ctx).Warn("device_ctr.Upgrade: device runs an incompatible release",
+			zap.Int64("userId", userID), zap.Int64("deviceId", req.DeviceID), zap.Error(err))
+		return nil, i18n.NewErrorWithStatus(ctx, http.StatusConflict, code.DeviceIncompatibleRelease)
 	case err != nil:
+		logger.Ctx(ctx).Error("device_ctr.Upgrade: upgrade failed",
+			zap.Int64("userId", userID), zap.Int64("deviceId", req.DeviceID), zap.Error(err))
 		return nil, i18n.NewInternalError(ctx, code.ServerError)
 	}
 	return &api.DeviceUpgradeResponse{

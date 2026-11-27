@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
@@ -546,6 +548,49 @@ func TestDeviceUpgrade_ForwardsToTheNamedMachine(t *testing.T) {
 	assert.Equal(t, "0.6.0", body.TargetVersion)
 	require.Len(t, upgrader.calls, 1)
 	assert.Equal(t, stubUpgradeCall{userID: 7, fingerprint: "fp-nuc-01", force: false}, upgrader.calls[0])
+}
+
+// Given 那台 agentred 跑着协议不同的发行版、握手被它拒了；Then 答 409 + 专用错误码（不是
+// 无日志的 500），并记一条 Warn：用户要做的是去那台机器上自己升级。
+func TestDeviceUpgrade_GivenProtocolMismatch_ThenConflictWithDedicatedCodeAndWarnLog(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: upgradeDeviceList()}
+	upgrader := &stubUpgrader{err: fmt.Errorf("dial: %w", mirror_svc.ErrProtocolVersionMismatch)}
+	server := newUpgradeTestServer(t, stub, upgrader)
+	cookie, csrf := newSessionCookie(t, 7)
+	logs := testutils.Logs(t)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/devices/upgrade",
+		cookie.Value, "", `{"device_id":1}`, csrf)
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	var body struct {
+		Code int `json:"code"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, code.DeviceIncompatibleRelease, body.Code)
+
+	entries := logs.FilterMessage("device_ctr.Upgrade: device runs an incompatible release").All()
+	require.Len(t, entries, 1)
+	assert.Equal(t, zapcore.WarnLevel, entries[0].Level)
+	assert.EqualValues(t, 7, entries[0].ContextMap()["userId"])
+	assert.EqualValues(t, 1, entries[0].ContextMap()["deviceId"])
+}
+
+// Given 升级调用出了没预料到的错误；Then 仍是 500，但这次落一条 Error 日志。
+func TestDeviceUpgrade_GivenUnexpectedFailure_ThenInternalErrorIsLogged(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: upgradeDeviceList()}
+	upgrader := &stubUpgrader{err: errors.New("boom")}
+	server := newUpgradeTestServer(t, stub, upgrader)
+	cookie, csrf := newSessionCookie(t, 7)
+	logs := testutils.Logs(t)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/devices/upgrade",
+		cookie.Value, "", `{"device_id":1}`, csrf)
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+	entries := logs.FilterMessage("device_ctr.Upgrade: upgrade failed").All()
+	require.Len(t, entries, 1)
+	assert.Equal(t, zapcore.ErrorLevel, entries[0].Level)
+	assert.Contains(t, entries[0].ContextMap()["error"], "boom")
 }
 
 // Given 那台机器上还有对话在跑；Then 拒绝原因与 daemon 那句人话逐字回到浏览器
