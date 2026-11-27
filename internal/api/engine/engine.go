@@ -185,8 +185,16 @@ type SnapshotCLIOverlay struct {
 // 契约的整份 syncwire.AgentBackendConfig（不在这一层再抄一份键表）。ACP 启动身份
 // （acpCommand / acpArgs）只经这条带鉴权的通路下行，且只给后端分配到的机器。
 type SnapshotBackend struct {
-	BackendSyncID string                      `json:"backend_sync_id"`
-	Config        syncwire.AgentBackendConfig `json:"config"`
+	BackendSyncID string `json:"backend_sync_id"`
+	// ProviderKey / ModelKey / ReasoningEffort / EnvJSON 是这条后端绑定的供应商、固定模型、
+	// 思考力度与透传环境变量（缺席 = CLI 自身登录态 / 跟随供应商默认 / 走默认 / 不透传）。
+	// 账号侧派发只带 {type, sync_id}，设备只能从这里知道「跟随后端配置」的一轮跑什么；
+	// 与 engine_svc.BackendSnapshot 同名同 tag，agentre daemon 的 enginesnapshot 按它解。
+	ProviderKey     string                      `json:"provider_key,omitempty"`
+	ModelKey        string                      `json:"model_key,omitempty"`
+	ReasoningEffort string                      `json:"reasoning_effort,omitempty"`
+	EnvJSON         string                      `json:"env_json,omitempty"`
+	Config          syncwire.AgentBackendConfig `json:"config"`
 }
 
 type SnapshotRequest struct {

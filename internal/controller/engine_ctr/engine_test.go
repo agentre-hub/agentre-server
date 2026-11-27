@@ -88,7 +88,8 @@ func (s *stubEngineSvc) Snapshot(_ context.Context, _ int64, fingerprint string)
 		Providers:   []engine_svc.ProviderSnapshot{{ProviderKey: "anthropic-main", APIKey: "sk-secret", Models: []engine_svc.Model{}}},
 		CLIOverlays: []engine_svc.CLIOverlaySnapshot{{BackendSyncID: "backend-1", CLIPath: "/usr/local/bin/claude"}},
 		Backends: []engine_svc.BackendSnapshot{{
-			BackendSyncID: "b-acp",
+			BackendSyncID: "b-acp", ProviderKey: "anthropic-main", ModelKey: "m-sonnet",
+			ReasoningEffort: "low", EnvJSON: `{"FOO":"bar"}`,
 			Config: syncwire.AgentBackendConfig{
 				ACPCommand: "/opt/acp/agent",
 				ACPArgs:    []string{"serve", "--stdio"},
@@ -191,6 +192,17 @@ func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
 	assert.Contains(t, string(envelope.Data), `"backend_sync_id":"b-acp"`)
 	assert.Contains(t, string(envelope.Data), `"acpCommand":"/opt/acp/agent"`)
 	assert.Contains(t, string(envelope.Data), `"acpArgs":["serve","--stdio"]`)
+	// 后端绑定的供应商 / 固定模型 / 思考力度 / 透传环境变量随同一条后端下行：账号侧派发
+	// （控制台、agrctl）只带 {type, sync_id}，设备只能从这里知道这一轮跟随后端时跑什么。
+	var data struct {
+		Backends []map[string]any `json:"backends"`
+	}
+	require.NoError(t, json.Unmarshal(envelope.Data, &data))
+	require.Len(t, data.Backends, 1)
+	assert.Equal(t, "anthropic-main", data.Backends[0]["provider_key"])
+	assert.Equal(t, "m-sonnet", data.Backends[0]["model_key"])
+	assert.Equal(t, "low", data.Backends[0]["reasoning_effort"])
+	assert.Equal(t, `{"FOO":"bar"}`, data.Backends[0]["env_json"])
 }
 
 // 已撤销的设备不该再拉得到引擎快照——快照里带着明文 API key。这条判定曾在
