@@ -43,6 +43,7 @@
     "subtitle": "这个账号当前登录着的浏览器。",
     "current": "当前会话",
     "currentPhone": "这台",
+    "unknownBrowser": "未知浏览器",
     "signedInAt": "登录于 {{date}}",
     "lastActiveAt": "最后活动 {{date}}",
     "loadFailedWhat": "无法加载登录会话",
@@ -53,5 +54,10 @@
     "signOutError": "登出其它会话失败，请重试。",
     "onlyCurrent": "只有当前这一个会话。"
   },
-  "signOut": "退出登录"
+  "signOut": "退出登录",
+  "signOutConfirm": {
+    "title": "退出登录？",
+    "body": "退出后需要重新登录才能继续使用。",
+    "cancel": "取消"
+  }
 }

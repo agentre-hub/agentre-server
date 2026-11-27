@@ -78,9 +78,11 @@ export async function fetchDevices(): Promise<DeviceItem[]> {
  * 共享的那一份设备名单（`@/lib/rosterFetch`）：外壳、对话页与目标设备 hook 同一屏上
  * 共用一个在飞请求、10 秒内复用。设备上下线的信号作废它。
  */
-export const deviceRoster = createRoster(fetchDevices, [
-  AccountChannelDevicePresence,
-]);
+export const deviceRoster = createRoster(
+  fetchDevices,
+  [AccountChannelDevicePresence],
+  "roster-devices",
+);
 
 /**
  * 这一行到底叫什么：用户设过备注名就用它，没设就回落到设备自报名。

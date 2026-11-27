@@ -1,5 +1,6 @@
 {
   "brand": "Agentre",
+  "back": "返回登录",
   "footer": {
     "copyright": "© {{year}} Agentre",
     "terms": "服务条款",

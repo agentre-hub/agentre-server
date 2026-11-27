@@ -13,6 +13,9 @@ import type {
   AgentFields,
   DepartmentFields,
   ExecTargetFields,
+  OrgAgentItem,
+  OrgChartResponse,
+  OrgDepartmentItem,
   OrgWriteResponse,
 } from "./types";
 
@@ -89,4 +92,52 @@ export function updateExecTarget(
 
 export function deleteExecTarget(syncId: string): Promise<OrgWriteResponse> {
   return post("/v1/workspace/org/exec-targets/delete", { sync_id: syncId });
+}
+
+// ---------- 新建超时后认「刚提交的那条」（规格 F5）----------
+
+/**
+ * 多条同时符合时取最新的：这两份读里没有 created_at，新建的排在同级末尾，
+ * 所以 sort_order 大者新，相同取靠后的那条。
+ */
+function newest<T extends { sort_order: number }>(rows: T[]): T | null {
+  return rows.reduce<T | null>(
+    (a, b) => (a && a.sort_order > b.sort_order ? a : b),
+    null,
+  );
+}
+
+/**
+ * 判据是「提交前名单里没有这个 sync_id」+ 提交的字段一致，不看时间（服务端钟与浏览器钟
+ * 有偏差）；提交前就在的同名旧条目因此不会被认错。名单是整份、不带任何筛选（筛选在
+ * 前端内存里做，读接口没有筛选参数）。
+ */
+export function findCreatedAgent(
+  chart: OrgChartResponse,
+  submitted: AgentFields,
+  knownBefore: ReadonlySet<string>,
+): OrgAgentItem | null {
+  return newest(
+    chart.agents.filter(
+      (a) =>
+        !knownBefore.has(a.sync_id) &&
+        a.name.trim() === (submitted.name ?? "").trim() &&
+        (a.department_sync_id ?? "") === (submitted.department_sync_id ?? ""),
+    ),
+  );
+}
+
+export function findCreatedDepartment(
+  chart: OrgChartResponse,
+  submitted: DepartmentFields,
+  knownBefore: ReadonlySet<string>,
+): OrgDepartmentItem | null {
+  return newest(
+    chart.departments.filter(
+      (d) =>
+        !knownBefore.has(d.sync_id) &&
+        d.name.trim() === (submitted.name ?? "").trim() &&
+        (d.parent_sync_id ?? "") === (submitted.parent_sync_id ?? ""),
+    ),
+  );
 }

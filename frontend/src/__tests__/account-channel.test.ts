@@ -81,6 +81,10 @@ class FakeSignalSource {
   disconnected(): void {
     this.onStateChange?.("disconnected");
   }
+  /** 取票 401：连接停拨，转登出态。 */
+  signedOut(): void {
+    this.onStateChange?.("signedOut");
+  }
   /** 保留通道被判死：订阅建不起来，或信号源中途断了。 */
   signalClosed(): void {
     this.onSignalClosed?.();
@@ -418,6 +422,16 @@ describe("这条通道此刻的状态", () => {
     ]);
   });
 
+  // 取票 401：连接停拨、不会自己回来。它与 disconnected 同属终态，不能折进「在动」那一态。
+  it("连接转登出态时说成已断开，而不是「连接中」", () => {
+    const { fake, states } = watch();
+
+    fake.connected();
+    fake.signedOut();
+
+    expect(states).toEqual(["connected", "disconnected"]);
+  });
+
   it("同一个状态不重复说：退避期间每拨一次不该让灯闪一下", () => {
     const { fake, states } = watch();
 
@@ -709,6 +723,27 @@ describe("标签页不可见时", () => {
     view.onRefresh.mockClear(); // 恢复可见那一次由下一条守
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(view.onRefresh.mock.calls).toEqual([[null]]);
+  });
+
+  // E5：离线时兜底轮询拉不到任何东西，只会让每个订阅页面各失败一遍。
+  it("离线时兜底轮询停，网络回来之后照旧", async () => {
+    const view = makeView();
+    const fake = new FakeSignalSource();
+    start({ source: fake.source, onRefresh: view.onRefresh });
+    fake.signalClosed();
+    view.onRefresh.mockClear();
+
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    try {
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+      expect(view.onRefresh).not.toHaveBeenCalled();
+
+      onLine.mockReturnValue(true);
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      expect(view.onRefresh.mock.calls).toEqual([[null]]);
+    } finally {
+      onLine.mockRestore();
+    }
   });
 
   it("恢复可见时恰好补一次 refresh(null)", () => {

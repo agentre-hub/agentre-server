@@ -1,7 +1,8 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "@/lib/api";
+import { api, ApiTimeoutError, ApiUnavailableError } from "@/lib/api";
+import i18n from "@/i18n";
 import { relayClientPool } from "@/lib/relayClientPool";
 import { createBrowserEngineSettingsPorts } from "@/lib/enginePorts";
 import { ensureRelayTicket } from "@/lib/relayTicket";
@@ -1854,5 +1855,50 @@ describe("device-local backend credentials", () => {
         openclawToken: "draft-token",
       }),
     );
+  });
+});
+
+/** 规格 F5、G2：写失败不露英文原文——超时、非 JSON 响应换成当前语言的一句话。 */
+describe("写失败的说法", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("zh-CN");
+  });
+
+  it("新建供应商超时：说「网络超时，可能已经建好了」，不露 timed out", async () => {
+    mockedApi.mockRejectedValue(
+      new ApiTimeoutError("/v1/engine/providers", 15000),
+    );
+    const err = await ports()
+      .createProvider({ name: "x" } as never)
+      .catch((e: unknown) => e);
+    expect((err as Error).message).toContain("网络超时");
+    expect((err as Error).message).toContain("可能已经建好了");
+    expect((err as Error).message).not.toMatch(/timed out|\/v1\//);
+  });
+
+  it("删除供应商遇到 502 门户页：说服务暂时不可用（502），不露 non-JSON", async () => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "DELETE")
+        throw new ApiUnavailableError(path, 502, "<html>");
+      return {
+        providers: [
+          {
+            provider_key: "p1",
+            name: "P",
+            type: "anthropic",
+            base_url: "",
+            masked_tail: "",
+            enabled: true,
+            default_model_key: "",
+            models: [],
+          },
+        ],
+      };
+    });
+    const p = ports();
+    const [provider] = await p.listProviders();
+    const err = await p.deleteProvider(provider.id).catch((e: unknown) => e);
+    expect((err as Error).message).toContain("502");
+    expect((err as Error).message).not.toMatch(/non-JSON|\/v1\//);
   });
 });

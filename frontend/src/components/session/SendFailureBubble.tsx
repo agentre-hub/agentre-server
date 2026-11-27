@@ -9,6 +9,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import SendAttachments from "@/components/session/SendAttachments";
+import { useIsMobile } from "@/components/use-is-mobile";
 import type { SendFailureKind } from "@/lib/sessionView";
 
 /**
@@ -61,6 +62,12 @@ export interface FailedSend {
    * 的话它就真的没了,而那颗「重发」会发出一条**和用户写的不一样**的消息。
    */
   images?: ChatImageAttachment[];
+  /**
+   * 这条消息交给中继的那一刻（Unix 毫秒，本机钟）。只有 `transport` 带它：转录里出现
+   * 内容一致、时间不早于它的用户消息时，这条「可能已送达」就收起（规格 2026-11-25
+   * K4，见 deliveredFailureIds）。没有这一格的（旧记录）一直留着。
+   */
+  handedOffAt?: number;
 }
 
 export default function SendFailureBubble({
@@ -69,14 +76,22 @@ export default function SendFailureBubble({
   busy,
   onRetry,
   onDiscard,
+  align,
 }: {
   failure: FailedSend;
   machineName?: string;
   busy?: boolean;
+  /**
+   * 与发送中那一条同一个对齐（规格 2026-11-25 H8：手机 `end`）。发送失败时它就站在
+   * 发送中那一条原来的位置上，不该跳到另一侧。不传 = 起始侧。
+   */
+  align?: "start" | "end";
   onRetry: () => void;
   onDiscard: () => void;
 }) {
   const { t } = useTranslation();
+  // 手机上点按区 44px（规格 2026-11-25 硬约束）；桌面照旧。
+  const touchTarget = useIsMobile() ? "min-h-11" : undefined;
 
   /**
    * 把这条没发出去的文本交给剪贴板。
@@ -112,6 +127,7 @@ export default function SendFailureBubble({
   return (
     <ChatMessage
       variant="user"
+      align={align}
       // author / avatar 在 user 档上不被使用（包自己画中性的「我」），类型上必填。
       author=""
       avatar={null}
@@ -131,6 +147,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant={transport ? "outline" : "default"}
+            className={touchTarget}
             data-testid="send-failure-retry"
             disabled={busy}
             onClick={onRetry}
@@ -145,6 +162,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant="ghost"
+            className={touchTarget}
             data-testid="send-failure-copy"
             onClick={() => void copyText()}
           >
@@ -154,6 +172,7 @@ export default function SendFailureBubble({
           <Button
             size="xs"
             variant="ghost"
+            className={touchTarget}
             data-testid="send-failure-discard"
             onClick={onDiscard}
           >

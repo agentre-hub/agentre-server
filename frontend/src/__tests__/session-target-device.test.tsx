@@ -102,6 +102,36 @@ describe("useSessionTargetDevice", () => {
     expect(result.current.deviceError).toBeNull();
   });
 
+  // 规格 2026-11-25 K3：名单读失败之后网络回来了，不该一直挂着横幅等用户点「重试」。
+  it("名单读失败后网络恢复：自动重读一次，成功即清掉错误", async () => {
+    mocked.mockRejectedValueOnce(new Error("offline"));
+    mocked.mockResolvedValue([machine()]);
+
+    const { result } = renderHook(() => useTarget(7, "connected"));
+    await waitFor(() => expect(result.current.deviceError).toBeTruthy());
+
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    await waitFor(() => expect(result.current.device?.id).toBe(7));
+    expect(result.current.deviceError).toBeNull();
+    expect(mocked.mock.calls.length).toBe(2);
+  });
+
+  it("名单没失败：网络恢复不多取一次", async () => {
+    mocked.mockResolvedValue([machine()]);
+
+    const { result } = renderHook(() => useTarget(7, "connected"));
+    await waitFor(() => expect(result.current.device?.id).toBe(7));
+
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    expect(mocked.mock.calls.length).toBe(1);
+  });
+
   // 断线原因只探一次（R11）：reconnecting 期间会反复渲染，每次都探一遍等于把一条
   // 已经连不上的链路再压上一串请求。
   it("reconnecting 期间只探一次原因", async () => {

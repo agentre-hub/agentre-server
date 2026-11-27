@@ -32,8 +32,14 @@ import {
   vi,
 } from "vitest";
 
-import { api } from "@/lib/api";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
+
+import { MobileDrawerProvider } from "@/components/console/MobileNav";
+import { api, ApiError, ApiUnavailableError } from "@/lib/api";
+import { draftStore, useDraftKey } from "@/lib/drafts";
+import { bindAccount } from "@/lib/localStore";
 import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
+import { toast } from "sonner";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
@@ -68,27 +74,30 @@ vi.mock("@/lib/relayClientPool", async (importOriginal) => {
 // 会话详情本身由 session-detail*.test.tsx 守；这里只认 Chat 在移动端把哪一条、以什么
 // 形态、带着哪条返回地址交给它。
 vi.mock("@/components/session/SessionDetailView", () => ({
-  default: (props: {
+  default: function StubSessionDetail(props: {
     deviceId: number;
     conversationId: string;
     form?: string;
     backTo?: string;
     onDelete?: () => void;
-  }) => (
-    <div
-      data-testid="mobile-session-detail"
-      data-device-id={props.deviceId}
-      data-session-id={props.conversationId}
-      data-form={props.form ?? "page"}
-      data-back-to={props.backTo ?? ""}
-    >
-      {props.onDelete ? (
-        <button type="button" onClick={props.onDelete}>
-          stub delete
-        </button>
-      ) : null}
-    </div>
-  ),
+  }) {
+    return (
+      <div
+        data-testid="mobile-session-detail"
+        data-device-id={props.deviceId}
+        data-session-id={props.conversationId}
+        data-form={props.form ?? "page"}
+        data-back-to={props.backTo ?? ""}
+        data-draft-key={useDraftKey() ?? ""}
+      >
+        {props.onDelete ? (
+          <button type="button" onClick={props.onDelete}>
+            stub delete
+          </button>
+        ) : null}
+      </div>
+    );
+  },
 }));
 
 const mockedApi = vi.mocked(api);
@@ -292,9 +301,12 @@ function HistoryBack() {
   );
 }
 
-function renderChat(entry = "/chat") {
+function renderChat(entry = "/chat", prev?: string) {
   return render(
-    <MemoryRouter initialEntries={[entry]}>
+    <MemoryRouter
+      initialEntries={prev ? [prev, entry] : [entry]}
+      initialIndex={prev ? 1 : 0}
+    >
       <ThemeProvider>
         <LocationProbe />
         <HistoryBack />
@@ -385,6 +397,31 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(sheet.classList.contains("grid")).toBe(false);
     expect(sheet.classList.contains("flex")).toBe(true);
     expect(sheet.classList.contains("flex-col")).toBe(true);
+  });
+
+  it("挑 Agent 弹层：系统返回关掉它，停在列表；从界面关掉不多留一条历史", async () => {
+    stubApi([waitingMirrored]);
+    renderChat("/chat", "/prev");
+    expect(await screen.findByText("等你批")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("chat-location").textContent).toBe("/chat");
+    expect(screen.getByText("等你批")).toBeTruthy();
+
+    // 再开再从界面关：记号退掉，没有残留的一条。
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    fireEvent.click(screen.getByTestId("history-back"));
+    expect(screen.getByTestId("chat-location").textContent).toBe("/prev");
   });
 
   it("从弹层挑 Agent 进草稿，草稿的返回回到列表，不再把挑 Agent 的弹层升起来", async () => {
@@ -527,12 +564,43 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     );
     const retry = within(failed).getByRole("button", { name: "Retry" });
     expect(retry.className).toContain("w-full");
+    // G1：触屏点击目标 44px（Button lg 只有 h-10）。
+    expect(retry.className).toContain("h-11");
 
     failing = false;
     fireEvent.click(retry);
 
     expect(await screen.findByText("等你批")).toBeTruthy();
     expect(screen.queryByTestId("chat-load-failed")).toBeNull();
+  });
+});
+
+describe("手机首页：列表取数失败的原因与出口（G1、G2）", () => {
+  function failIndexWith(err: unknown) {
+    stubApi([waitingMirrored]);
+    const succeed = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      if (path.startsWith("/v1/agent-sessions?")) throw err;
+      return succeed(path, ...rest);
+    });
+  }
+
+  it("502 非 JSON：正文说服务暂时不可用并带状态码，不露原文", async () => {
+    failIndexWith(new ApiUnavailableError("/v1/agent-sessions", 502, "<html>"));
+    renderChat();
+    const failed = await screen.findByTestId("chat-load-failed");
+    expect(failed.textContent).toContain("502");
+    expect(failed.textContent).not.toContain("non-JSON");
+    expect(within(failed).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("401：出口是 44px「重新登录」而不是重试", async () => {
+    failIndexWith(new ApiError(401, "未登录", 401));
+    renderChat();
+    const failed = await screen.findByTestId("chat-load-failed");
+    const signIn = within(failed).getByRole("link", { name: "Sign in again" });
+    expect(signIn.className).toContain("h-11");
+    expect(within(failed).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
 
@@ -878,8 +946,8 @@ describe("移动端对话页:空态 W8 页内切机器轴", () => {
     ).toContain("书房小主机");
   });
 
-  it("账号空且没有在线机器:出口是「添加设备」，指向 /devices", async () => {
-    stubApi([], []);
+  it("账号空、有设备但都不在线:出口是「添加设备」，指向 /devices", async () => {
+    stubApi([], [offlineMachine]);
     renderChat();
 
     const empty = await screen.findByTestId("chat-empty-state");
@@ -901,6 +969,198 @@ describe("移动端对话页:空态 W8 页内切机器轴", () => {
  * ☰ · 范围名 ⌄（副标题）· ⌕ · ✎；筛选胶囊；按 需要你 / 进行中 / 今天 / 更早 分段；
  * 手机行；搜索与高亮；长按菜单；空态出口；离线副标题；返回恢复。
  */
+describe("草稿静默保留（C1）：新对话草稿与「换一个 Agent」", () => {
+  const g = globalThis as Record<string, unknown>;
+  const twoAgents = [
+    ...agents,
+    {
+      sync_id: "ag-2",
+      name: "前端 Agent",
+      avatar_color: "#0ea5e9",
+      has_available_target: true,
+      exec_targets: [
+        {
+          rank: 1,
+          device_name: "书房小主机",
+          availability: "available",
+          current: true,
+          device_unspecified: false,
+        },
+      ],
+    },
+  ];
+  const plan = {
+    agent_sync_id: "ag-1",
+    tiers: [
+      {
+        rank: 1,
+        backend_sync_id: "b-a",
+        device_id: 1,
+        device_name: "书房小主机",
+        backend_type: "claudecode",
+        kind: "agentred",
+        availability: "available",
+        current: true,
+      },
+    ],
+    chosen: {
+      device_fingerprint: "fp-1",
+      device_id: 1,
+      device_name: "书房小主机",
+      backend_sync_id: "b-a",
+      backend_type: "claudecode",
+      kind: "agentred",
+    },
+    projects: [],
+  };
+
+  beforeEach(() => {
+    g.indexedDB = new IDBFactory();
+    g.IDBKeyRange = IDBKeyRange;
+    bindAccount(1);
+  });
+  afterEach(() => {
+    bindAccount(null);
+    delete g.indexedDB;
+  });
+
+  function stubWithPlan(saved: unknown[] = [waitingMirrored]) {
+    stubApi(saved, [agentred], { agents: twoAgents });
+    const listing = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      if (String(path).startsWith("/v1/workspace/dispatch-target?"))
+        return plan;
+      return listing(path, ...rest);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+  }
+
+  async function openDraftWith(agentTestId: string) {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    fireEvent.click(await screen.findByTestId(agentTestId));
+    await screen.findByTestId("draft-session");
+  }
+
+  function editable(): HTMLElement & {
+    editor?: { commands: { setContent: (v: string) => void } };
+  } {
+    const el = document.querySelector<HTMLElement>(
+      '[data-testid="session-detail-composer"] .ProseMirror',
+    );
+    if (!el) throw new Error("输入框没渲染出来");
+    return el;
+  }
+
+  async function typeAndAttach(text: string) {
+    await waitFor(() => editable());
+    act(() => {
+      editable().editor?.commands.setContent(`<p>${text}</p>`);
+    });
+    fireEvent.change(
+      screen.getByLabelText("Add image", { selector: "input" }),
+      {
+        target: {
+          files: [
+            new File([new Uint8Array([1, 2, 3])], "shot.png", {
+              type: "image/png",
+            }),
+          ],
+        },
+      },
+    );
+    await screen.findByAltText("shot.png");
+  }
+
+  it("新对话草稿：写了字、贴了图就退回列表，再开一条新对话时它们还在", async () => {
+    stubWithPlan();
+    renderChat();
+    await openDraftWith("agent-pick-ag-1");
+    await typeAndAttach("写到一半的第一句");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+
+    await openDraftWith("agent-pick-ag-1");
+    await waitFor(() =>
+      expect(editable().textContent).toBe("写到一半的第一句"),
+    );
+    await screen.findByAltText("shot.png");
+  });
+
+  it("「换一个 Agent」：选择器浮在草稿上（草稿不卸载），选定后文字与图片带到新 Agent", async () => {
+    stubWithPlan();
+    renderChat();
+    await openDraftWith("agent-pick-ag-1");
+    await typeAndAttach("先写好再换人");
+    const draftBefore = screen.getByTestId("draft-session");
+
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    // 选择器是叠在草稿上的一层：草稿节点仍在，没有被换成挑选页。
+    await screen.findByTestId("new-conversation-sheet");
+    expect(screen.getByTestId("draft-session")).toBe(draftBefore);
+
+    fireEvent.click(await screen.findByTestId("agent-pick-ag-2"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("draft-recipient").textContent).toContain(
+        "前端 Agent",
+      ),
+    );
+    await waitFor(() => expect(editable().textContent).toBe("先写好再换人"));
+    await screen.findByAltText("shot.png");
+    expect(screen.queryByTestId("new-conversation-sheet")).toBeNull();
+  });
+
+  it("「换一个 Agent」后关掉选择器：仍在原草稿上，字与图都在", async () => {
+    stubWithPlan();
+    renderChat();
+    await openDraftWith("agent-pick-ag-1");
+    await typeAndAttach("不换了");
+
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    await screen.findByTestId("new-conversation-sheet");
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("draft-recipient").textContent).toContain(
+      "后端 Agent",
+    );
+    expect(editable().textContent).toBe("不换了");
+  });
+
+  it("手机首页：有草稿的对话副行以红色「[Draft]」开头，后面是草稿首行；没有草稿的照旧", async () => {
+    stubWithPlan([waitingMirrored, runningMirrored]);
+    await draftStore.put("session:42", {
+      text: "\n 改一下登录页 \n第二行",
+      images: [],
+    });
+    renderChat();
+
+    const line = await screen.findByText("改一下登录页");
+    const prefix = within(line.parentElement as HTMLElement).getByText(
+      "[Draft]",
+    );
+    expect(prefix.className).toContain("text-destructive-text");
+    const other = (await screen.findByText("跑着呢")).closest("li")!;
+    expect(other.textContent).not.toContain("[Draft]");
+  });
+
+  it("对话页：输入框的草稿键就是这条对话（换一条换一份）", async () => {
+    stubWithPlan();
+    renderChat("/chat/42?device=1");
+    const detail = await screen.findByTestId("mobile-session-detail");
+    expect(detail.getAttribute("data-draft-key")).toBe("session:42");
+  });
+});
+
 describe("手机首页：对话列表", () => {
   const now = Date.now();
   /** 今天早些时候结束、还没读过的一条（未读点）。 */
@@ -955,6 +1215,29 @@ describe("手机首页：对话列表", () => {
     expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
   });
 
+  it("长按「停止这一轮」：该行立即写「正在停止…」，请求成功后仍写着；失败则放下并在顶部提示重试", async () => {
+    stubApi(all);
+    const toastError = vi.spyOn(toast, "error").mockReturnValue("t");
+    renderChat();
+
+    fireEvent.contextMenu((await screen.findByText("跑着呢")).closest("a")!);
+    let release!: () => void;
+    abortRequest.mockImplementationOnce(
+      () => new Promise((r) => (release = () => r({}))),
+    );
+    fireEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Stop this turn",
+      }),
+    );
+    expect(await screen.findByText("Stopping…")).toBeTruthy();
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText("Stopping…")).toBeTruthy();
+    expect(toastError).not.toHaveBeenCalled();
+    toastError.mockRestore();
+  });
+
   it("「只看这个 Agent」换整页范围：地址、标题与取数都收到这个 Agent", async () => {
     stubApi(all);
     renderChat();
@@ -1005,6 +1288,68 @@ describe("手机首页：对话列表", () => {
         name: "Switch scope, current: 书房小主机",
       }),
     ).toBeTruthy();
+  });
+
+  describe("首次使用没有设备（J1、F3）", () => {
+    it("设备名单已知且为空：主按钮是「添加设备」指向 /devices，正文说先在电脑上装执行端，不再有「新对话」", async () => {
+      stubApi([], []);
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      const primary = within(empty).getByRole("link", { name: "Add a device" });
+      expect(primary.getAttribute("href")).toBe("/devices");
+      expect(primary.className).toContain("w-full");
+      expect(primary.className).toContain("h-11");
+      expect(empty.textContent).toContain(
+        "Install the agent on your computer first, then you can talk to agents here.",
+      );
+      expect(
+        within(empty).queryByRole("button", { name: "New conversation" }),
+      ).toBeNull();
+      expect(screen.queryByText("Pick an agent to get started.")).toBeNull();
+    });
+
+    it("设备名单还不知道（取数失败）：仍是「新对话」主按钮，不抢着说没有设备", async () => {
+      stubApi([], []);
+      const base = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, ...rest) => {
+        if (path === "/v1/devices") throw new Error("boom");
+        return base(path, ...rest);
+      });
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      expect(
+        within(empty).getByRole("button", { name: "New conversation" }),
+      ).toBeTruthy();
+      expect(empty.textContent).not.toContain("Install the agent");
+    });
+
+    it("有设备但都不在线：仍是「新对话」，「添加设备」文字出口至少 44px 高", async () => {
+      stubApi([], [offlineMachine]);
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      expect(
+        within(empty).getByRole("button", { name: "New conversation" }),
+      ).toBeTruthy();
+      const link = within(empty).getByRole("link", { name: "Add a device" });
+      expect(link.className).toContain("min-h-11");
+      expect(empty.textContent).not.toContain("Install the agent");
+    });
+
+    it("有在线设备：「按机器看设备上的对话」也是 44px", async () => {
+      stubApi([], [agentred]);
+      mockUseRelay.mockReturnValue(connectedRelay());
+      renderChat();
+
+      const empty = await screen.findByTestId("chat-empty-state");
+      expect(
+        within(empty).getByRole("button", {
+          name: "Browse conversations by machine",
+        }).className,
+      ).toContain("min-h-11");
+    });
   });
 
   it("空态：主按钮「新对话」撑满宽", async () => {
@@ -1180,6 +1525,10 @@ describe("手机首页：对话列表", () => {
 
     const banner = await screen.findByTestId("index-load-error");
     expect(within(banner).getByRole("button", { name: "Retry" })).toBeTruthy();
+    // 手机上横幅里的「重试」点按区 44px（G1）。
+    expect(
+      within(banner).getByRole("button", { name: "Retry" }).className,
+    ).toContain("min-h-11");
     expect(screen.getByText("老对话")).toBeTruthy();
     expect(screen.queryByTestId("chat-load-failed")).toBeNull();
     const list = screen.getByTestId("chat-phone-list");
@@ -1463,5 +1812,176 @@ describe("手机首页：范围弹层", () => {
     expect(
       within(sheet).getByTestId("scope-item-agent-ag-9").textContent,
     ).toContain("裸 Agent");
+  });
+});
+
+/**
+ * 返回与焦点（规格 2026-11-25 D3、D5）：删除不留重复历史项、设备进的机器轴有 ‹ 回设备、
+ * 列表 → 详情 → 返回焦点回刚打开的那一行、滚动位置按「范围 + 筛选」分别记。
+ */
+describe("手机对话页：返回、焦点与滚动记忆（D3、D5）", () => {
+  const path = () => screen.getByTestId("chat-location").textContent;
+  const all = [waitingMirrored, runningMirrored];
+
+  afterEach(() => window.history.replaceState(null, ""));
+
+  async function deleteOpenSession() {
+    const detail = await screen.findByTestId("mobile-session-detail");
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "stub delete" }),
+    );
+    fireEvent.click(await screen.findByTestId("delete-session-confirm"));
+  }
+  function stubDelete() {
+    const listApi = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (p, init) => {
+      if (p === "/v1/saved-sessions/delete") return {};
+      return listApi(p, init);
+    });
+  }
+
+  it("删除从列表打开的对话：回到列表且不留重复历史，系统返回直达更早一页", async () => {
+    stubApi([waitingMirrored]);
+    stubDelete();
+    renderChat("/chat?axis=agent", "/start");
+
+    fireEvent.click(await screen.findByRole("link", { name: /等你批/ }));
+    await deleteOpenSession();
+    await waitFor(() => expect(path()).toBe("/chat?axis=agent"));
+
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() => expect(path()).toBe("/start"));
+  });
+
+  it("删除确认 sheet 开着时系统返回只关 sheet：留在这条对话，什么都没删", async () => {
+    stubApi([waitingMirrored]);
+    stubDelete();
+    renderChat("/chat?axis=agent", "/start");
+
+    fireEvent.click(await screen.findByRole("link", { name: /等你批/ }));
+    const detail = await screen.findByTestId("mobile-session-detail");
+    const opened = path();
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "stub delete" }),
+    );
+    await screen.findByTestId("delete-session-confirm");
+
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("delete-session-confirm")).toBeNull(),
+    );
+    expect(path()).toBe(opened);
+    expect(mockedApi).not.toHaveBeenCalledWith(
+      "/v1/saved-sessions/delete",
+      expect.anything(),
+    );
+  });
+
+  it("深链打开的对话（它就是唯一一项）删除后以替换回列表，系统返回回到进来之前", async () => {
+    stubApi([waitingMirrored]);
+    stubDelete();
+    renderChat("/chat/42?axis=agent", "/start");
+
+    await deleteOpenSession();
+    await waitFor(() => expect(path()).toBe("/chat?axis=agent"));
+
+    fireEvent.click(screen.getByTestId("history-back"));
+    await waitFor(() => expect(path()).toBe("/start"));
+  });
+
+  function renderWithDrawer(entries: string[]) {
+    return render(
+      <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+        <ThemeProvider>
+          <MobileDrawerProvider value={{ open: () => {} }}>
+            <LocationProbe />
+            <Routes>
+              <Route path="/chat/:conversationId?" element={<Chat />} />
+              <Route path="/devices/:id" element={<p>device page</p>} />
+            </Routes>
+          </MobileDrawerProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("从设备进的单台机器对话页：页头是 ‹ 不是 ☰，按下回设备（有上一处就退一步）", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    window.history.replaceState({ idx: 1 }, "");
+    renderWithDrawer(["/devices/1", "/chat?axis=machine&machine=1"]);
+
+    const head = await screen.findByTestId("chat-mobile-header");
+    expect(
+      within(head).queryByRole("button", { name: "Open menu" }),
+    ).toBeNull();
+    fireEvent.click(within(head).getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(path()).toBe("/devices/1"));
+  });
+
+  it("没有上一处（深链）：‹ 以替换回设备详情", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderWithDrawer(["/chat?axis=machine&machine=1"]);
+
+    const head = await screen.findByTestId("chat-mobile-header");
+    fireEvent.click(within(head).getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(path()).toBe("/devices/1"));
+  });
+
+  it("从抽屉进的 /chat（含不收窄的机器轴）仍是 ☰", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderWithDrawer(["/chat?axis=machine"]);
+
+    const head = await screen.findByTestId("chat-mobile-header");
+    expect(
+      within(head).getByRole("button", { name: "Open menu" }),
+    ).toBeTruthy();
+    expect(within(head).queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  it("列表 → 详情 → 返回：焦点回到刚打开的那一行", async () => {
+    stubApi(all);
+    renderChat();
+
+    const link = await screen.findByRole("link", { name: /跑着呢/ });
+    fireEvent.click(link);
+    await screen.findByTestId("mobile-session-detail");
+    fireEvent.click(screen.getByTestId("history-back"));
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("link", { name: /跑着呢/ }),
+      ),
+    );
+  });
+
+  it("滚动位置按「范围 + 筛选」分别记：全部滚到 300，切到「进行中」再切回仍是 300", async () => {
+    stubApi(all);
+    renderChat("/chat?axis=agent");
+
+    await screen.findByText("等你批");
+    const list = screen.getByTestId("chat-phone-list");
+    list.scrollTop = 300;
+    fireEvent.scroll(list);
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("filter-chip-running").getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    expect(list.scrollTop).toBe(0);
+    list.scrollTop = 40;
+    fireEvent.scroll(list);
+
+    fireEvent.click(screen.getByTestId("filter-chip-all"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("filter-chip-all").getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    expect(list.scrollTop).toBe(300);
   });
 });

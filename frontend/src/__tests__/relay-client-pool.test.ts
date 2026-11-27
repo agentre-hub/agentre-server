@@ -64,6 +64,7 @@ class FakeClient {
     this.closed++;
   }
   state = "connecting";
+  nextRetryAt: number | null = null;
 }
 
 const ticket: RelayTicket = {
@@ -331,6 +332,33 @@ describe("RelayClientPool", () => {
       false,
     );
     expect(built).toHaveLength(0);
+  });
+
+  /*
+    换连接的那张票由连接自己的 refreshCredentials 去取（它取票期间说「连接中」、
+    401 时转登出态）。池子在它之前另取一张，401 就落在了连接看不见的地方。
+  */
+  it("reconnect 不在连接之外另取一张票", async () => {
+    const { pool, tickets } = setup();
+    await pool.acquire(FP1);
+    expect(tickets).toHaveBeenCalledTimes(1);
+
+    await pool.reconnect(FP1);
+
+    expect(tickets).toHaveBeenCalledTimes(1);
+  });
+
+  it("下一次自动重试的时刻扇出给每个监听者，后来的人借到时当场补一遍", async () => {
+    const { pool, built } = setup();
+    const first = vi.fn();
+    await pool.acquire(FP1, { onNextRetryAt: first });
+    built[0].nextRetryAt = 1_700_000_001_000;
+    built[0].opts.onNextRetryAt?.(1_700_000_001_000);
+    expect(first).toHaveBeenLastCalledWith(1_700_000_001_000);
+
+    const late = vi.fn();
+    await pool.acquire(FP1, { onNextRetryAt: late });
+    expect(late).toHaveBeenLastCalledWith(1_700_000_001_000);
   });
 
   it("closeAll 收掉全部通道与那条连接（登出）", async () => {
@@ -652,6 +680,21 @@ describe("RelayClientPool", () => {
       await pool.acquire(FP1);
       sockets[0].state = "reconnecting";
 
+      expect(pool.isResuming()).toBe(false);
+      pool.closeAll();
+    });
+
+    // 登出是终态：回到前台 / 网络恢复都不该再去取票，那只会再拿一次 401。
+    it("连接已登出时回到前台不重连", async () => {
+      const { pool, sockets } = setup();
+      await pool.acquire(FP1);
+      sockets[0].state = "signedOut";
+
+      becomeVisible();
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sockets[0].reconnects).toBe(0);
       expect(pool.isResuming()).toBe(false);
       pool.closeAll();
     });

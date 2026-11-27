@@ -19,6 +19,7 @@ import {
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
 import { turnDoneFrames } from "@/components/session/turnDone";
+import { useRetryOnRecovery } from "@/hooks/use-retry-on-recovery";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { applyDurableFrames, type RelayClient } from "@/lib/relayClient";
 
@@ -541,6 +542,10 @@ export function useTranscriptScrollback({
     setEarlier((p) => ({ ...p, capped: false, failed: false }));
     void loadEarlier();
   }, [loadEarlier]);
+
+  // 网络恢复 / 回前台 / 通道重连时，往回读失败的那一页自己再读一次（规格 2026-11-25
+  // K3）。与手点「重试」同一个动作；没失败、或正在读时不动。
+  useRetryOnRecovery(earlier.failed && !earlier.loading, retryEarlier);
 
   return {
     scrollRef,

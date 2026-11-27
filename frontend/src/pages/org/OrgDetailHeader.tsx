@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import {
   Button,
@@ -35,7 +36,10 @@ import {
   PhoneHeaderButton,
   PhonePageHeader,
 } from "@/components/PhonePageHeader";
+import { useBackDismissOpen } from "@/hooks/use-back-dismiss";
 import { formatRelativeTime } from "@/lib/sessionView";
+import { transportFailureText } from "@/lib/writeFailure";
+import { useIsMobile } from "@/components/use-is-mobile";
 
 /**
  * `⋮` 里的一项。
@@ -71,6 +75,40 @@ export interface OrgSaveController {
   retry: () => void;
 }
 
+/** 服务端给的业务原因照旧原样；传输层失败的英文诊断换成当前语言的一句话（F5、G2）。 */
+function saveFailureText(e: unknown, fallback: string): string {
+  return (
+    transportFailureText(e) ??
+    (e instanceof Error && e.message ? e.message : fallback)
+  );
+}
+
+/**
+ * 详情已经卸载之后才落定的保存失败：页头不在了，在顶部说出来，「重试」拿同一个动作
+ * （同一份文字）再存一次，再失败再说。
+ */
+function notifyFailedAfterLeave(
+  action: () => Promise<unknown>,
+  message: string,
+  copy: { title: string; retry: string; fallback: string },
+): void {
+  toast.error(copy.title, {
+    description: message,
+    action: {
+      label: copy.retry,
+      onClick: () => {
+        void action().catch((e: unknown) =>
+          notifyFailedAfterLeave(
+            action,
+            saveFailureText(e, copy.fallback),
+            copy,
+          ),
+        );
+      },
+    },
+  });
+}
+
 export function useOrgSaveState(): OrgSaveController {
   const { t } = useTranslation();
   const [state, setState] = React.useState<OrgSaveState>({ kind: "idle" });
@@ -82,9 +120,26 @@ export function useOrgSaveState(): OrgSaveController {
   // 兜底文案随语言变，但 run 必须保持稳定身份（retry 存的是动作本身）：走 ref，
   // 并在 layout effect 里同步——渲染期写 ref 是 react-hooks/refs 明令禁止的。
   const fallbackRef = React.useRef("");
+  const leftCopyRef = React.useRef({ title: "", retry: "" });
   React.useLayoutEffect(() => {
     fallbackRef.current = t("org.errors.generic");
+    leftCopyRef.current = {
+      title: t("org.detail.header.saveFailedAfterLeave"),
+      retry: t("org.detail.header.retry"),
+    };
   });
+  /*
+    离开即存（F4）的那一次是在详情卸载时派发的：它失败时页头已经不在了，失败只记在
+    这份 state 里就等于静默丢掉用户刚写的字。卸载之后的失败改在顶部出声，「重试」
+    拿同一个动作（同一份文字）再存一次。
+  */
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const run = React.useCallback(
     (action: () => Promise<unknown>, key: string) => {
@@ -95,11 +150,16 @@ export function useOrgSaveState(): OrgSaveController {
           await action();
           failedRef.current.delete(key);
         } catch (e) {
-          failedRef.current.set(key, {
-            action,
-            message:
-              e instanceof Error && e.message ? e.message : fallbackRef.current,
-          });
+          // 服务端给的业务原因照旧原样；超时、非 JSON、断网这类传输层失败的原文是
+          // 英文诊断，换成当前语言的一句话（F5、G2）。
+          const message = saveFailureText(e, fallbackRef.current);
+          failedRef.current.set(key, { action, message });
+          if (!mountedRef.current) {
+            notifyFailedAfterLeave(action, message, {
+              ...leftCopyRef.current,
+              fallback: fallbackRef.current,
+            });
+          }
         }
         pendingRef.current -= 1;
         if (pendingRef.current > 0) return;
@@ -130,6 +190,7 @@ function SaveStatus({
   onRetry: () => void;
 }) {
   const { t, i18n } = useTranslation();
+  const isMobile = useIsMobile();
   // 「刚刚 / 2 分钟前」要自己往前走，所以「现在几点」是一份 state 而不是渲染期
   // 现算的 Date.now()（后者既是不纯函数，也永远停在挂载那一刻的说法上）。
   // 初值 0 落在「刚刚」那一档，正好是刚存完的实情。
@@ -191,7 +252,8 @@ function SaveStatus({
           <Button
             variant="outline"
             size="xs"
-            className="shrink-0"
+            // 手机上点按区 44px（规格「重试」按钮 44px）；桌面保持紧凑。
+            className={isMobile ? "min-h-11 shrink-0 px-4" : "shrink-0"}
             onClick={onRetry}
           >
             {t("org.detail.header.retry")}
@@ -245,9 +307,11 @@ function OverflowMenu({
   touch?: boolean;
 }) {
   const { t } = useTranslation();
+  // 手机上它是浮层：系统返回先关菜单、停在原页（D1）。
+  const menu = useBackDismissOpen();
   if (items.length === 0) return null;
   return (
-    <DropdownMenu>
+    <DropdownMenu {...menu}>
       <DropdownMenuTrigger asChild>
         {touch ? (
           <PhoneHeaderButton

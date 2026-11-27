@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"context"
 	"embed"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/server/mux"
 	"github.com/gin-gonic/gin"
@@ -39,7 +41,7 @@ func newNoRouteHandler() (gin.HandlerFunc, error) {
 // make prepare-web-dist 造的那份 15 字节占位。
 func newNoRouteHandlerFS(sub fs.FS) (gin.HandlerFunc, error) {
 	fileSrv := http.FileServer(http.FS(sub))
-	gzipped, err := precompress(sub)
+	compressedCopies, err := precompress(sub)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +61,7 @@ func newNoRouteHandlerFS(sub fs.FS) (gin.HandlerFunc, error) {
 			if ctype := contentTypeFor(path); ctype != "" {
 				c.Writer.Header().Set("Content-Type", ctype)
 			}
-			if serveGzipped(c, gzipped, path) {
+			if serveCompressed(c, compressedCopies, path) {
 				return
 			}
 			fileSrv.ServeHTTP(c.Writer, c.Request)
@@ -123,13 +125,22 @@ func setCacheHeaders(c *gin.Context, path string) {
 	c.Writer.Header().Set("Cache-Control", revalidateCacheControl)
 }
 
-// precompress 在构造时把可压缩的产物各 gzip 一份留在内存里。
+// brotliLevel 取 6：启动时一次性压整个 bundle，11（最大）对 2MB 级 JS 要几秒到十几秒，
+// 而 6 的体积已明显小于 gzip -9，耗时在百毫秒量级。
+const brotliLevel = 6
+
+// compressed 是同一份产物的预压缩副本；某一种压完不比原文小就留空。
+type compressed struct {
+	gzip, br []byte
+}
+
+// precompress 在构造时把可压缩的产物各压一份 gzip 与 brotli 留在内存里。
 //
 // dist 是编译期就固定的，压一次就够：既不用为每个请求烧 CPU，也不必引入流式压缩
-// 中间件。代价是常驻内存多一份压缩副本 —— 真实产物压完是几百 KB 量级，换掉的是
+// 中间件。代价是常驻内存多两份压缩副本 —— 真实产物压完是几百 KB 量级，换掉的是
 // 每次页面加载几 MB 的出网流量。
-func precompress(sub fs.FS) (map[string][]byte, error) {
-	out := map[string][]byte{}
+func precompress(sub fs.FS) (map[string]compressed, error) {
+	out := map[string]compressed{}
 	err := fs.WalkDir(sub, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -141,22 +152,31 @@ func precompress(sub fs.FS) (map[string][]byte, error) {
 		if err != nil {
 			return err
 		}
-		var buf bytes.Buffer
-		zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		var gz, br bytes.Buffer
+		zw, err := gzip.NewWriterLevel(&gz, gzip.BestCompression)
 		if err != nil {
 			return err
 		}
-		if _, err := zw.Write(raw); err != nil {
-			return err
-		}
-		if err := zw.Close(); err != nil {
-			return err
+		bw := brotli.NewWriterLevel(&br, brotliLevel)
+		for _, w := range []io.WriteCloser{zw, bw} {
+			if _, err := w.Write(raw); err != nil {
+				return err
+			}
+			if err := w.Close(); err != nil {
+				return err
+			}
 		}
 		// 压完反而更大就别要了（极小的文件会这样）。
-		if buf.Len() >= len(raw) {
-			return nil
+		var c compressed
+		if gz.Len() < len(raw) {
+			c.gzip = gz.Bytes()
 		}
-		out["/"+name] = buf.Bytes()
+		if br.Len() < len(raw) {
+			c.br = br.Bytes()
+		}
+		if c.gzip != nil || c.br != nil {
+			out["/"+name] = c
+		}
 		return nil
 	})
 	if err != nil {
@@ -176,10 +196,15 @@ func compressibleExt(ext string) bool {
 	}
 }
 
-// serveGzipped 发压缩副本；没有副本或客户端不接受 gzip 时返回 false 交回原路径。
-func serveGzipped(c *gin.Context, gzipped map[string][]byte, path string) bool {
-	body, ok := gzipped[path]
-	if !ok || !acceptsGzip(c.Request.Header.Get("Accept-Encoding")) {
+// serveCompressed 按 Accept-Encoding 发 brotli 或 gzip 副本；没有副本或客户端都不接受时
+// 返回 false 交回原路径。
+func serveCompressed(c *gin.Context, copies map[string]compressed, path string) bool {
+	cp, ok := copies[path]
+	if !ok {
+		return false
+	}
+	encoding, body := pickEncoding(c.Request.Header.Get("Accept-Encoding"), cp)
+	if body == nil {
 		return false
 	}
 	header := c.Writer.Header()
@@ -188,29 +213,52 @@ func serveGzipped(c *gin.Context, gzipped map[string][]byte, path string) bool {
 	if ctype := contentTypeFor(path); ctype != "" {
 		header.Set("Content-Type", ctype)
 	}
-	header.Set("Content-Encoding", "gzip")
+	header.Set("Content-Encoding", encoding)
 	header.Set("Content-Length", strconv.Itoa(len(body)))
 	c.Writer.WriteHeader(http.StatusOK)
 	_, _ = c.Writer.Write(body)
 	return true
 }
 
-// acceptsGzip 判定 Accept-Encoding 里有没有 gzip，并尊重显式的 q=0（"我不要 gzip"）。
-func acceptsGzip(header string) bool {
+// pickEncoding 在客户端接受且有副本的编码里挑一个：q 值高者优先，同 q 取 br。
+func pickEncoding(header string, cp compressed) (string, []byte) {
+	brQ, gzQ := 0.0, 0.0
+	if cp.br != nil {
+		brQ = encodingQ(header, "br")
+	}
+	if cp.gzip != nil {
+		gzQ = encodingQ(header, "gzip")
+	}
+	switch {
+	case brQ > 0 && brQ >= gzQ:
+		return "br", cp.br
+	case gzQ > 0:
+		return "gzip", cp.gzip
+	default:
+		return "", nil
+	}
+}
+
+// encodingQ 取 Accept-Encoding 里某个编码的 q 值：没列出是 0，列出但没写 q 是 1，
+// 显式 q=0 表示「我不要」。q 写坏了按 1 处理，不因对端的小瑕疵丢掉压缩。
+func encodingQ(header, name string) float64 {
 	for _, part := range strings.Split(header, ",") {
 		fields := strings.Split(strings.TrimSpace(part), ";")
-		if !strings.EqualFold(strings.TrimSpace(fields[0]), "gzip") {
+		if !strings.EqualFold(strings.TrimSpace(fields[0]), name) {
 			continue
 		}
 		for _, param := range fields[1:] {
-			param = strings.TrimSpace(param)
-			if strings.HasPrefix(param, "q=") && strings.TrimPrefix(param, "q=") == "0" {
-				return false
+			k, v, _ := strings.Cut(strings.TrimSpace(param), "=")
+			if !strings.EqualFold(strings.TrimSpace(k), "q") {
+				continue
+			}
+			if q, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && q >= 0 && q <= 1 {
+				return q
 			}
 		}
-		return true
+		return 1
 	}
-	return false
+	return 0
 }
 
 // MountSPA 把 dist 内容挂在根路径；非 /v1/* 路径 fallback 到 index.html。

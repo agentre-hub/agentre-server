@@ -1,3 +1,4 @@
+import type * as React from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -10,6 +11,8 @@ import {
   type ProjectSettingsPorts,
   type ProjectSettingsView,
 } from "@agentre-hub/agentre-ui";
+
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 // 图标清单在共享包里（项目的 icon 与部门 / Agent 的 avatar_icon 存的是同一串
 // key）；本站留的是这个选择器的渲染，所以包收的是画好的东西。
 
@@ -24,8 +27,12 @@ export interface ProjectCreateDialogState {
   parent: { syncId: string; name: string } | null | false;
   parentOptions: ParentOption[];
   ports: ProjectCreatePorts;
+  /** 新建超时后的「刷新看看」：找到返回项目 id，确定没有返回 null（F5）。 */
+  onTimeoutRecheck?: React.ComponentProps<
+    typeof ProjectCreateDialog
+  >["onTimeoutRecheck"];
   close: () => void;
-  onCreated: () => void;
+  onCreated: (projectId?: string) => void;
 }
 
 export interface ProjectSettingsDialogState {
@@ -63,6 +70,10 @@ export function ProjectDialogs({
   deletion,
 }: ProjectDialogsProps) {
   const { t } = useTranslation();
+  // 三个弹窗在手机上都是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(create.parent !== false, create.close);
+  useBackDismiss(settings.project !== null, settings.close);
+  useBackDismiss(deletion.project !== null, deletion.close);
 
   return (
     <>
@@ -76,7 +87,8 @@ export function ProjectDialogs({
           initialParentId={create.parent?.syncId}
           parentName={create.parent?.name}
           ports={create.ports}
-          onCreated={() => create.onCreated()}
+          onTimeoutRecheck={create.onTimeoutRecheck}
+          onCreated={(id) => create.onCreated(id)}
         />
       )}
 

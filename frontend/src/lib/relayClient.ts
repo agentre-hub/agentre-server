@@ -44,10 +44,11 @@ import { base64Encode } from "@bufbuild/protobuf/wire";
 
 import { RedialTimer } from "@/lib/redialTimer";
 import { backoffDelay } from "@/lib/relayBackoff";
-import type {
-  RelayChannelHandle,
-  RelayConnection,
-  RelayState,
+import {
+  isSignedOutError,
+  type RelayChannelHandle,
+  type RelayConnection,
+  type RelayState,
 } from "@/lib/relayConnection";
 
 export type { RelayState } from "@/lib/relayConnection";
@@ -67,6 +68,19 @@ export class RelayError extends Error {
    * 断开 / 关闭共用，那几种**可能已送达**；只有带这个记号的才能对用户说「重发是干净的」。
    */
   notSent = false;
+
+  /**
+   * 等应答超时：帧已经交出去、一直没等到回执（可能已送达）。认它靠这个记号，不靠消息
+   * 文字——那句是给诊断看的，改一个字就会让各处的超时判定悄悄失效。
+   */
+  timedOut = false;
+}
+
+/** 造一个「等应答超时」的 RelayError，记号与码在一处定下。 */
+export function relayRequestTimeoutError(): RelayError {
+  const err = new RelayError(-1, "relay: 请求超时", null);
+  err.timedOut = true;
+  return err;
 }
 
 /** 造一个「没发出去」的 RelayError，记号与码在一处定下。 */
@@ -161,7 +175,39 @@ export interface RelayClientOptions extends NotificationHandlers {
    * 而不是继续画那个承诺「会自己回来」的转圈。
    */
   onHandshakeRejected?: (detail: string) => void;
+  /**
+   * 下一次自动重试（重拨连接 / 重做握手 / 重开通道）排在哪个时刻（Unix 毫秒）；
+   * 没排着时是 null。只在变了的时候调用。界面据此画「下次自动重试 N 秒后」。
+   */
+  onNextRetryAt?: (at: number | null) => void;
 }
+
+/** 单次请求的选项。 */
+export interface RelayRequestOptions {
+  signal?: AbortSignal;
+  /**
+   * 这一条等应答的上限，默认 RequestTimeoutMs。一帧要传很久的请求（大图上传）用它
+   * 放宽，免得一次正在进行的上传被判成超时。
+   */
+  timeoutMs?: number;
+  /**
+   * 这一帧往外传的进度（规格 2026-11-25 决策 C4）。写出那一刻报一次，此后随 socket
+   * 缓冲排空推进，`sent === total` 那一次是最后一次。连接报不出缓冲时写出即报满。
+   *
+   * 传了它，这条请求还多一层判据：帧还没发完时 socket 自己断了，对端不可能收到整帧，
+   * 落定成「还没发出去」（`notSent`），而不是「可能已送达」。
+   */
+  onUpload?: (progress: UploadProgress) => void;
+}
+
+/** 一帧已经交给网络的字节与它的总字节（含信封）。 */
+export interface UploadProgress {
+  sent: number;
+  total: number;
+}
+
+/** 上传进度多久看一次缓冲。 */
+const UploadPollMs = 100;
 
 /**
  * 服务端判死一条虚拟通道时给的码里，**下一秒就可能不成立**的那两个（
@@ -194,17 +240,28 @@ export const TransientChannelCodes = new Set([-32011, -32012]);
  */
 export const RequestTimeoutMs = 30_000;
 
-/** RelayClient 用得到的那一小块连接能力（ISP）。 */
+/**
+ * RelayClient 用得到的那一小块连接能力（ISP）。后两项可选：不提供的替身按「没有
+ * 排着的重拨、不判死连接」处理。
+ */
 export type RelayConnectionLike = Pick<
   RelayConnection,
   "state" | "connect" | "openChannel"
->;
+> &
+  Partial<
+    Pick<
+      RelayConnection,
+      "nextRetryAt" | "noteRequestTimeout" | "bufferedAmount" | "bytesWritten"
+    >
+  >;
 
 interface PendingRequest {
   method: AnyRpcMethod;
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   cleanup?: () => void;
+  /** 这一帧还有多少字节没交给网络（只有带 onUpload 的请求有）。 */
+  unsent?: () => number;
 }
 
 /**
@@ -256,6 +313,8 @@ export class RelayClient {
   private sessions = new Map<string, SessionState>();
   private closedByUser = false;
   private authenticating: Promise<void> | null = null;
+  /** 正在飞的那一次握手，见 handshake。 */
+  private handshaking: Promise<void> | null = null;
   private currentState: RelayState = "disconnected";
   /** 握手连着失败了几次。重试按它指数退让。 */
   private handshakeFailures = 0;
@@ -272,6 +331,12 @@ export class RelayClient {
   private channelFailures = 0;
   /** 排着的那一次重开通道，见 scheduleChannelReopen。 */
   private readonly channelRetry = new RedialTimer();
+  /** 这条通道自己排着的那次重试（握手 / 重开）在哪个时刻。 */
+  private ownRetryAt: number | null = null;
+  /** 连接那一层排着的重拨在哪个时刻，由通道的 onNextRetryAt 交上来。 */
+  private connectionRetryAt: number | null = null;
+  /** 对外报过的那个值，见 nextRetryAt。 */
+  private publishedRetryAt: number | null = null;
 
   constructor(opts: RelayClientOptions) {
     this.opts = opts;
@@ -302,6 +367,28 @@ export class RelayClient {
     return this.currentState;
   }
 
+  /**
+   * 下一次自动重试排在哪个时刻（Unix 毫秒）；没排着时是 null。
+   *
+   * 连接在重拨时报连接那一次（它没连上，通道自己的重试无从谈起）；连接连着时报
+   * 这条通道自己排着的握手重试 / 重开。
+   */
+  get nextRetryAt(): number | null {
+    return this.publishedRetryAt;
+  }
+
+  private setOwnRetryAt(at: number | null): void {
+    this.ownRetryAt = at;
+    this.publishRetryAt();
+  }
+
+  private publishRetryAt(): void {
+    const at = this.connectionRetryAt ?? this.ownRetryAt;
+    if (at === this.publishedRetryAt) return;
+    this.publishedRetryAt = at;
+    this.opts.onNextRetryAt?.(at);
+  }
+
   private setState(state: RelayState): void {
     if (state === this.currentState) return;
     this.currentState = state;
@@ -314,15 +401,27 @@ export class RelayClient {
    * 「connected」只在握手成功后才对外暴露,connect() 也只在此时 resolve;消费者的
    * session.* 请求因此必然晚于握手完成,不会抢在 auth.account 之前到达 daemon 被
    * Unauthorized 拒掉(实测竞态)。
+   *
+   * 通道**先于**等连接开出来（W2）：首拨失败时 `connection.connect()` 抛出，而连接随后
+   * 自己退避重连上时只重新声明通道表里的那些。先等再开的话这一条从没进过表，页面停在
+   * 「连接中」直到刷新。先开了，它就随连接的每一次 onOpen 声明目标、重做握手。
    */
   connect(): Promise<void> {
     if (this.authenticating) return this.authenticating;
     this.closedByUser = false;
     this.setState("connecting");
+    this.openChannel();
     const run = (async () => {
-      await this.connection.connect();
+      try {
+        await this.connection.connect();
+      } catch (err) {
+        // 连接已登出时不会再来 onConnectionState：它的状态早就停在那里了。
+        if (!this.closedByUser && this.connection.state === "signedOut") {
+          this.setState("signedOut");
+        }
+        throw err;
+      }
       if (this.closedByUser) return;
-      this.openChannel();
       await this.handshake();
     })();
     this.authenticating = run;
@@ -357,9 +456,11 @@ export class RelayClient {
     this.closedByUser = true;
     this.handshakeRetry.cancel();
     this.channelRetry.cancel();
+    this.setOwnRetryAt(null);
     this.channel?.close();
     this.channel = null;
     this.authenticating = null;
+    this.handshaking = null;
     this.failPending(new RelayError(-1, "relay: 客户端已关闭", null));
     this.setState("disconnected");
   }
@@ -367,7 +468,7 @@ export class RelayClient {
   request<M extends AnyRpcMethod>(
     method: M,
     params: MessageInitShape<M["request"]>,
-    options: { signal?: AbortSignal } = {},
+    options: RelayRequestOptions = {},
   ): Promise<MessageShape<M["response"]>> {
     const id = this.nextId++;
     return new Promise<MessageShape<M["response"]>>((resolve, reject) => {
@@ -397,26 +498,84 @@ export class RelayClient {
         } catch {
           // 通道此刻就没了：取消无处可发，而这条请求照样要落定。
         }
-        reject(new RelayError(-1, "relay: 请求超时", null));
-      }, RequestTimeoutMs);
-      this.pending.set(String(id), {
+        reject(relayRequestTimeoutError());
+        // 连着两次等不到应答，连接据此判这条 socket 已死、换一条（E3）。
+        this.connection.noteRequestTimeout?.();
+      }, options.timeoutMs ?? RequestTimeoutMs);
+      let poll: ReturnType<typeof setInterval> | undefined;
+      const entry: PendingRequest = {
         method,
         resolve: resolve as (value: unknown) => void,
         reject,
         cleanup: () => {
           clearTimeout(expire);
+          clearInterval(poll);
           options.signal?.removeEventListener("abort", abort);
         },
-      });
+      };
+      this.pending.set(String(id), entry);
+      const startedAt = this.connection.bytesWritten ?? 0;
+      let frame: Uint8Array;
       try {
-        this.sendBytes(encodeRpcMethodRequest(id, method, params));
+        frame = encodeRpcMethodRequest(id, method, params);
+        this.sendBytes(frame);
       } catch (err) {
         this.pending.delete(String(id));
         clearTimeout(expire);
         options.signal?.removeEventListener("abort", abort);
         reject(err);
+        return;
+      }
+      if (options.onUpload) {
+        poll = this.trackUpload(
+          entry,
+          startedAt,
+          frame.byteLength,
+          options.onUpload,
+        );
       }
     });
+  }
+
+  /**
+   * 跟着 socket 缓冲看这一帧出门了多少。缓冲先进先出：这一帧之后写进去的字节排在它
+   * 后面，所以「它还剩多少」= 缓冲里扣掉后来那些，再夹在 [0, 总数] 之间。
+   *
+   * 返回轮询的句柄（报满或请求落定时停）。
+   */
+  private trackUpload(
+    entry: PendingRequest,
+    startedAt: number,
+    frameBytes: number,
+    onUpload: (progress: UploadProgress) => void,
+  ): ReturnType<typeof setInterval> | undefined {
+    const conn = this.connection;
+    const endedAt = conn.bytesWritten;
+    if (endedAt === undefined || conn.bufferedAmount === undefined) {
+      // 报不出缓冲：写出即报满，也就说不出「没发完」。
+      onUpload({ sent: frameBytes, total: frameBytes });
+      return undefined;
+    }
+    const total = endedAt - startedAt;
+    const unsent = () => {
+      const after = (conn.bytesWritten ?? endedAt) - endedAt;
+      return Math.min(total, Math.max(0, (conn.bufferedAmount ?? 0) - after));
+    };
+    entry.unsent = unsent;
+    let last = -1;
+    const report = (): boolean => {
+      const sent = total - unsent();
+      if (sent !== last) {
+        last = sent;
+        onUpload({ sent, total });
+      }
+      return sent >= total;
+    };
+    if (report()) return undefined;
+    const poll = setInterval(() => {
+      if (report()) clearInterval(poll);
+    }, UploadPollMs);
+    return poll;
   }
 
   /**
@@ -625,6 +784,9 @@ export class RelayClient {
   /** 开这条客户端自己那条通道，并把目标声明出去。 */
   private openChannel(): void {
     if (this.channel) return;
+    // 通道开出来之前连接就可能已经排着重拨了：那一下的事件这条通道没听见。
+    this.connectionRetryAt = this.connection.nextRetryAt ?? null;
+    this.publishRetryAt();
     this.channel = this.connection.openChannel(this.opts.target, {
       // 每一次（重）连：新 socket 上服务端认不得旧通道，握手要重做，关注的对话
       // 要按游标补齐。
@@ -632,6 +794,10 @@ export class RelayClient {
       onFrame: (payload) => this.handleMessage(payload),
       onClose: () => this.handleChannelClosed(),
       onConnectionState: (state) => this.handleConnectionState(state),
+      onNextRetryAt: (at) => {
+        this.connectionRetryAt = at;
+        this.publishRetryAt();
+      },
     });
   }
 
@@ -650,14 +816,35 @@ export class RelayClient {
    * 还是同一句话。那一档不排重试，也不置 `reconnecting`——那个状态对页面的承诺正是
    * 「有人正在重试」。落到 `disconnected`（「连过又放弃了」），并把对端那句说明单独
    * 交出去：它写着两边各自的版本窗口，是这一屏唯一说得出「该去更新哪一头」的东西。
+   *
+   * 单飞：通道先于连接开出来之后，socket 一 open，通道的 onOpen 与 `connect()` 等到的
+   * 那一下会同时要求握手——各握一次就是两次 auth.account。
    */
-  private async handshake(): Promise<void> {
+  private handshake(): Promise<void> {
+    if (this.handshaking) return this.handshaking;
+    const run = this.handshakeOnce();
+    this.handshaking = run;
+    const settle = () => {
+      if (this.handshaking === run) this.handshaking = null;
+    };
+    run.then(settle, settle);
+    return run;
+  }
+
+  private async handshakeOnce(): Promise<void> {
     try {
       await this.authenticate();
     } catch (err) {
       if (err instanceof RelayError && err.code === ErrCodeProtocolVersion) {
         this.setState("disconnected");
         this.opts.onHandshakeRejected?.(err.message);
+        throw err;
+      }
+      // 现取凭据时 401：会话已登出，重试只会再拿一次 401。
+      if (isSignedOutError(err)) {
+        this.handshakeRetry.cancel();
+        this.setOwnRetryAt(null);
+        this.setState("signedOut");
         throw err;
       }
       this.setState("reconnecting");
@@ -669,6 +856,7 @@ export class RelayClient {
     this.handshakeFailures = 0;
     // 通道开回来了：下一次判死重新从最短的那一档退让起。
     this.channelFailures = 0;
+    this.setOwnRetryAt(null);
     this.setState("connected");
     for (const st of [...this.sessions.values()].filter((s) => s.watched)) {
       try {
@@ -684,27 +872,39 @@ export class RelayClient {
    * `connect()` 的调用方和通道的 onOpen 看见是常态，各排一次就是两串重试。
    */
   private scheduleHandshakeRetry(): void {
-    if (this.closedByUser || !this.channel) return;
+    if (this.closedByUser || !this.channel || this.handshakeRetry.pending) {
+      return;
+    }
     const delay = backoffDelay(this.handshakeFailures, {
       baseMs: 1000,
       capMs: 30_000,
     });
     this.handshakeFailures += 1;
     this.handshakeRetry.schedule(delay, () => {
+      this.setOwnRetryAt(null);
       if (this.closedByUser || !this.channel) return;
       void this.handshake().catch(() => {});
     });
+    this.setOwnRetryAt(Date.now() + delay);
   }
 
   private handleConnectionState(state: RelayState): void {
     if (this.closedByUser) return;
     // "connected" 由握手那一步自己说：连接建立 ≠ 这条通道可用。
     if (state === "connected") return;
+    // 断掉的 socket 上那次握手作废：新 socket 的 onOpen 要的是一次新的。
+    this.handshaking = null;
+    if (state === "signedOut") {
+      // 终态：通道自己排着的重试同样作废。
+      this.handshakeRetry.cancel();
+      this.channelRetry.cancel();
+      this.setOwnRetryAt(null);
+    }
     for (const st of this.sessions.values()) {
       st.attached = null;
       st.attaching = null;
     }
-    this.failPending(new RelayError(-1, "relay: 连接已断开", null));
+    this.failPending(new RelayError(-1, "relay: 连接已断开", null), true);
     this.setState(state);
   }
 
@@ -726,7 +926,9 @@ export class RelayClient {
   private handleChannelClosed(): void {
     // 通道没了，重做握手无处可发：这一路的出路是 reopen（把通道开回来），不是重试。
     this.handshakeRetry.cancel();
+    this.setOwnRetryAt(null);
     this.channel = null;
+    this.handshaking = null;
     for (const st of this.sessions.values()) {
       st.attached = null;
       st.attaching = null;
@@ -751,17 +953,19 @@ export class RelayClient {
    * 用户就在屏幕前。
    */
   private scheduleChannelReopen(): void {
-    if (this.closedByUser) return;
+    if (this.closedByUser || this.channelRetry.pending) return;
     const delay = backoffDelay(this.channelFailures, {
       baseMs: 1000,
       capMs: 30_000,
     });
     this.channelFailures += 1;
     this.channelRetry.schedule(delay, () => {
+      this.setOwnRetryAt(null);
       // 这段时间里用户自己点过「重新连接」、或整只客户端被收掉了：别再开一条。
       if (this.closedByUser || this.channel) return;
       void this.reopen().catch(() => {});
     });
+    this.setOwnRetryAt(Date.now() + delay);
   }
 
   private sendBytes(bytes: Uint8Array): void {
@@ -896,10 +1100,16 @@ export class RelayClient {
     if (frame) this.dispatchNotification(frame, st, n.createtime ?? 0, true);
   }
 
-  private failPending(err: RelayError): void {
+  /**
+   * 让所有在飞的请求落定。`socketLost` = 连接断了：那时还有字节没交给网络的那一帧，
+   * 对端不可能收到整帧，确定「还没发出去」（规格 2026-11-25 决策 C4）。
+   */
+  private failPending(err: RelayError, socketLost = false): void {
     for (const [, entry] of this.pending) {
+      // 先判再收尾：收尾会停掉那只轮询，判据本身不受影响，但顺序与语义一致。
+      const neverLeft = socketLost && (entry.unsent?.() ?? 0) > 0;
       entry.cleanup?.();
-      entry.reject(err);
+      entry.reject(neverLeft ? notSentError(err) : err);
     }
     this.pending.clear();
   }

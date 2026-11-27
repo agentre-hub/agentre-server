@@ -1,4 +1,5 @@
 import { attentionReasonOf, toAgentStatus } from "@/lib/attentionAdapter";
+import { isEmptyDraft, type Draft } from "@/lib/drafts";
 import type { SessionFilter } from "@/lib/sessionView";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 
@@ -70,4 +71,41 @@ export function startOfToday(now: number): number {
   const at = new Date(now);
   at.setHours(0, 0, 0, 0);
   return at.getTime();
+}
+
+/** 排着队、还没发出去的一条（任务「排队与失败消息跟着对话保存」填它）。 */
+export interface PendingSend {
+  text: string;
+}
+
+export type RowSubline = {
+  kind: "pending" | "draft" | "content";
+  /** pending / draft：消息的首个非空行（只有图时为空串）；content：原样。 */
+  text: string;
+};
+
+/** 首个非空行，去首尾空白；全空时为空串。 */
+function firstLine(text: string): string {
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+/**
+ * 手机首页行的副行（规格 2026-11-25 C1/C2）：「待发送」＞「[草稿]」＞ 内容。
+ * 前缀文案（红色「[草稿]」等）归界面，这里只判哪一档、取哪一行字。
+ */
+export function rowSubline(
+  _row: MirrorIndexRow,
+  ctx?: { draft?: Draft; pending?: PendingSend; content?: string },
+): RowSubline {
+  if (ctx?.pending) {
+    return { kind: "pending", text: firstLine(ctx.pending.text) };
+  }
+  if (ctx?.draft && !isEmptyDraft(ctx.draft)) {
+    return { kind: "draft", text: firstLine(ctx.draft.text) };
+  }
+  return { kind: "content", text: ctx?.content ?? "" };
 }

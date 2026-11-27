@@ -268,6 +268,30 @@ export function toIssueFields(
 }
 
 /**
+ * 新建超时后，在重读的结果里认出「刚提交的那条」（规格 F5）。
+ *
+ * 规则：`sync_id` 不在提交前看板上已有的集合里，且标题（去空白）、项目、Agent 与提交
+ * 的一致。用「提交前没见过」代替「建立时间晚于提交时刻」——`created_at` 是服务端钟，
+ * 与浏览器钟的偏差会让后者误判；同名旧任务因为提交前就在板上，也不会被认错。多条同时
+ * 符合时取最新的一条（`created_at` 大者）。
+ */
+export function findSubmittedIssue(
+  issues: IssueItem[],
+  submitted: Pick<IssueFields, "title" | "project_sync_id" | "agent_sync_id">,
+  knownBefore: ReadonlySet<string>,
+): IssueItem | null {
+  const matches = issues.filter(
+    (row) =>
+      !knownBefore.has(row.sync_id) &&
+      row.title.trim() === (submitted.title ?? "").trim() &&
+      (row.project_sync_id ?? "") === (submitted.project_sync_id ?? "") &&
+      (row.agent_sync_id ?? "") === (submitted.agent_sync_id ?? ""),
+  );
+  if (matches.length === 0) return null;
+  return matches.reduce((a, b) => (b.created_at > a.created_at ? b : a));
+}
+
+/**
  * 卡片上画不画项目字形：判据是**当前范围里是否不止一个项目**。
  *
  * 范围是单个没有子项目的项目时，每张卡都画同一枚字形等于一句重复的废话；「未归属」

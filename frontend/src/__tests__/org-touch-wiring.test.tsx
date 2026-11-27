@@ -114,14 +114,16 @@ afterEach(() => {
 });
 
 describe("Agent 详情：执行目标与工具的触屏档", () => {
-  it("手机上柄与移除 44×44，授权视觉 28px，「添加执行目标」视觉 32px、点按区 44px", async () => {
+  it("手机上不画拖拽柄，授权视觉 28px，「添加执行目标」视觉 32px、点按区 44px", async () => {
     mockViewport(true);
     renderAgent();
-    const [handle] = await screen.findAllByRole("button", {
-      name: /Reorder target/,
-    });
-    expect(cls(handle)).toContain("size-11");
-    const grant = screen.getAllByRole("button", { name: /^Grant / })[0];
+    // 触屏没有拖拽也没有方向键（规格 J2）：整行不画柄。先等行画出来再断言缺席。
+    const grant = (
+      await screen.findAllByRole("button", { name: /^Grant / })
+    )[0];
+    expect(screen.queryAllByRole("button", { name: /Reorder target/ })).toEqual(
+      [],
+    );
     expect(cls(grant)).toContain("h-7");
     expect(cls(grant)).toContain("before:-inset-y-2");
     const section = document.querySelector<HTMLElement>(
@@ -152,5 +154,31 @@ describe("Agent 详情：执行目标与工具的触屏档", () => {
     });
     expect(cls(add)).toContain("h-7");
     expect(cls(add)).not.toContain("h-8");
+  });
+});
+
+describe("Agent / 部门详情：描述与系统提示词输入 16px（I3、F8）", () => {
+  it("手机上系统提示词与描述都是 16px（iOS 聚焦不放大），桌面仍是 12px", async () => {
+    mockViewport(true);
+    const { unmount } = renderAgent();
+    const prompt = await screen.findByRole("textbox", {
+      name: "System prompt",
+    });
+    expect(cls(prompt)).toContain("text-base");
+    expect(cls(prompt)).not.toContain("text-xs");
+    const description = screen.getByRole("textbox", { name: "Description" });
+    expect(cls(description)).toContain("text-base");
+    unmount();
+
+    mockViewport(false);
+    renderAgent();
+    const desktopPrompt = await screen.findByRole("textbox", {
+      name: "System prompt",
+    });
+    expect(cls(desktopPrompt)).toContain("text-xs");
+    expect(cls(desktopPrompt)).not.toContain("text-base");
+    expect(cls(screen.getByRole("textbox", { name: "Description" }))).toContain(
+      "text-xs",
+    );
   });
 });

@@ -104,11 +104,17 @@ export function PhonePageHeader({
  */
 export function PhonePage({
   header,
+  strip,
   children,
   bodyClassName,
   testId,
 }: {
   header: ReactNode;
+  /**
+   * 页头正下方的一条细带（「网络不稳定」，`IdentityUnstableStrip`），在滚动区外。宿主页
+   * 画了它就要给 `AppShell` 传 `ownStrip`，否则壳会再压一条在内容顶上。
+   */
+  strip?: ReactNode;
   children: ReactNode;
   bodyClassName?: string;
   testId?: string;
@@ -116,6 +122,7 @@ export function PhonePage({
   return (
     <div data-testid={testId} className="flex h-full min-h-0 min-w-0 flex-col">
       {header}
+      {strip}
       <div
         data-slot="phone-page-body"
         className={cn(

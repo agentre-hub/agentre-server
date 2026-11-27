@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
+import i18n from "@/i18n";
 import { lazyPage, warmPages } from "@/lib/lazyPage";
 
 /**
@@ -102,13 +103,50 @@ describe("lazyPage", () => {
     expect(await settled()).toEqual([]);
   });
 
-  it("渲染时取模块失败只留空页：不冒泡成未处理拒绝", async () => {
+  it("渲染时取模块失败不冒泡成未处理拒绝", async () => {
     const settled = watchUnhandledRejections();
     const Page = lazyPage(failingPage().load);
 
     render(<Page />);
 
     expect(await settled()).toEqual([]);
+  });
+
+  /**
+   * 规格 2026-11-25 决策 B3：分包没取到时原位说清楚，而不是留一整屏空白——那一屏
+   * 空的是整个视口（页面自己带外壳），用户只能杀掉 App 重开。
+   */
+  it("渲染时取模块失败：原位「页面没加载出来 · 重新加载」，按下才 reload", async () => {
+    await i18n.changeLanguage("zh-CN");
+    const reload = vi.fn();
+    const realLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...realLocation, reload },
+    });
+    onTestFinished(() => {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: realLocation,
+      });
+    });
+    const Page = lazyPage(failingPage().load);
+
+    render(<Page />);
+
+    expect(await screen.findByText("页面没加载出来")).toBeTruthy();
+    expect(reload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("模块还在路上时仍是空的：不先摆一个和真页面对不上的东西", () => {
+    const { load } = deferredPage("chat page");
+    const Page = lazyPage(load);
+
+    const { container } = render(<Page />);
+
+    expect(container.innerHTML).toBe("");
   });
 });
 

@@ -10,10 +10,37 @@ import {
   type PickerProvider,
   type ProviderPillState,
 } from "@agentre-hub/agentre-ui";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+
+import { useIsMobile } from "@/components/use-is-mobile";
+import { useTriggerBackDismiss } from "@/hooks/use-trigger-back-dismiss";
 
 /** 两格皆空 = 跟随 Agent 绑定。写成常量而不是就地字面量：它是一个有名字的态。 */
 const FOLLOW_AGENT: ModelTarget = { providerKey: "", modelKey: "" };
+
+const TRIGGER_TESTID = "composer-model-target";
+
+/**
+ * 模型短名（「Sonnet」）：触屏工具条上代替人形图标，一眼认出是哪个模型。
+ * 模型 ID 形如 `claude-sonnet-4-6` / `gpt-5` / `deepseek-chat`：去掉厂商路径前缀与
+ * 打头的 `claude-`，取第一段；第一段是短缩写（≤4 字母）且后面跟着版本号时把版本号接上
+ * （`gpt-5` → `GPT-5`），免得只剩一个认不出版本的 `GPT`。解析不出模型时不给，脸不变。
+ */
+function modelShortName(modelId: string): string | undefined {
+  const parts = modelId
+    .split("/")
+    .pop()!
+    .split(/[-_:\s]+/)
+    .filter(Boolean);
+  if (parts[0]?.toLowerCase() === "claude") parts.shift();
+  const head = parts[0];
+  if (!head) return undefined;
+  if (head.length <= 4 && /^\d/.test(parts[1] ?? "")) {
+    return `${head.toUpperCase()}-${parts[1]}`;
+  }
+  return head.charAt(0).toUpperCase() + head.slice(1);
+}
 
 /**
  * 输入框底栏那颗模型 pill。会话详情与「还没发第一句」的草稿共用同一个 ——
@@ -40,6 +67,8 @@ export default function SessionModelControl({
   cliPillState,
   cliBound,
   deviceLabel,
+  openOnMount,
+  onSheetClosed,
 }: {
   backendType: string;
   catalog: PickerProvider[];
@@ -58,8 +87,21 @@ export default function SessionModelControl({
   cliBound?: { resolutionLabel: string; modelId: string };
   /** 承载机的人读名：CLI 段的列表来自那台机器，弹层顶部说明在哪执行。 */
   deviceLabel?: string;
+  /** 挂上就开着选择器（手机草稿页「模型」那一行在输入框还是胶囊时没有 pill 可点）。 */
+  openOnMount?: boolean;
+  /** 选择器从开到关时回调（宿主据此收掉那只只为开它而挂的实例）。 */
+  onSheetClosed?: () => void;
 }) {
   const { t } = useTranslation();
+  // 手机：底部 sheet，打开不聚焦搜索框（键盘不自动弹起）；系统返回先关它。
+  const isMobile = useIsMobile();
+  const [root, setRoot] = useState<HTMLElement | null>(null);
+  const expanded = useTriggerBackDismiss(root, TRIGGER_TESTID, isMobile);
+  const wasExpandedRef = useRef(false);
+  useEffect(() => {
+    if (wasExpandedRef.current && !expanded) onSheetClosed?.();
+    wasExpandedRef.current = expanded;
+  }, [expanded, onSheetClosed]);
   const bound = { boundProviderKey, boundModelKey, catalog };
   const boundState = resolveProviderPillState({
     ...bound,
@@ -69,8 +111,10 @@ export default function SessionModelControl({
     cliPillState ?? resolveProviderPillState({ ...bound, target });
 
   return (
-    <div className="flex min-w-0 items-center gap-1">
+    <div ref={setRoot} className="flex min-w-0 items-center gap-1">
       <ModelTargetPicker
+        presentation={isMobile ? "sheet" : undefined}
+        openOnMount={openOnMount}
         scenario="chat"
         backendType={backendType}
         cliModels={cliModels}
@@ -104,9 +148,16 @@ export default function SessionModelControl({
             fallbackLabel={cliModels ? cliBound?.resolutionLabel : undefined}
           />
         }
-        triggerLabel={<ProviderPillTrigger state={pillState} />}
+        triggerLabel={
+          <ProviderPillTrigger
+            state={pillState}
+            shortName={
+              isMobile ? modelShortName(pillState.modelId ?? "") : undefined
+            }
+          />
+        }
         aria-label={t("session.composerControls.modelTarget")}
-        data-testid="composer-model-target"
+        data-testid={TRIGGER_TESTID}
         // `w-auto` 已经在，但触发器与它的内层节点一样没给自己 `min-w-0` ——
         // 里面的 `truncate`（provider-pill-trigger.tsx）虽然写好了，可 flex item
         // 默认的 `min-width:auto` 顶住不让它比整段文案更窄，省略号从没生效过。

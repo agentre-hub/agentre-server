@@ -192,3 +192,32 @@ func TestUpsert_DoesNotReassignTheAccountLevelDisplayName(t *testing.T) {
 	assert.Equal(t, "办公室那台", d.DisplayName)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TouchLastSeen 是中继连上 / 断开时刷新「最后在线」的那一条写：单条幂等 UPDATE，
+// 带 last_seen_at < ? 的单调护栏——多副本下迟到的旧时间戳不能把较新的值写回去。
+func TestTouchLastSeen_IsAMonotonicIdempotentUpdate(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"UPDATE `devices` SET `last_seen_at`=?,`updatetime`=? WHERE id=? AND last_seen_at < ?")+"$").
+		WithArgs(int64(5000), int64(5000), int64(100), int64(5000)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	// 护栏挡掉（0 行受影响）不是错误。
+	assert.NoError(t, r.TouchLastSeen(ctx, 100, 5000))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestTouchLastSeen_PropagatesDatabaseError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `devices` SET")).WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	assert.Error(t, r.TouchLastSeen(ctx, 100, 5000))
+}

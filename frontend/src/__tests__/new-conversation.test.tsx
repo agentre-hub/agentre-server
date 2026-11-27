@@ -19,7 +19,13 @@ import {
   within,
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   afterAll,
   afterEach,
@@ -30,17 +36,18 @@ import {
   vi,
 } from "vitest";
 
-import { ApiError, api } from "@/lib/api";
+import { ApiError, ApiTimeoutError, api } from "@/lib/api";
 import { listCLIModelsOn } from "@/lib/cliModels";
 import {
   DispatchRunError,
+  DispatchTimeoutError,
   dispatchNewConversation,
   fetchDispatchPlan,
   type DispatchPlan,
 } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";
 import { ensureRelayTicket } from "@/lib/relayTicket";
-import { RelayError } from "@/lib/relayClient";
+import { RelayError, relayRequestTimeoutError } from "@/lib/relayClient";
 import { installClipboard, restoreClipboardEnv } from "@/test/clipboard";
 import { useRelayChannel } from "@/hooks/use-relay";
 import i18n from "@/i18n";
@@ -3141,6 +3148,18 @@ describe("手机上的新对话", () => {
     expect(draftEditable().getAttribute("enterkeyhint")).toBe("enter");
   });
 
+  it("输入框还空着（胶囊）时点「模型」那一行：直接开模型选择 sheet", async () => {
+    await openPhoneDraft();
+    await screen.findByTestId("draft-phone-empty");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("draft-fact-model").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("draft-fact-model"));
+    expect(await screen.findByTestId("model-target-sheet")).toBeTruthy();
+  });
+
   it("接着最近的对话：回到列表并按这个 Agent 收窄", async () => {
     await openPhoneDraft();
     fireEvent.click(await screen.findByTestId("draft-continue-recent"));
@@ -3164,5 +3183,298 @@ describe("手机上的新对话", () => {
         "Third Agent",
       ),
     );
+  });
+
+  /** 规格 G1：名单读失败时不说「还没有 Agent / 项目」，原位一行说明 + 44px 重试。 */
+  it("Agent 名单读失败：不出「还没有 Agent」，原位说明 + 44px 重试，重试后列出来", async () => {
+    stubReads();
+    const succeed = mockedApi.getMockImplementation()!;
+    let failing = true;
+    mockedApi.mockImplementation(async (path: string, ...rest) => {
+      if (failing && path.startsWith("/v1/workspace/agents"))
+        throw new ApiTimeoutError("/v1/workspace/agents", 15000);
+      return succeed(path, ...rest);
+    });
+    const sheet = await openPhoneSheet();
+    const failed = await within(sheet).findByTestId("agent-pick-failed");
+    expect(within(sheet).queryByTestId("agent-pick-empty")).toBeNull();
+    expect(failed.textContent).not.toContain("timed out");
+    const retry = within(failed).getByRole("button", { name: "Retry" });
+    expect(retry.className).toContain("min-h-11");
+    failing = false;
+    fireEvent.click(retry);
+    expect(await within(sheet).findByTestId("agent-pick-agent-1")).toBeTruthy();
+  });
+
+  it("项目树读失败：不出「还没有项目」，原位说明 + 重试", async () => {
+    stubReads();
+    const succeed = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path: string, ...rest) => {
+      if (path.startsWith("/v1/workspace/projects"))
+        throw new ApiTimeoutError("/v1/workspace/projects", 15000);
+      return succeed(path, ...rest);
+    });
+    const sheet = await openPhoneSheet();
+    fireEvent.click(within(sheet).getByTestId("sheet-from-project"));
+    const pane = await screen.findByTestId("project-agent-pane");
+    const failed = await within(pane).findByTestId("project-tree-failed");
+    expect(pane.textContent).not.toContain(i18n.t("chat.noProjects"));
+    expect(within(failed).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+});
+
+/**
+ * 手机上新对话的各步骤进历史（规格 2026-11-25 D2）：挑 Agent 弹层、「从项目里挑」整屏、
+ * 草稿整屏各有自己的历史项；系统返回 = 页头 ‹ 做的那件事，草稿按 C1 本来就保留。
+ */
+describe("手机上新对话各步骤进历史", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function HistoryProbe() {
+    const navigate = useNavigate();
+    const location = useLocation();
+    return (
+      <>
+        <span data-testid="history-path">{location.pathname}</span>
+        <button onClick={() => navigate(-1)}>system-back</button>
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  function renderWithHistory() {
+    return render(
+      <MemoryRouter initialEntries={["/prev", "/chat"]} initialIndex={1}>
+        <ThemeProvider>
+          <HistoryProbe />
+          <Routes>
+            <Route path="/prev" element={<p>previous page</p>} />
+            <Route path="/chat/:conversationId?" element={<Chat />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+  const systemBack = () => fireEvent.click(screen.getByText("system-back"));
+  const historyPath = () => screen.getByTestId("history-path").textContent;
+
+  async function openSheet() {
+    renderWithHistory();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    return screen.findByTestId("new-conversation-sheet");
+  }
+
+  // 草稿页上的浮层（D1）：项目、运行在两行事实开出的选择弹层，系统返回先关它、停在草稿页。
+  it.each([
+    ["draft-fact-project", "draft-project-none"],
+    ["draft-fact-target", "draft-tier-3"],
+  ])(
+    "草稿页上点 %s 开的选择弹层：系统返回只关弹层，草稿页还在",
+    async (fact, inside) => {
+      const sheet = await openSheet();
+      fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+      await screen.findByTestId("draft-session");
+      await waitFor(() =>
+        expect(screen.getByTestId(fact).hasAttribute("disabled")).toBe(false),
+      );
+      fireEvent.click(screen.getByTestId(fact));
+      await screen.findByTestId(inside);
+
+      systemBack();
+
+      await waitFor(() => expect(screen.queryByTestId(inside)).toBeNull());
+      expect(screen.getByTestId("draft-session")).toBeTruthy();
+      expect(historyPath()).toBe("/chat");
+    },
+  );
+
+  it("挑 Agent 进草稿：系统返回回到列表（不是上一页、也不是弹层），再返回才离开", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+
+    systemBack();
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+    expect(screen.queryByTestId("new-conversation-sheet")).toBeNull();
+    expect(historyPath()).toBe("/chat");
+
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("草稿页头 ‹ 回列表后，历史没有多留的一条：再返回就是上一页", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("「从项目里挑」整屏：系统返回回到挑 Agent 弹层，再返回回列表，再返回离开", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("sheet-from-project"));
+    await screen.findByTestId("project-agent-pane");
+
+    systemBack();
+    expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
+    expect(screen.queryByTestId("project-agent-pane")).toBeNull();
+    expect(historyPath()).toBe("/chat");
+
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(historyPath()).toBe("/chat");
+
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("草稿上点收件人换 Agent：系统返回先收选择器、草稿还在，再返回才回列表", async () => {
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    await screen.findByTestId("new-conversation-sheet");
+
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("draft-session")).toBeTruthy();
+
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+    expect(historyPath()).toBe("/chat");
+  });
+
+  it("发出第一句落到会话页：草稿的记号被会话地址换掉，历史里没有带记号的残留", async () => {
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+      savedToAccount: true,
+    });
+    const sheet = await openSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+    await waitFor(() => expect(historyPath()).toBe("/chat/99"));
+
+    // 会话地址换掉了草稿的记号：返回一次回到列表（不是一个带记号的 /chat），再一次才离开。
+    systemBack();
+    await waitFor(() => expect(historyPath()).toBe("/chat"));
+    expect(screen.queryByTestId("draft-session")).toBeNull();
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+
+  it("桌面宽度不碰历史", async () => {
+    window.matchMedia = originalMatchMedia;
+    renderWithHistory();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /^(Start your first conversation|New conversation)$/,
+      }),
+    );
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    systemBack();
+    expect(historyPath()).toBe("/prev");
+  });
+});
+
+/**
+ * 新对话派发超时（规格 F5、W11）：请求可能已经送达，那条对话也许已经在那台机器上开了。
+ * 此时说「可能已经开始了」、引导去列表看，而不是给「重试」——重试会铸一个新编号，
+ * 一条变两条。
+ */
+describe("新对话派发超时：可能已经开始了", () => {
+  it("派发等应答超时：抛 DispatchTimeoutError（带原因），而不是「连不上」", async () => {
+    const actual =
+      await vi.importActual<typeof import("@/lib/dispatch")>("@/lib/dispatch");
+    const client = {
+      request: vi.fn().mockRejectedValue(relayRequestTimeoutError()),
+      close: vi.fn(),
+    };
+    await expect(
+      actual.dispatchNewConversation({
+        plan: availablePlan,
+        message: "hi",
+        sourceClient: relayTicket,
+        client: client as never,
+      }),
+    ).rejects.toBeInstanceOf(actual.DispatchTimeoutError);
+    expect(client.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("草稿页：说「可能已经开始了」，给「去列表看看」，没有「重试」，不再派发第二次", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(
+      new DispatchTimeoutError(relayRequestTimeoutError()),
+    );
+    renderChat();
+    await openDraft();
+    await typeInDraft("检查一下");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("may have already started");
+    expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull();
+    // 字还回输入框：不丢。
+    await waitFor(() =>
+      expect(draftEditable().textContent).toContain("检查一下"),
+    );
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Check the list" }),
+    );
+    await waitFor(() => expect(currentSearch()).toContain("agent=agent-1"));
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
   });
 });

@@ -1095,25 +1095,141 @@ under the mobile project, that is the assertion that catches a card sitting edge
 or a flex row that refuses to shrink. A desktop-only pass tells you nothing about mobile,
 and a jsdom unit test tells you nothing at all here: it computes no layout.
 
+### Touch tier and toasts on the phone
+
+`App` wraps the whole console in the package's `TouchProvider touch={isMobile}` (the same
+≤767px query that picks the phone shell), so the touch tier is on for the phone form and
+absent at desktop width. It turns on 44px / 15px menu rows, the pressed (darker) state on
+`Button` and focus returning to the trigger when a dialog closes. The long-press menu on a
+phone session row is the package's `ContextMenuContent`, so its rows follow the tier. Under
+touch the package's `SessionRow` anchors that menu to its own row: below it, right-aligned,
+flipped above when there is no room (observable as `data-anchor-side` on the menu), and the
+pressed row stays fully visible. The menu is a layer for the system back key: `PhoneChatIndex`
+tracks the open row through `onMenuOpenChange` / `menuOpen` and `useBackDismiss`, so back with
+a menu open closes only the menu and stays on the page, and picking an item (the menu closes
+before its action runs) leaves no stray history entry. Desktop never passes these props and
+the menu keeps opening at the pointer. The phone index's load-failure Retry is 44px tall. Copy
+toasts no longer pick their own position; the host's `Toaster` does: `top-center` on the
+phone (a bottom toast would cover the composer for 5–7 seconds), `bottom-right` on desktop.
+
+The same controlled-open pattern covers the board's package overlays (`Issues`,
+`TaskFormDialog`): the filter sheet (`BoardFilterBar` `open` / `onOpenChange`), the project
+scope sheet (`ProjectScopePicker`), a card's move menu (`IssueBoard` `openCardMenuId` /
+`onCardMenuOpenChange`) and the task page's ⋯ menu (`TaskFormShell` `moreMenuOpen` /
+`onMoreMenuOpenChange`). Each is a `useBackDismiss` layer; only the phone instances pass the
+props, so desktop adds no history entries. The project delete dialog renders in the package's
+touch tier on the phone (`TouchProvider` already covers it): a bottom sheet with the red
+destructive button on top, then Cancel, both full-width 44px.
+
+Create timeouts do not re-read on their own. A project or label create that times out shows the
+package's one-line "network timed out, may already be created" with a **Refresh** button; the
+button calls the host's recheck (`createProjectCreatePorts().recheckCreate` for projects,
+`useBoard().recheckLabelCreate` for labels), which re-reads the full list and looks for a
+"not seen before submit, same name (and parent)" entry. Found: treated as created (the project
+dialog calls `onCreated(id)` and closes; the label panel clears its input). Not found: say so and
+allow resubmitting. The re-read failing is still "unknown": the timeout line and Refresh stay,
+the line says the refresh failed, and pressing create again re-runs the check instead of
+creating a second one. No raw English error text reaches the screen.
+
+The "before submit" baseline must be a read that has already been answered: a read sent
+alongside the POST has no ordering guarantee on the server (several replicas, separate
+connections) and can include the new row, which would then read as "already there". The board
+starts its unfiltered baseline read when the new-task form opens (`useBoard().prepareCreate`)
+and the POST waits for it; after a "not found" recheck, that recheck's full read is the next
+baseline.
+
 ### PWA and the offline shell
 
 The console is installable. The whole surface is:
 
 | File | What it is |
 | --- | --- |
-| `public/manifest.webmanifest` | `name`/`short_name` `Agentre`, `start_url`/`scope` `/`, `standalone`, brand-navy `theme_color`/`background_color`, `any` + `maskable` 192/512 icons |
+| `public/manifest.webmanifest` | `name`/`short_name` `Agentre`, `start_url`/`scope` `/`, `standalone`, `theme_color`/`background_color` equal to the light `--background` token (the same colour as `index.html`'s light `theme-color`), `any` + `maskable` 192/512 icons |
 | `public/icons/*.png` | `any` icons keep the plate's transparent margin; `maskable`/apple-touch are full-bleed and opaque. Rasterization commands live in `public/icons/README.md` |
 | `public/sw.js` | Classic (non-module) service worker — see below |
-| `public/offline.html` | Self-contained fallback page; no dependency on the bundle |
-| `src/lib/service-worker.ts` | Registration seam; `main.tsx` calls it with `import.meta.env.PROD` |
+| `public/offline.html` | Self-contained fallback page with an `offline` and a `server` variant; no dependency on the bundle |
+| `index.html` | Besides the install metadata, the boot shell (below) and a pre-paint theme script |
+| `src/lib/service-worker.ts` | Registration seam; `main.tsx` calls it with `import.meta.env.PROD` and, once registered, starts `startUpdateWatch()` |
+| `src/hooks/use-update-available.ts` | The page side of update detection: `startUpdateWatch()`, `useUpdateAvailable()`, `reloadPage()` |
+| `src/components/UpdateAvailableBar.tsx` | 「控制台有新版本 · 重新加载」, rendered by `AppShell` |
 
-Three decisions are deliberate. **The manifest is static**: nothing generates it at
-runtime, so it ships in the embedded `dist` like any other asset and the Go handler must
-send it as `application/manifest+json` (the extension is not in Go's MIME table).
-**There is no offline data**: `sw.js` precaches only `/offline.html`, navigates
-network-first so a rolling deploy still reaches users instead of pinning a cached shell,
-caches only the content-hashed `/assets/**` files, and never touches API/JSON or the
-`/v1/` relay. **Zoom is disabled only in the installed app**: `index.html` keeps a
+**The manifest is static**: nothing generates it at runtime, so it ships in the embedded
+`dist` like any other asset and the Go handler must send it as `application/manifest+json`
+(the extension is not in Go's MIME table).
+
+**The shell is cache-first, and a new version is announced, never forced** (spec
+2026-11-25, decisions B1–B3). Identity and lists live on the device (the account-scoped
+local store), so a cached shell is enough to open the console with no network. `sw.js`
+therefore:
+
+- answers every app-route navigation (no file extension, not `/v1/`) with the one cached
+  `index.html`, stored under `/`, and stores that navigation's network response back in the
+  background — the next launch, or 「重新加载」, gets it. Storing a shell also precaches the
+  `/assets/` files it references, so a fresh install can relaunch offline;
+- without a cached shell (first install, cache cleared) goes to the network but waits at
+  most **10 s**; a timeout or network error answers with `offline.html`, a **5xx** with
+  its 「服务器暂时不可用」 variant (`data-reason="server"`, rewritten by the worker), never
+  the proxy's bare error page. The address bar keeps the original URL, so the page returns
+  there by reloading;
+- answers a page's `check-update` message (sent with the page's own entry script) by
+  fetching `/` with `cache: "no-store"`: if the server's entry differs from the page's it
+  stores the new shell and replies `update-available`. The comparison is against the
+  **running page**, not the cache — an earlier navigation may already have replaced the
+  cached shell while this page is still the old build;
+- keeps the content-hashed `/assets/**` cache-first, never touches API/JSON or the `/v1/`
+  relay, and never calls `skipWaiting` (a new worker waits until the open pages are gone).
+  Changing the caching strategy means renaming `CACHE`; `activate` drops the others.
+
+The page asks on start and on every return to the foreground (`startUpdateWatch`). An
+answer of `update-available` shows `UpdateAvailableBar` under the header — in the shell's
+own header flow, or, on a phone page that draws its own 52px header, overlaid at its lower
+edge next to the 「网络不稳定」 strip. It can be dismissed; the next return to the
+foreground shows it again, because the page is still the old build. Nothing reloads until
+the user taps 「重新加载」 (`reloadPage()`); drafts and unsent messages are restored by
+their own local stores. The protocol-mismatch banner, in the direction where this page is
+the stale end, offers the same 「重新加载」.
+
+**The offline page comes back by itself.** `offline.html` shows one language (the app's
+`agentre.lang`, else `navigator.language`), says 「网络恢复后会自动回来」, and probes
+`GET /` (`no-store`, 10 s timeout) on the `online` event and every 15 s — `navigator.onLine`
+lies on captive and lossy networks. A 2xx switches it to 「网络恢复了」 and reloads into the
+original address; a 5xx switches it to the server variant. Its 「重试」 button is 44px high.
+
+**The boot shell covers the screen until the app's first real screen is painted.**
+`index.html` carries `#boot-shell`, outside `#root` and fixed above it. It has the shape
+of the page being opened, picked from the address by the head script before first paint
+(`<html data-boot>`, matched case-insensitively against the routes in `App.tsx`): the
+conversation index for `/chat` (the phone home, with the real title 「全部」 and the real
+filter chips, the `SessionRowSkeleton` phone geometry and a progress line on the header's
+bottom edge); a conversation for `/chat/<id>` (back, `TranscriptSkeleton`, the touch
+composer); a `PhonePageHeader`-shaped header and cards for the other console pages (back
+instead of ☰ on `/devices/<id>` and `/account`); and only the `chrome` background for the
+public pages and unknown addresses, which render in `AuthLayout`. `/` is the index on a
+phone and the overview at desktop width, as `HomeRedirect` decides. At desktop width it
+draws the rail (56px when `agentre.console.navCollapsed` says collapsed) and the content
+sheet, plus the index column on `/chat` at the width stored in `agentre.sidebarWidth.chat`.
+Its words follow the app's language detection order (`?lang=`, `agentre.lang`, the
+browser). Its geometry is measured against those real components; when one of them
+changes shape, change the shell with it. An inline script removes it two
+animation frames after `#root` first contains something readable or actionable (`main`,
+`header`, `nav`, `form`, a heading, a button, a link or a field) — `RequireAuth`'s one-line
+「加载中…」, sonner's empty `<section>` and a code-split page still in flight do not count,
+so there is no 「加载中…」 flash followed by a blank. After 8 s it adds
+「网络较慢，仍在加载…」 at the bottom. A head script applies the stored theme (`agentre.theme`)
+before first paint so the shell is in the right scheme. A code-split page whose chunk
+fails to load (`lazyPage`) renders 「页面没加载出来 · 重新加载」 in place instead of an
+empty viewport; reloading picks up the shell the worker has stored meanwhile.
+
+**Static files copy tokens and a test keeps them equal.** `offline.html` and the boot
+shell are plain HTML painted before the bundle and its stylesheet, so they cannot use
+Tailwind or `tokens.css`. Each declares the tokens it uses as same-named custom properties
+in a `:root` and a `.dark` block and uses only `var(--token)` elsewhere;
+`src/__tests__/pwa-install.test.ts` compares every copied value with the pinned package's
+`tokens.css`, rejects any other colour literal in their styles, and pins the manifest and
+`theme-color` colours to `--background`. The token-literal lint does not cover `public/` or
+`index.html`; this test is what does.
+
+**Zoom is disabled only in the installed app**: `index.html` keeps a
 zoomable viewport (no `user-scalable=no`, no `maximum-scale`), so a Safari tab and desktop
 browsers can still zoom. When the page runs as a Home Screen app (`display-mode:
 standalone`), `src/lib/standaloneZoomLock.ts` appends `maximum-scale=1, user-scalable=no`
@@ -1157,9 +1273,12 @@ under `group-data-[keyboard=open]/shell:` (the immersive `main`, the composer ba
 can only pin this with a fake `visualViewport`; confirm a change here by focusing the composer
 in an installed app on an iPhone.
 
-iOS install behaviour — the "Add to Home Screen" surface and the safe-area treatment on a
-notched device — still needs a real device. No jsdom test can stand in for it: there is
-no layout engine, no safe-area inset and no service-worker runtime there.
+`sw.js` and the inline scripts of `offline.html` and `index.html` are tested by running
+their source text against injected fakes (`sw-script.test.ts`, `pwa-install.test.ts`);
+that pins their logic, not a browser's service-worker lifecycle. iOS install behaviour — the
+"Add to Home Screen" surface, the safe-area treatment on a notched device, a cold start in
+airplane mode and the update prompt — still needs a real device. No jsdom test can stand
+in for it: there is no layout engine, no safe-area inset and no service-worker runtime there.
 
 ## The mono font
 
@@ -1316,6 +1435,15 @@ went out.
 **A dangerous confirm is a shape, not a sentence.** `danger` on the shell and the
 header, `variant="destructive"` on the submit. The consequences go in the body; the
 title stays one line.
+
+**On a phone the dangerous confirm is a bottom sheet (`ConfirmSheet`).** Sign out and
+delete conversation open `components/console/ConfirmSheet` below `md`: title, one line of
+consequence, then full-width 44px buttons stacked, the destructive one on top and the
+cancel below it. A failed action writes its reason as one `role="alert"` line inside the
+sheet and the buttons come back enabled. Desktop keeps the centred `DialogShell` (and
+one-tap sign out in the user menu). A confirm whose success makes the host replace the
+route (delete, back to the list) passes `backDismiss={false}`: the history marker the
+sheet pushes would fight that replace for the back step.
 
 **A dialog that saves as you go has no Save button.** Its footer holds only Done, and
 the save state (`saving` / `saved` / `error`) sits at the top right of the header via

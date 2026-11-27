@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import {
   afterAll,
   afterEach,
@@ -19,7 +19,7 @@ import {
 import AppShell from "@/components/AppShell";
 import { api } from "@/lib/api";
 import i18n from "@/i18n";
-import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { ThemeProvider, TouchProvider } from "@agentre-hub/agentre-ui";
 
 /** 已经移除的底部 TabBar 的高度（74px + 安全区）：任何导航都不该再长这个高。 */
 const MOBILE_TAB_BAR_HEIGHT = "calc(74px + env(safe-area-inset-bottom, 0px))";
@@ -85,13 +85,32 @@ afterAll(() => {
  *   - 非顶层页页头左侧是返回，不显示 ☰。
  *   - 桌面：保持固定侧栏，不出现 ☰。
  */
-function renderShell(initial = "/chat", title?: string) {
+function SystemBack() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  return (
+    <>
+      <span data-testid="path">{pathname}</span>
+      <button type="button" onClick={() => navigate(-1)}>
+        system-back
+      </button>
+    </>
+  );
+}
+
+function renderShell(initial = "/chat", title?: string, prev?: string) {
   return render(
-    <MemoryRouter initialEntries={[initial]}>
+    <MemoryRouter
+      initialEntries={prev ? [prev, initial] : [initial]}
+      initialIndex={prev ? 1 : 0}
+    >
       <ThemeProvider>
-        <AppShell title={title}>
-          <div>page content</div>
-        </AppShell>
+        <TouchProvider touch>
+          <AppShell title={title}>
+            <div>page content</div>
+            <SystemBack />
+          </AppShell>
+        </TouchProvider>
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -144,7 +163,7 @@ describe("移动端左抽屉导航", () => {
     for (const label of [
       "Chat",
       "Board",
-      "Agents & org",
+      "Organization",
       "Devices",
       "Activity stats",
       "Settings",
@@ -237,6 +256,84 @@ describe("移动端左抽屉导航", () => {
         .getByRole("link", { name: /Chat/ })
         .getAttribute("aria-current"),
     ).toBeNull();
+  });
+
+  it("手机：系统返回先关抽屉并停在原页", async () => {
+    mockMobileViewport();
+    renderShell("/devices");
+    await openDrawer();
+    fireEvent.click(screen.getByText("system-back"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("path").textContent).toBe("/devices");
+  });
+
+  it("手机：从界面关抽屉不留历史，之后的返回不再落在抽屉上", async () => {
+    mockMobileViewport();
+    renderShell("/devices");
+    await openDrawer();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // 记号已退掉：再按返回没有可退的了，停在原地且不会重开抽屉。
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByTestId("path").textContent).toBe("/devices");
+  });
+
+  it("手机：点抽屉里的项会去到那一页（不被退记号的返回吃掉）", async () => {
+    mockMobileViewport();
+    renderShell("/chat");
+    const drawer = await openDrawer();
+    fireEvent.click(within(drawer).getByRole("link", { name: /Devices/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("path").textContent).toBe("/devices");
+  });
+
+  it("手机：从抽屉去别的页，记号被换掉；返回一次回到打开抽屉的页（抽屉关着），再返回到更早一页", async () => {
+    mockMobileViewport();
+    renderShell("/chat", undefined, "/prev");
+    const drawer = await openDrawer();
+    fireEvent.click(within(drawer).getByRole("link", { name: /Devices/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("path").textContent).toBe("/devices");
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.getByTestId("path").textContent).toBe("/chat");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.getByTestId("path").textContent).toBe("/prev");
+  });
+
+  it("手机：点当前页那一项只是关抽屉，历史不留多余的一条", async () => {
+    mockMobileViewport();
+    renderShell("/devices");
+    const drawer = await openDrawer();
+    fireEvent.click(within(drawer).getByRole("link", { name: /Devices/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("path").textContent).toBe("/devices");
+    // 没有留下记号：再返回无处可退，不会又落回抽屉。
+    fireEvent.click(screen.getByText("system-back"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("手机：抽屉打开时焦点落在当前页那一项", async () => {
+    mockMobileViewport();
+    renderShell("/devices");
+    const drawer = await openDrawer();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(drawer).getByRole("link", { name: /Devices/ }),
+      ),
+    );
+  });
+
+  it("手机：抽屉关闭后焦点回到 ☰", async () => {
+    mockMobileViewport();
+    renderShell("/devices");
+    const menu = screen.getByRole("button", { name: "Open menu" });
+    menu.focus();
+    await openDrawer();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(menu);
   });
 
   it("手机：点任一项后抽屉关闭", async () => {

@@ -9,7 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  HEATMAP_MOBILE_WEEKS,
+  HEATMAP_TOUCH_WEEKS,
   heatmapColumnsFor,
 } from "@/components/stats/Heatmap";
 import * as accountChannel from "@/lib/accountChannel";
@@ -26,6 +26,13 @@ vi.mock("@/lib/api", async (importOriginal) => {
 vi.mock("@/lib/accountChannel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
   return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
+});
+
+// 「网络不稳定」细条的开关：核对失败时 useMe 报 unstable（外壳读它）。
+let meStatus: "ready" | "unstable" = "ready";
+vi.mock("@/hooks/use-me", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/use-me")>();
+  return { ...actual, useMe: () => ({ ...actual.useMe(), status: meStatus }) };
 });
 
 const mockedApi = vi.mocked(api);
@@ -223,6 +230,7 @@ beforeEach(async () => {
   mockedApi.mockReset();
   mockedStartChannel.mockClear();
   localStorage.clear();
+  meStatus = "ready";
 });
 
 afterEach(() => {
@@ -612,16 +620,51 @@ describe("overview: 只覆盖已保存的对话", () => {
     ).toBe("/settings?tab=privacy");
   });
 
-  it("写出日界按哪个时区切", async () => {
-    // 日界是服务端机器的时区，不是浏览器的。不写出来的话，一个在另一个时区的用户
-    // 只会觉得自己的「今天」错了一格，而没有任何地方解释得了那一格。
+  it("说人话写出按哪个时区的自然日统计，不再说「日界」", async () => {
+    // 统计的日子是服务端机器的时区切的，不是浏览器的。不写出来的话，一个在另一个
+    // 时区的用户只会觉得自己的「今天」错了一格。服务端给了 time_zone 就点名它。
     serve({
       "/v1/stats/overview": statsResponse({ time_zone: "Asia/Shanghai" }),
     });
     renderOverview();
 
     const note = await screen.findByTestId("heatmap-timezone");
-    expect(note.textContent).toContain("Asia/Shanghai");
+    // 规格 J5「按北京时间统计」类说人话的说法：写时区的人话名字，不露 IANA 标识。
+    expect(note.textContent).toBe("Days are counted in China Standard Time.");
+    expect(note.textContent).not.toMatch(/cut|boundary|Asia\/Shanghai/i);
+  });
+
+  it("中文文案：「按中国标准时间统计」，不露「服务器时区」与 IANA 标识", async () => {
+    await i18n.changeLanguage("zh-CN");
+    serve({
+      "/v1/stats/overview": statsResponse({ time_zone: "Asia/Shanghai" }),
+    });
+    renderOverview();
+
+    const note = await screen.findByTestId("heatmap-timezone");
+    expect(note.textContent).toBe("按中国标准时间统计。");
+    expect(note.textContent).not.toContain("日界");
+    expect(note.textContent).not.toContain("Asia/Shanghai");
+  });
+
+  it("Intl 叫不出名字的标识：原样写出它，不吞掉", async () => {
+    serve({
+      "/v1/stats/overview": statsResponse({ time_zone: "Not/AZone" }),
+    });
+    renderOverview();
+
+    const note = await screen.findByTestId("heatmap-timezone");
+    expect(note.textContent).toBe("Days are counted in Not/AZone.");
+  });
+
+  it("服务端没给时区：仍说是按服务器时区的自然日，不编一个名字", async () => {
+    serve({ "/v1/stats/overview": statsResponse({ time_zone: "" }) });
+    renderOverview();
+
+    const note = await screen.findByTestId("heatmap-timezone");
+    expect(note.textContent).toBe(
+      "Days are counted as calendar days in the server's timezone.",
+    );
   });
 
   it("scope=full 时没有那条说明", async () => {
@@ -864,10 +907,8 @@ describe("overview: 移动端", () => {
     renderOverview();
 
     await screen.findByTestId("heatmap-grid");
-    expect(screen.getAllByTestId("heat-week").length).toBe(
-      HEATMAP_MOBILE_WEEKS,
-    );
-    expect(screen.getByText(`Last ${HEATMAP_MOBILE_WEEKS} weeks`)).toBeTruthy();
+    expect(screen.getAllByTestId("heat-week").length).toBe(HEATMAP_TOUCH_WEEKS);
+    expect(screen.getByText(`Last ${HEATMAP_TOUCH_WEEKS} weeks`)).toBeTruthy();
     expect(
       screen.getByText("A longer history is on the desktop app."),
     ).toBeTruthy();
@@ -1142,5 +1183,157 @@ describe("overview: 无边框", () => {
       .getAllByTestId("heat-legend-swatch")
       .find((c) => c.getAttribute("data-level") === "0");
     expect(legend0!.classList.contains("bg-button-fill")).toBe(true);
+  });
+});
+
+// ── 手机触屏档（任务 30：J5、F15、F21） ───────────────────────────────────
+describe("overview: 触屏热力格与分段", () => {
+  it("手机：格子 20px、列内与列间缝隙 2px，约 13 周；桌面仍是 13px / 3px", async () => {
+    setViewport(true);
+    serve();
+    const { unmount } = renderOverview();
+    await screen.findByTestId("heatmap-grid");
+
+    const cells = screen.getAllByTestId("heat-cell");
+    expect(cells.length).toBe(HEATMAP_TOUCH_WEEKS * 7);
+    expect(HEATMAP_TOUCH_WEEKS).toBe(13);
+    expect(cells.every((c) => c.className.includes("size-[20px]"))).toBe(true);
+    expect(
+      screen
+        .getAllByTestId("heat-week")
+        .every((w) => w.className.includes("gap-[2px]")),
+    ).toBe(true);
+    expect(screen.getByTestId("heat-cells").className).toContain("gap-[2px]");
+    unmount();
+
+    setViewport(false);
+    renderOverview();
+    await screen.findByTestId("heatmap-grid");
+    const desktopCells = screen.getAllByTestId("heat-cell");
+    expect(desktopCells.every((c) => c.className.includes("size-[13px]"))).toBe(
+      true,
+    );
+    expect(screen.getByTestId("heat-cells").className).toContain("gap-[3px]");
+    expect(screen.getAllByTestId("heat-week").length).toBe(
+      heatmapColumnsFor(0),
+    );
+  });
+
+  it("手机：范围分段每一项 44px；桌面不撑高", async () => {
+    setViewport(true);
+    serve();
+    const { unmount } = renderOverview();
+    await screen.findByTestId("heatmap-grid");
+    const header = screen.getByTestId("overview-mobile-header");
+    const tabs = within(header).getAllByRole("tab");
+    expect(tabs.length).toBe(3);
+    expect(tabs.every((el) => /\bmin-h-11\b/.test(el.className))).toBe(true);
+    unmount();
+
+    setViewport(false);
+    renderOverview();
+    await screen.findByTestId("heatmap-grid");
+    const desktopTabs = within(
+      screen.getByRole("tablist", { name: "Stats range" }),
+    ).getAllByRole("tab");
+    expect(desktopTabs.some((el) => /\bmin-h-11\b/.test(el.className))).toBe(
+      false,
+    );
+  });
+});
+
+describe("overview: 已删除的 Agent / 项目", () => {
+  it("名单里已经没有的 Agent 与项目写「已删除」，不露原始 id", async () => {
+    serve({
+      "/v1/stats/overview": statsResponse({
+        agents: [
+          { sync_id: "ag-1", count: 42 },
+          { sync_id: "ag-frontend", count: 7 },
+        ],
+        projects: [
+          { sync_id: "p1", count: 46 },
+          { sync_id: "pj-gone", count: 3 },
+        ],
+      }),
+    });
+    renderOverview();
+
+    const agentsCard = await screen.findByTestId("card-agents");
+    await waitFor(() =>
+      expect(within(agentsCard).getByText("Deleted Agent")).toBeTruthy(),
+    );
+    expect(within(agentsCard).queryByText("ag-frontend")).toBeNull();
+    const projectsCard = screen.getByTestId("card-projects");
+    expect(within(projectsCard).getByText("Deleted project")).toBeTruthy();
+    expect(within(projectsCard).queryByText("pj-gone")).toBeNull();
+  });
+
+  it("中文：「已删除的 Agent」「已删除的项目」", async () => {
+    await i18n.changeLanguage("zh-CN");
+    serve({
+      "/v1/stats/overview": statsResponse({
+        agents: [{ sync_id: "ag-frontend", count: 7 }],
+        projects: [{ sync_id: "pj-gone", count: 3 }],
+      }),
+    });
+    renderOverview();
+
+    const agentsCard = await screen.findByTestId("card-agents");
+    await waitFor(() =>
+      expect(within(agentsCard).getByText("已删除的 Agent")).toBeTruthy(),
+    );
+    expect(
+      within(screen.getByTestId("card-projects")).getByText("已删除的项目"),
+    ).toBeTruthy();
+  });
+
+  it("名单还没取回来（或取失败）时不乱贴「已删除」", async () => {
+    serve({
+      "/v1/workspace/agents": () => {
+        throw new Error("roster down");
+      },
+      "/v1/workspace/projects": () => {
+        throw new Error("roster down");
+      },
+    });
+    renderOverview();
+
+    const agentsCard = await screen.findByTestId("card-agents");
+    await within(agentsCard).findAllByTestId("agent-rank-row");
+    expect(screen.queryByText("Deleted Agent")).toBeNull();
+    expect(screen.queryByText("Deleted project")).toBeNull();
+  });
+
+  it("名单里有的照旧显示名字", async () => {
+    serve();
+    renderOverview();
+    const card = await screen.findByTestId("card-agents");
+    await within(card).findByText("Backend Agent");
+    expect(screen.queryByText("Deleted Agent")).toBeNull();
+  });
+});
+
+describe("overview: 网络不稳定细条（任务 21 遗留）", () => {
+  it("手机：细条紧贴页头下方，只有一条", async () => {
+    meStatus = "unstable";
+    setViewport(true);
+    serve();
+    renderOverview();
+    await screen.findByTestId("heatmap-grid");
+
+    const strips = screen.getAllByTestId("identity-unstable");
+    expect(strips).toHaveLength(1);
+    expect(
+      screen.getByTestId("overview-mobile-header").nextElementSibling,
+    ).toBe(strips[0]);
+  });
+
+  it("桌面：仍只有外壳摆的那一条", async () => {
+    meStatus = "unstable";
+    setViewport(false);
+    serve();
+    renderOverview();
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.getAllByTestId("identity-unstable")).toHaveLength(1);
   });
 });

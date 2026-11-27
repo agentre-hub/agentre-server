@@ -2,7 +2,14 @@ import {
   rpcMethods,
   sessionCountsFromProtobuf,
 } from "@agentre-hub/agentre-wire";
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -17,8 +24,6 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
-  Alert,
-  AlertDescription,
   Button,
   DialogShell,
   DialogShellBody,
@@ -48,7 +53,8 @@ import {
   deviceVersionState,
   deviceVersionText,
 } from "@/components/devices/DeviceUpgrade";
-import AppShell from "@/components/AppShell";
+import AppShell, { IdentityUnstableStrip } from "@/components/AppShell";
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
 import {
   PhoneHeaderButton,
   PhonePage,
@@ -57,7 +63,9 @@ import {
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useBackDismiss, useBackDismissOpen } from "@/hooks/use-back-dismiss";
 import { useLatestRelease } from "@/hooks/use-latest-release";
+import { useMe } from "@/hooks/use-me";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { AccountChannelDevicePresence } from "@/lib/accountChannel";
@@ -71,7 +79,6 @@ import {
   runsSessions,
   type DeviceItem,
 } from "@/lib/devices";
-import { loadErrorText } from "@/lib/loadError";
 import { formatRelativeTime } from "@/lib/sessionView";
 
 interface RunnableAgentItem {
@@ -214,8 +221,10 @@ function DeviceRowMenu({
   touch?: boolean;
 }) {
   const { t } = useTranslation();
+  // 手机上它是浮层：系统返回先关菜单、停在原页（D1）。
+  const menu = useBackDismissOpen();
   return (
-    <DropdownMenu>
+    <DropdownMenu {...menu}>
       <DropdownMenuTrigger asChild>
         {touch ? (
           <PhoneHeaderButton
@@ -811,6 +820,7 @@ function MobileDeviceDetail({
   t: (key: string, opts?: Record<string, unknown>) => string;
   locale: string;
 }) {
+  const strip = useUnstableStrip();
   const runs = runsSessions(d);
   const isAgentred = d.kind === KIND_AGENTRED;
   const isDesktop = d.kind === KIND_DESKTOP;
@@ -865,6 +875,7 @@ function MobileDeviceDetail({
   return (
     <PhonePage
       testId="device-detail-mobile"
+      strip={strip}
       header={
         <PhonePageHeader
           testId="device-detail-header"
@@ -1047,6 +1058,12 @@ function MobileDeviceDetail({
   );
 }
 
+/** 手机页头下的「网络不稳定」细条槽（与看板、设置同一份；壳那边配 ownStrip）。 */
+function useUnstableStrip() {
+  const { status } = useMe();
+  return status === "unstable" ? <IdentityUnstableStrip /> : null;
+}
+
 export default function Devices() {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
@@ -1056,6 +1073,7 @@ export default function Devices() {
   // 最新发布版本来自服务端自己的只读端点（决策 12）：一页问一次，各行共用同一个
   // 答案 —— 每行各问一次等于把「不知道」这件事问上 N 遍。
   const latest = useLatestRelease();
+  const unstableStrip = useUnstableStrip();
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [loading, setLoading] = useState(true);
   // 存住失败本身，渲染时才翻译成文案：effect 里不碰 t，就不必把它拉进依赖数组
@@ -1068,6 +1086,19 @@ export default function Devices() {
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameSubmitting, setRenameSubmitting] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  // 两个确认框在手机上都是浮层：系统返回先关它、停在原页（D1）。
+  useBackDismiss(renaming !== null, () => {
+    setRenameError(null);
+    setRenaming(null);
+  });
+  // Radix 打开时把焦点给第一个可聚焦元素（页头的 ✕），autoFocus 抢不过它；
+  // 等它落定后再把焦点拿回输入框（I23）。
+  useEffect(() => {
+    if (!renaming) return;
+    const id = requestAnimationFrame(() => renameInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [renaming]);
   /**
    * 撤销确认里那一行事实：种类 · 平台 · 版本 · 最后在线。
    *
@@ -1098,6 +1129,17 @@ export default function Devices() {
   function applyList(list: DeviceItem[]) {
     setDevices(list);
     setLoadError(null);
+  }
+
+  const [retrying, setRetrying] = useState(false);
+  function retryList() {
+    setRetrying(true);
+    fetchDevices()
+      .then(applyList)
+      .catch((e: unknown) => {
+        setLoadError(e ?? new Error("device list load failed"));
+      })
+      .finally(() => setRetrying(false));
   }
 
   useAliveEffect((alive) => {
@@ -1233,11 +1275,19 @@ export default function Devices() {
   // 它取代的正是原来那句孤立的「还没有任何设备。」。
   const guideOpen = listKnown && (noDevices || guideRequested);
 
-  /** 列表取数失败给用户看的那一句：经分类说原因，原文不上屏（规格 W5）。 */
-  const listErrorMessage =
-    loadError !== null
-      ? loadErrorText(loadError, t, "device.manage.loadFailedWhat")
-      : null;
+  /**
+   * 列表取数失败：原位一句 + 44px「重试」（规格 G1）。说什么经分类、原文不上屏（W5）；
+   * 重试在途时键停住，第二次也失败时用户才分得清自己没点空。
+   */
+  const listError =
+    loadError !== null ? (
+      <CardLoadError
+        error={loadError}
+        what={t("device.manage.loadFailedWhat")}
+        onRetry={retryList}
+        retryDisabled={retrying}
+      />
+    ) : null;
 
   // 改名与解除授权两个确认框：桌面从行菜单进，手机从详情页头的菜单进。
   const dialogs = (
@@ -1268,6 +1318,7 @@ export default function Devices() {
           />
           <DialogShellBody>
             <Input
+              ref={renameInputRef}
               autoFocus
               maxLength={128}
               value={renameValue}
@@ -1294,61 +1345,93 @@ export default function Devices() {
       </DialogShell>
 
       {/* 撤销确认：由行级菜单进入；失败保留上下文显示真实错误，成功刷新真实状态 */}
-      <DialogShell
-        open={!!revoking}
-        onOpenChange={(o) => {
-          if (!o && !submitting) {
+      {isMobile ? (
+        // 手机：底部确认 sheet，危险键在上、44px 满宽堆叠（F3）；返回即取消。
+        <ConfirmSheet
+          open={!!revoking}
+          title={t("device.manage.revokeConfirmTitleNamed", {
+            name: revoking ? deviceDisplayName(revoking) : "",
+          })}
+          description={t("device.manage.revokeConfirmBody")}
+          error={revokeError}
+          onCancel={() => {
+            if (submitting) return;
             setRevokeError(null);
             setRevoking(null);
-          }
-        }}
-        size="sm"
-        danger
-        busy={submitting}
-      >
-        {/*
+          }}
+          actions={[
+            {
+              label: t("device.manage.revokeConfirm"),
+              variant: "destructive",
+              testId: "revoke-device-confirm",
+              disabled: submitting,
+              onSelect: () => void onRevoke(),
+            },
+            {
+              label: t("device.manage.revokeCancel"),
+              variant: "secondary",
+              disabled: submitting,
+              onSelect: () => setRevoking(null),
+            },
+          ]}
+        />
+      ) : (
+        <DialogShell
+          open={!!revoking}
+          onOpenChange={(o) => {
+            if (!o && !submitting) {
+              setRevokeError(null);
+              setRevoking(null);
+            }
+          }}
+          size="sm"
+          danger
+          busy={submitting}
+        >
+          {/*
           标题点名是哪一台：入口是行菜单里的浮层，确认框是模态、盖住整页——
           按下去那一刻用户已经看不见自己点的是哪一行了，而这一页上四台机器
           名字相近是常态。
         */}
-        <DialogShellHeader
-          title={t("device.manage.revokeConfirmTitleNamed", {
-            name: revoking ? deviceDisplayName(revoking) : "",
-          })}
-          danger
-          busy={submitting}
-        />
-        <DialogShellBody>
-          {revoking && (
-            <p
-              data-testid="revoke-device-facts"
-              className="mb-2 text-xs text-muted-foreground"
-            >
-              {revokingFacts}
-            </p>
-          )}
-          <p className="text-aux leading-relaxed text-muted-foreground">
-            {t("device.manage.revokeConfirmBody")}
-          </p>
-        </DialogShellBody>
-        {/* 整窗级错误落在脚部左侧、与按钮同一行：点了按钮的人视线就在那（规范 4）。 */}
-        <DialogShellFooter error={revokeError}>
-          <Button
-            variant="outline"
-            disabled={submitting}
-            onClick={() => setRevoking(null)}
-          >
-            {t("device.manage.revokeCancel")}
-          </Button>
-          <DialogShellSubmit
-            variant="destructive"
+          <DialogShellHeader
+            title={t("device.manage.revokeConfirmTitleNamed", {
+              name: revoking ? deviceDisplayName(revoking) : "",
+            })}
+            danger
             busy={submitting}
-            onClick={onRevoke}
-          >
-            {t("device.manage.revokeConfirm")}
-          </DialogShellSubmit>
-        </DialogShellFooter>
-      </DialogShell>
+          />
+          <DialogShellBody>
+            {revoking && (
+              <p
+                data-testid="revoke-device-facts"
+                className="mb-2 text-xs text-muted-foreground"
+              >
+                {revokingFacts}
+              </p>
+            )}
+            <p className="text-aux leading-relaxed text-muted-foreground">
+              {t("device.manage.revokeConfirmBody")}
+            </p>
+          </DialogShellBody>
+          {/* 整窗级错误落在脚部左侧、与按钮同一行：点了按钮的人视线就在那（规范 4）。 */}
+          <DialogShellFooter error={revokeError}>
+            <Button
+              variant="outline"
+              disabled={submitting}
+              onClick={() => setRevoking(null)}
+            >
+              {t("device.manage.revokeCancel")}
+            </Button>
+            <DialogShellSubmit
+              variant="destructive"
+              busy={submitting}
+              onClick={onRevoke}
+            >
+              {t("device.manage.revokeConfirm")}
+            </DialogShellSubmit>
+          </DialogShellFooter>
+        </DialogShell>
+      )}
     </>
   );
 
@@ -1375,11 +1458,7 @@ export default function Devices() {
       <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5">
         {/* 设备行列表（桌面宽度；不再有右列常驻撤销说明卡） */}
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-          {loadError !== null && (
-            <Alert variant="destructive">
-              <AlertDescription>{listErrorMessage}</AlertDescription>
-            </Alert>
-          )}
+          {listError}
 
           {/* 动作行：整页唯一的添加入口。引导展开时它不渲染——同一件事不给两个按钮。 */}
           {listKnown && !guideOpen && (
@@ -1449,7 +1528,7 @@ export default function Devices() {
       }
       return (
         // flush：页头钉在滚动区外、正文自己滚（PhonePage），不落进主区的内边距里。
-        <AppShell ownHeader flush title={t("nav.devices")}>
+        <AppShell ownHeader ownStrip flush title={t("nav.devices")}>
           {selected ? (
             <MobileDeviceDetail
               key={selected.id}
@@ -1463,15 +1542,10 @@ export default function Devices() {
             />
           ) : (
             <PhonePage
+              strip={unstableStrip}
               header={<PhonePageHeader leading={<MobileNavButton />} />}
             >
-              {listErrorMessage !== null ? (
-                <Alert variant="destructive">
-                  <AlertDescription>{listErrorMessage}</AlertDescription>
-                </Alert>
-              ) : (
-                <DeviceDetailSkeleton />
-              )}
+              {listError ?? <DeviceDetailSkeleton />}
             </PhonePage>
           )}
           {dialogs}
@@ -1493,8 +1567,9 @@ export default function Devices() {
     const online = devices.filter(isOnline);
     const offline = devices.filter((d) => !isOnline(d));
     return (
-      <AppShell ownHeader flush title={t("nav.devices")}>
+      <AppShell ownHeader ownStrip flush title={t("nav.devices")}>
         <PhonePage
+          strip={unstableStrip}
           header={
             <PhonePageHeader
               testId="devices-mobile-header"
@@ -1526,11 +1601,7 @@ export default function Devices() {
           bodyClassName={noDevices ? "pb-0" : undefined}
         >
           <div className="flex min-h-full flex-col gap-4">
-            {listErrorMessage !== null && (
-              <Alert variant="destructive">
-                <AlertDescription>{listErrorMessage}</AlertDescription>
-              </Alert>
-            )}
+            {listError}
 
             {/* 一台都没有：三步就是这一页，不给 ✕（没有别处可回）。 */}
             {noDevices ? (

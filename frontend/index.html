@@ -42,9 +42,951 @@
       content="#18191b"
     />
     <title>Agentre Server</title>
+    <script>
+      // 主题在首帧之前定下（与应用同一个偏好 agentre.theme：light / dark / system），
+      // 启动壳因此一开始就是对的深浅色；ThemeProvider 起来后写的是同一套 class。
+      //
+      // 启动壳的形状也在这里定（规格 L2、L3、L4）：壳要和**这次要打开的那一页**同形，
+      // 而这只能看地址——身份与数据都在 IndexedDB 里，同步读不到。路由表与 App.tsx
+      // 对齐（React Router 不分大小写）：
+      //   home  根地址：手机上 HomeRedirect 去对话索引、桌面去总览
+      //   list  对话索引（/chat；/devices/<id>/sessions 也重定向到这里）
+      //   conv  一条对话（/chat/<id>）：从通知、分享、书签直接进来
+      //   page  其余控制台页；/devices/<id> 与 /account 在手机上是返回而不是 ☰
+      //   plain 公开页（登录、设备授权、条款……）与认不出的地址（NotFound）：没有控制台外壳
+      // 侧栏收起与对话索引列的宽度同样只认本机偏好（lib/navCollapsed.ts、共享包
+      // sidebar-width-state.ts 的同一个键、取值与量程）。
+      (function () {
+        var root = document.documentElement;
+        var read = function (key) {
+          try {
+            return localStorage.getItem(key);
+          } catch (e) {
+            return null;
+          }
+        };
+        var pref = read("agentre.theme");
+        var dark =
+          pref === "dark" ||
+          (pref !== "light" &&
+            !!window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        root.classList.toggle("dark", dark);
+        root.style.colorScheme = dark ? "dark" : "light";
+
+        var path = (location.pathname || "/").toLowerCase();
+        var shape = "plain";
+        if (path === "/") shape = "home";
+        else if (/^\/chat\/?$|^\/devices\/[^/]+\/sessions\/?$/.test(path))
+          shape = "list";
+        else if (/^\/chat\/[^/]+\/?$/.test(path)) shape = "conv";
+        else if (
+          /^\/(devices(\/[^/]+)?|overview|issues|org(\/[^/]+){0,2}|account|settings)\/?$/.test(
+            path,
+          )
+        )
+          shape = "page";
+        root.setAttribute("data-boot", shape);
+        if (/^\/(devices\/[^/]+|account)\/?$/.test(path))
+          root.setAttribute("data-boot-sub", "");
+
+        if (read("agentre.console.navCollapsed") === "1")
+          root.setAttribute("data-boot-nav", "collapsed");
+        // 对话索引列拖过的宽度：注入一条规则，而不是拿自定义属性去引——壳的样式表里
+        // 每个 var() 都必须是对回共享包的 token（pwa-install.test.ts）。
+        var raw = read("agentre.sidebarWidth.chat");
+        var width = raw === null ? NaN : Number(raw);
+        if (isFinite(width)) {
+          var rule = document.createElement("style");
+          rule.setAttribute("data-boot-index", "");
+          rule.textContent =
+            "@media (min-width: 768px) { html .boot-index { width: " +
+            Math.min(640, Math.max(220, Math.round(width))) +
+            "px; } }";
+          document.head.appendChild(rule);
+        }
+      })();
+    </script>
+    <!--
+      启动壳的样式（规格 2026-11-25 决策 B2）。颜色是共享包 tokens.css 里同名 token 的
+      抄本——这一段在应用样式表到达之前就要画出来，用不了 Tailwind；pwa-install.test.ts
+      逐个对回包里的值，除 :root / .dark 两块之外不许出现色值字面量。
+    -->
+    <style>
+      :root {
+        --sheet: #ffffff;
+        --chrome: #ececee;
+        --foreground: #18181b;
+        --muted-foreground: #65656d;
+        --muted: #f4f4f5;
+        --secondary: #f4f4f5;
+        --primary: #3b6896;
+        --primary-text: #3b6896;
+        --primary-soft: #eef4fa;
+        --fill-muted-foreground: #5a5a61;
+        --decorative-foreground: #8a8a91;
+      }
+      .dark {
+        --sheet: #1b1c1f;
+        --chrome: #111214;
+        --foreground: #e8e8e9;
+        --muted-foreground: #909399;
+        --muted: #202122;
+        --secondary: #292a2e;
+        --primary: #5b8dbf;
+        --primary-text: #8eb6dc;
+        --primary-soft: #1a2738;
+        --fill-muted-foreground: #abaeb4;
+        --decorative-foreground: #71757e;
+      }
+      #boot-shell,
+      #boot-shell * {
+        box-sizing: border-box;
+      }
+      #boot-shell {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483000;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--sheet);
+        color: var(--foreground);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto,
+          sans-serif;
+      }
+      /* 只露出与这页同形的那一块（形状由 head 里的脚本写在 <html data-boot> 上）。 */
+      [data-shape] {
+        display: none;
+      }
+      /* 公开页与 NotFound 都在 AuthLayout 里，底色是外框色。 */
+      html[data-boot="plain"] #boot-shell {
+        background: var(--chrome);
+      }
+      html[data-boot="home"] [data-shape="list"],
+      html[data-boot="list"] [data-shape="list"],
+      html[data-boot="conv"] [data-shape="conv"],
+      html[data-boot="page"] [data-shape="page"] {
+        display: flex;
+      }
+      .boot-phone {
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+      }
+      .boot-header {
+        position: relative;
+        padding-top: env(safe-area-inset-top, 0px);
+      }
+      .boot-bar {
+        display: flex;
+        height: 52px;
+        align-items: center;
+        gap: 4px;
+        padding: 0 12px;
+      }
+      .boot-icon {
+        display: flex;
+        width: 44px;
+        height: 44px;
+        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+      }
+      .boot-bar > .boot-icon:first-child {
+        margin-left: -8px;
+      }
+      .boot-icon svg {
+        width: 20px;
+        height: 20px;
+      }
+      .boot-accent {
+        color: var(--primary-text);
+      }
+      .boot-title {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+      }
+      .boot-title-text {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1.25;
+      }
+      .boot-title-text svg {
+        width: 14px;
+        height: 14px;
+        color: var(--decorative-foreground);
+      }
+      .boot-line {
+        display: block;
+        border-radius: 4px;
+        background: var(--secondary);
+        animation: boot-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+      @keyframes boot-pulse {
+        50% {
+          opacity: 0.5;
+        }
+      }
+      /* 贴页头底边：与应用的刷新条（IndexRefreshBar）同一个位置，接手时不跳。 */
+      .boot-progress {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: 2px;
+        overflow: hidden;
+      }
+      .boot-progress span {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -40%;
+        width: 40%;
+        border-radius: 9999px;
+        background: var(--primary);
+        animation: boot-progress 1.6s ease-in-out infinite;
+      }
+      @keyframes boot-progress {
+        to {
+          left: 100%;
+        }
+      }
+      /* 与共享包 SessionFilterChips 的触屏档同形：32px 高、未选中是 field-fill。 */
+      .boot-chips {
+        display: flex;
+        gap: 6px;
+        padding: 0 12px 10px;
+      }
+      .boot-chip {
+        display: flex;
+        height: 32px;
+        align-items: center;
+        border-radius: 9999px;
+        padding: 0 12px;
+        background: color-mix(in oklab, var(--foreground) 5%, transparent);
+        color: var(--fill-muted-foreground);
+        font-size: 14px;
+        white-space: nowrap;
+      }
+      .boot-chip[aria-current] {
+        background: var(--primary-soft);
+        color: var(--primary-text);
+        font-weight: 500;
+      }
+      /* 行与共享包 SessionRowSkeleton 的 phone 档同几何、同四行渐淡。 */
+      .boot-list {
+        flex: 1;
+        overflow: hidden;
+        padding: 0 8px;
+      }
+      .boot-row {
+        display: flex;
+        min-height: 64px;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 8px;
+      }
+      .boot-avatar {
+        width: 44px;
+        height: 44px;
+        flex-shrink: 0;
+        border-radius: 12px;
+      }
+      .boot-lines {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .boot-lines > span:first-child {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .boot-time {
+        margin-left: auto;
+        width: 32px;
+        height: 10px;
+        flex-shrink: 0;
+      }
+      /* 对话页：与 SessionDetailHeader 的手机档、TranscriptSkeleton、触屏 ChatComposer 同几何。 */
+      .boot-conv .boot-bar > .boot-icon:first-child {
+        margin-left: 0;
+      }
+      .boot-conv-title {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 7px;
+        padding-left: 8px;
+      }
+      .boot-transcript {
+        display: flex;
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 12px;
+        overflow: hidden;
+        padding: 16px 20px 8px;
+      }
+      .boot-bubble {
+        border-radius: 8px;
+      }
+      .boot-band {
+        padding: 8px 20px max(12px, env(safe-area-inset-bottom, 0px));
+      }
+      .boot-composer {
+        display: flex;
+        height: 48px;
+        align-items: center;
+        gap: 4px;
+        border-radius: 9999px;
+        padding: 0 14px 0 2px;
+        background: color-mix(in oklab, var(--foreground) 5%, transparent);
+        color: var(--fill-muted-foreground);
+        font-size: 16px;
+      }
+      .boot-composer .boot-icon svg {
+        width: 16px;
+        height: 16px;
+      }
+      .boot-send {
+        margin-left: auto;
+        width: 44px;
+        height: 44px;
+        flex-shrink: 0;
+        border-radius: 9999px;
+        background: var(--primary);
+        opacity: 0.5;
+      }
+      /* 其余页的手机页头与 PhonePageHeader 同形：外框色、px-4、gap-3，首颗按钮 -ml-2。 */
+      .boot-page-header {
+        background: var(--chrome);
+      }
+      .boot-page-header .boot-bar {
+        gap: 12px;
+        padding: 0 16px;
+      }
+      .boot-page-header .boot-back,
+      .boot-page-header .boot-menu {
+        margin-left: -8px;
+      }
+      .boot-back {
+        display: none !important;
+      }
+      html[data-boot-sub] .boot-back {
+        display: flex !important;
+      }
+      html[data-boot-sub] .boot-menu {
+        display: none !important;
+      }
+      .boot-page-body {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 12px;
+        padding: 20px 16px;
+      }
+      .boot-card {
+        height: 88px;
+        border-radius: 12px;
+      }
+      .boot-slow {
+        display: none;
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 1;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px 16px max(12px, env(safe-area-inset-bottom, 0px));
+        background: var(--sheet);
+        color: var(--muted-foreground);
+        font-size: 13px;
+      }
+      #boot-shell[data-slow] .boot-slow {
+        display: flex;
+      }
+      .boot-spinner {
+        width: 12px;
+        height: 12px;
+        border: 1.5px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 9999px;
+        animation: boot-spin 1s linear infinite;
+      }
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .boot-desk {
+        display: none;
+      }
+      /* 桌面宽度（规格 L4）：外框色上的侧栏 + 内容页，对话页多一列索引（宽度跟着拖过的
+         宽度）；根地址在桌面去总览，按其余页画；公开页只铺外框色。 */
+      @media (min-width: 768px) {
+        #boot-shell {
+          flex-direction: row;
+          background: var(--chrome);
+        }
+        .boot-phone {
+          display: none !important;
+        }
+        html:not([data-boot="plain"]) .boot-desk {
+          display: flex;
+          min-width: 0;
+          flex: 1;
+        }
+        .boot-slow {
+          background: transparent;
+        }
+        .boot-nav {
+          display: flex;
+          width: 224px;
+          flex-shrink: 0;
+          flex-direction: column;
+          gap: 2px;
+          padding: 12px;
+        }
+        html[data-boot-nav="collapsed"] .boot-nav {
+          width: 56px;
+          padding: 8px;
+        }
+        html[data-boot-nav="collapsed"] .boot-nav-label {
+          display: none;
+        }
+        html[data-boot-nav="collapsed"] .boot-nav-row,
+        html[data-boot-nav="collapsed"] .boot-brand {
+          justify-content: center;
+          padding: 0;
+        }
+        .boot-brand {
+          display: flex;
+          height: 40px;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 10px;
+          padding: 0 4px;
+        }
+        .boot-nav-row {
+          display: flex;
+          height: 34px;
+          align-items: center;
+          gap: 10px;
+          padding: 0 10px;
+        }
+        .boot-nav-icon {
+          width: 16px;
+          height: 16px;
+          flex-shrink: 0;
+        }
+        .boot-desk .boot-line {
+          background: var(--muted);
+        }
+        .dark .boot-desk .boot-line {
+          background: var(--secondary);
+        }
+        .boot-main {
+          display: flex;
+          min-width: 0;
+          flex: 1;
+          flex-direction: column;
+        }
+        .boot-topbar {
+          height: 52px;
+          flex-shrink: 0;
+        }
+        html[data-boot="list"] .boot-topbar,
+        html[data-boot="conv"] .boot-topbar {
+          height: 8px;
+        }
+        .boot-body {
+          display: flex;
+          min-height: 0;
+          flex: 1;
+        }
+        .boot-index {
+          display: none;
+          width: 320px;
+          flex-shrink: 0;
+          flex-direction: column;
+          gap: 14px;
+          padding: 12px 14px;
+        }
+        html[data-boot="list"] .boot-index,
+        html[data-boot="conv"] .boot-index {
+          display: flex;
+        }
+        .boot-index-row {
+          padding: 4px 8px;
+        }
+        .boot-sheet {
+          flex: 1;
+          margin: 0 8px 8px 0;
+          border-radius: 12px;
+          background: var(--sheet);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-progress span,
+        .boot-line,
+        .boot-spinner {
+          animation: none;
+        }
+        /* 与 IndexRefreshBar 的 motion-reduce 档相同：整条、40% 不透明，仍看得出在加载。 */
+        .boot-progress span {
+          left: 0;
+          width: 100%;
+          opacity: 0.4;
+        }
+      }
+    </style>
   </head>
   <body>
+    <!--
+      启动壳（规格 2026-11-25 决策 B2、L1–L5，审计 W31）：与这次要打开的那一页同形的骨架，
+      HTML 一到就画，不等脚本。它在 #root 之外、盖在上面，应用第一屏画出来之前一直
+      留着——「加载中…」占位、切出去的页还没取到时的空白都被它盖住，不会闪一下再空。
+      8 秒仍没起来，底部出一行「网络较慢，仍在加载…」。撤掉它的判据在下面的脚本里。
+
+      形状（data-shape）由 head 里的脚本按地址选；能事先知道的字（标题「全部」、筛选
+      chip、输入框占位）写真字，由下面的脚本按语言填进 data-t。几何逐个对着应用里的
+      真组件：SessionRowSkeleton（phone）、SessionFilterChips（touch）、
+      TranscriptSkeleton、触屏 ChatComposer、AppShell 的侧栏与 content-sheet。
+    -->
+    <div id="boot-shell">
+      <div class="boot-phone" data-shape="list" aria-hidden="true">
+        <div class="boot-header" data-boot="header">
+          <div class="boot-bar">
+            <span class="boot-icon"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="4" x2="20" y1="12" y2="12" />
+                <line x1="4" x2="20" y1="6" y2="6" />
+                <line x1="4" x2="20" y1="18" y2="18" /></svg
+            ></span>
+            <span class="boot-title">
+              <span class="boot-title-text"
+                ><span data-boot="title" data-t="all"></span
+                ><svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="m6 9 6 6 6-6" /></svg
+              ></span>
+              <span class="boot-line" style="width: 120px; height: 10px"></span>
+            </span>
+            <span class="boot-icon"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.3-4.3" /></svg
+            ></span>
+            <span class="boot-icon boot-accent"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+                />
+                <path
+                  d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"
+                /></svg
+            ></span>
+          </div>
+          <div class="boot-chips">
+            <span
+              class="boot-chip"
+              data-boot="chip"
+              aria-current="true"
+              data-t="all"
+            ></span>
+            <span class="boot-chip" data-boot="chip" data-t="needsYou"></span>
+            <span class="boot-chip" data-boot="chip" data-t="running"></span>
+            <span class="boot-chip" data-boot="chip" data-t="unread"></span>
+          </div>
+          <span class="boot-progress" data-boot="progress"><span></span></span>
+        </div>
+        <div class="boot-list">
+          <div class="boot-row" data-boot="row" style="opacity: 0.95">
+            <span class="boot-line boot-avatar"></span>
+            <span class="boot-lines">
+              <span>
+                <span
+                  class="boot-line"
+                  data-boot="row-title"
+                  style="width: 68%; height: 14px"
+                ></span>
+                <span class="boot-line boot-time" data-boot="row-time"></span>
+              </span>
+              <span class="boot-line" style="width: 60%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row" style="opacity: 0.75">
+            <span class="boot-line boot-avatar"></span>
+            <span class="boot-lines">
+              <span>
+                <span
+                  class="boot-line"
+                  data-boot="row-title"
+                  style="width: 59%; height: 14px"
+                ></span>
+                <span class="boot-line boot-time" data-boot="row-time"></span>
+              </span>
+              <span class="boot-line" style="width: 60%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row" style="opacity: 0.55">
+            <span class="boot-line boot-avatar"></span>
+            <span class="boot-lines">
+              <span>
+                <span
+                  class="boot-line"
+                  data-boot="row-title"
+                  style="width: 50%; height: 14px"
+                ></span>
+                <span class="boot-line boot-time" data-boot="row-time"></span>
+              </span>
+              <span class="boot-line" style="width: 60%; height: 12px"></span>
+            </span>
+          </div>
+          <div class="boot-row" data-boot="row" style="opacity: 0.35">
+            <span class="boot-line boot-avatar"></span>
+            <span class="boot-lines">
+              <span>
+                <span
+                  class="boot-line"
+                  data-boot="row-title"
+                  style="width: 41%; height: 14px"
+                ></span>
+                <span class="boot-line boot-time" data-boot="row-time"></span>
+              </span>
+              <span class="boot-line" style="width: 60%; height: 12px"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="boot-phone boot-conv" data-shape="conv" aria-hidden="true">
+        <div class="boot-header" data-boot="header">
+          <div class="boot-bar">
+            <span class="boot-icon" data-boot="back"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m15 18-6-6 6-6" /></svg
+            ></span>
+            <span class="boot-conv-title">
+              <span class="boot-line" style="width: 120px; height: 15px"></span>
+              <span class="boot-line" style="width: 150px; height: 10px"></span>
+            </span>
+            <span class="boot-icon"
+              ><svg viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="5" cy="12" r="1.6" />
+                <circle cx="12" cy="12" r="1.6" />
+                <circle cx="19" cy="12" r="1.6" /></svg
+            ></span>
+          </div>
+          <span class="boot-progress" data-boot="progress"><span></span></span>
+        </div>
+        <div class="boot-transcript">
+          <span
+            class="boot-line boot-bubble"
+            data-boot="bubble"
+            style="width: 66%; height: 44px"
+          ></span>
+          <span
+            class="boot-line boot-bubble"
+            data-boot="bubble"
+            style="
+              width: 44%;
+              height: 32px;
+              align-self: flex-end;
+              opacity: 0.78;
+            "
+          ></span>
+          <span
+            class="boot-line boot-bubble"
+            data-boot="bubble"
+            style="width: 78%; height: 56px; opacity: 0.56"
+          ></span>
+          <span
+            class="boot-line boot-bubble"
+            data-boot="bubble"
+            style="
+              width: 38%;
+              height: 32px;
+              align-self: flex-end;
+              opacity: 0.34;
+            "
+          ></span>
+        </div>
+        <div class="boot-band">
+          <div class="boot-composer" data-boot="composer">
+            <span class="boot-icon"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M16 5h6" />
+                <path d="M19 2v6" />
+                <path
+                  d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"
+                />
+                <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                <circle cx="9" cy="9" r="2" /></svg
+            ></span>
+            <span data-t="reply"></span>
+            <span class="boot-send"></span>
+          </div>
+        </div>
+      </div>
+      <div class="boot-phone" data-shape="page" aria-hidden="true">
+        <div class="boot-header boot-page-header" data-boot="header">
+          <div class="boot-bar">
+            <span class="boot-icon boot-back"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m15 18-6-6 6-6" /></svg
+            ></span>
+            <span class="boot-icon boot-menu"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="4" x2="20" y1="12" y2="12" />
+                <line x1="4" x2="20" y1="6" y2="6" />
+                <line x1="4" x2="20" y1="18" y2="18" /></svg
+            ></span>
+            <span class="boot-line" style="width: 88px; height: 16px"></span>
+          </div>
+          <span class="boot-progress" data-boot="progress"><span></span></span>
+        </div>
+        <div class="boot-page-body">
+          <span class="boot-line boot-card"></span>
+          <span class="boot-line boot-card" style="opacity: 0.7"></span>
+          <span class="boot-line boot-card" style="opacity: 0.4"></span>
+        </div>
+      </div>
+      <div class="boot-desk" data-boot="desk" aria-hidden="true">
+        <div class="boot-nav">
+          <div class="boot-brand">
+            <span
+              class="boot-line"
+              style="
+                width: 32px;
+                height: 32px;
+                flex-shrink: 0;
+                border-radius: 8px;
+              "
+            ></span>
+            <span
+              class="boot-line boot-nav-label"
+              style="width: 72px; height: 14px"
+            ></span>
+          </div>
+          <div class="boot-nav-row" data-boot="nav-item">
+            <span class="boot-line boot-nav-icon"></span>
+            <span
+              class="boot-line boot-nav-label"
+              style="width: 40px; height: 12px"
+            ></span>
+          </div>
+          <div class="boot-nav-row" data-boot="nav-item">
+            <span class="boot-line boot-nav-icon"></span>
+            <span
+              class="boot-line boot-nav-label"
+              style="width: 40px; height: 12px"
+            ></span>
+          </div>
+          <div class="boot-nav-row" data-boot="nav-item">
+            <span class="boot-line boot-nav-icon"></span>
+            <span
+              class="boot-line boot-nav-label"
+              style="width: 40px; height: 12px"
+            ></span>
+          </div>
+          <div class="boot-nav-row" data-boot="nav-item">
+            <span class="boot-line boot-nav-icon"></span>
+            <span
+              class="boot-line boot-nav-label"
+              style="width: 40px; height: 12px"
+            ></span>
+          </div>
+          <div class="boot-nav-row" data-boot="nav-item">
+            <span class="boot-line boot-nav-icon"></span>
+            <span
+              class="boot-line boot-nav-label"
+              style="width: 40px; height: 12px"
+            ></span>
+          </div>
+          <div class="boot-nav-row" data-boot="nav-item">
+            <span class="boot-line boot-nav-icon"></span>
+            <span
+              class="boot-line boot-nav-label"
+              style="width: 40px; height: 12px"
+            ></span>
+          </div>
+        </div>
+        <div class="boot-main">
+          <div class="boot-topbar"></div>
+          <div class="boot-body">
+            <div class="boot-index" data-boot="index">
+              <span
+                class="boot-line"
+                style="width: 100%; height: 32px; border-radius: 8px"
+              ></span>
+              <span
+                class="boot-line"
+                style="width: 70%; height: 22px; border-radius: 9999px"
+              ></span>
+              <span class="boot-index-row"
+                ><span class="boot-line" style="width: 60%; height: 12px"></span
+              ></span>
+              <span class="boot-index-row" style="opacity: 0.75"
+                ><span class="boot-line" style="width: 72%; height: 12px"></span
+              ></span>
+              <span class="boot-index-row" style="opacity: 0.55"
+                ><span class="boot-line" style="width: 52%; height: 12px"></span
+              ></span>
+              <span class="boot-index-row" style="opacity: 0.35"
+                ><span class="boot-line" style="width: 64%; height: 12px"></span
+              ></span>
+            </div>
+            <div class="boot-sheet" data-boot="sheet"></div>
+          </div>
+        </div>
+      </div>
+      <div class="boot-slow" role="status">
+        <span class="boot-spinner" aria-hidden="true"></span>
+        <span id="boot-slow-text"></span>
+      </div>
+    </div>
     <div id="root"></div>
+    <script>
+      (function () {
+        var SLOW_MS = 8000;
+        // 第一屏 = #root 里出现了能读或能点的东西。RequireAuth 的「加载中…」只是一行
+        // 字，sonner 的通知区是空的 <section>，切出去的页没取到时是空——这些都不算。
+        var READY =
+          "main, header, nav, form, h1, h2, button, a[href], input, textarea";
+        var shell = document.getElementById("boot-shell");
+        var app = document.getElementById("root");
+        if (!shell || !app) return;
+
+        // 与应用的语言探测同序（src/i18n/index.ts）：地址里的 ?lang= → agentre.lang → 浏览器。
+        var asked = /[?&]lang=([^&]*)/.exec(location.search || "");
+        var stored = null;
+        try {
+          stored = asked ? decodeURIComponent(asked[1]) : null;
+        } catch (e) {}
+        // 应用只认 zh-* 与 en：别的值 i18next 直接跳过，这里也跳过。
+        if (stored && !/^(zh|en)\b/i.test(stored)) stored = null;
+        if (!stored) {
+          try {
+            stored = localStorage.getItem("agentre.lang");
+          } catch (e) {}
+        }
+        var zh = /^zh/i.test(stored || navigator.language || "");
+        // 与应用里同一份文案（chat.phone.scopeAll、SessionFilterChips、触屏输入框占位）。
+        var T = zh
+          ? {
+              all: "全部",
+              needsYou: "需要你",
+              running: "进行中",
+              unread: "未读",
+              reply: "回复…",
+              slow: "网络较慢，仍在加载…",
+            }
+          : {
+              all: "All",
+              needsYou: "Needs you",
+              running: "In progress",
+              unread: "Unread",
+              reply: "Reply…",
+              slow: "Slow network, still loading…",
+            };
+        var slots = shell.querySelectorAll("[data-t]");
+        for (var i = 0; i < slots.length; i++) {
+          slots[i].textContent = T[slots[i].getAttribute("data-t")];
+        }
+        document.getElementById("boot-slow-text").textContent = T.slow;
+
+        var slow = setTimeout(function () {
+          shell.setAttribute("data-slow", "");
+        }, SLOW_MS);
+        var observer = new MutationObserver(check);
+
+        function check() {
+          if (!app.querySelector(READY)) return;
+          observer.disconnect();
+          clearTimeout(slow);
+          // 等第一屏真的画到屏上（下一帧之后）再撤，中间不露出一帧空白。
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+              shell.remove();
+            });
+          });
+        }
+
+        observer.observe(app, { childList: true, subtree: true });
+        check();
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

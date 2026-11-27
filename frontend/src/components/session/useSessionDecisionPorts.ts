@@ -21,7 +21,25 @@ import type {
   PendingToolPermissionShape,
 } from "@/lib/waiterBlocks";
 import type { RelayClient } from "@/lib/relayClient";
+import { isRelayRequestTimeout } from "@/lib/dispatch";
 import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
+
+/**
+ * 把中继的「等应答超时」改写成共享包认得的超时错误（名字带 Timeout）：包据此在审批卡 /
+ * 停靠条上写「没收到确认，可能已经生效」，而不是「没成功」。别的失败原样冒泡。
+ */
+async function withTimeoutName<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (isRelayRequestTimeout(error)) {
+      const timeout = new Error(error.message, { cause: error });
+      timeout.name = "RequestTimeoutError";
+      throw timeout;
+    }
+    throw error;
+  }
+}
 
 export interface SessionDecisionPortsParams {
   sid: string;
@@ -40,6 +58,12 @@ export interface SessionDecisionPorts {
   waiters: Waiters;
   /** 刚刚发现已被别的端回答过的那一条（R10）。 */
   handledRequestId: string | null;
+  /**
+   * 这条对话的待决清单**问到过**没有（至少一次答上来了）。`waiters` 的初值是空清单，
+   * 与「问过了，没有」长得一样：本地先画出来的那张审批卡要等这一格为真才算确认过
+   * （规格 2026-11-25 d9）。问失败不算。
+   */
+  waitersConfirmed: boolean;
   /** 目标会话换了。由详情视图的渲染期重置调用。 */
   reset: () => void;
   /**
@@ -83,6 +107,8 @@ export function useSessionDecisionPorts({
    * 一个正要消失的东西上。见 DecisionPanel 文件头。
    */
   const [handledRequestId, setHandledRequestId] = useState<string | null>(null);
+  /** 哪一条对话的待决清单答上来过。按 sid 记：换了对话，上一条的答复不算。 */
+  const [confirmedFor, setConfirmedFor] = useState<string | null>(null);
 
   const refreshWaiters = useCallback(async (): Promise<Waiters | null> => {
     const c = clientRef.current;
@@ -100,6 +126,7 @@ export function useSessionDecisionPorts({
           []) as PendingAskQuestionShape[],
       };
       setWaiters(next);
+      setConfirmedFor(sid);
       // 「已被处理」是对**那一条**待决策的说明,不是页面的永久状态:新的待决策上来
       // 之后还挂着,就成了「已被处理」与一张真等着人批的卡并排自相矛盾。
       if (next.toolPermissions.length > 0 || next.askUserQuestions.length > 0) {
@@ -155,7 +182,7 @@ export function useSessionDecisionPorts({
     }
     try {
       await doSubmit();
-    } catch {
+    } catch (error) {
       /*
         提交没发出去（socket 刚断等）：**要出声**——按钮点下去什么都不发生会让用户
         以为批准生效了，而工具还阻塞在那台机器上。
@@ -167,12 +194,22 @@ export function useSessionDecisionPorts({
         吞掉而不是继续抛：抛上去卡片会**再**把同一件事印在自己的错误态里，
         同一次失败说两遍，其中一遍正是决策 8 要去掉的那一行。
       */
-      toast.error(t("session.decision.submitFailed"), {
-        action: {
-          label: t("session.decision.retry"),
-          onClick: () => void runPanelDecision(requestId, doSubmit),
+      // 超时是「没收到确认」，请求可能已经送达：说「什么都没发出」会诱导用户重发。
+      // id 按请求号定：同一条审批连续失败只留一条提示，后来的顶替前面的，不叠加。
+      toast.error(
+        t(
+          isRelayRequestTimeout(error)
+            ? "session.decision.timedOut"
+            : "session.decision.submitFailed",
+        ),
+        {
+          id: `decision-failed:${requestId}`,
+          action: {
+            label: t("session.decision.retry"),
+            onClick: () => void runPanelDecision(requestId, doSubmit),
+          },
         },
-      });
+      );
     } finally {
       await refreshWaiters();
     }
@@ -244,16 +281,15 @@ export function useSessionDecisionPorts({
     alwaysAllowSession?: boolean;
     denyReason?: string;
   }) {
-    const res = await clientRef.current!.request(
-      rpcMethods.runtimeSubmitToolPermission,
-      {
+    const res = await withTimeoutName(() =>
+      clientRef.current!.request(rpcMethods.runtimeSubmitToolPermission, {
         conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId: input.requestId,
         allow: input.allow,
         alwaysAllowSession: input.alwaysAllowSession,
         denyReason: input.denyReason,
-      },
+      }),
     );
     void refreshWaiters();
     return res;
@@ -264,9 +300,8 @@ export function useSessionDecisionPorts({
     answers?: { questionIndex: number; labels: string[]; otherText?: string }[];
     skipped?: boolean;
   }) {
-    const res = await clientRef.current!.request(
-      rpcMethods.runtimeSubmitAnswer,
-      {
+    const res = await withTimeoutName(() =>
+      clientRef.current!.request(rpcMethods.runtimeSubmitAnswer, {
         conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId: input.requestId,
@@ -280,7 +315,7 @@ export function useSessionDecisionPorts({
           otherText: a.otherText ?? "",
         })),
         skipped: input.skipped ?? false,
-      },
+      }),
     );
     void refreshWaiters();
     return res;
@@ -332,6 +367,7 @@ export function useSessionDecisionPorts({
   const reset = useCallback(() => {
     setWaiters({ toolPermissions: [], askUserQuestions: [] });
     setHandledRequestId(null);
+    setConfirmedFor(null);
   }, []);
 
   const requestWaitersRefresh = useCallback(() => {
@@ -341,6 +377,7 @@ export function useSessionDecisionPorts({
   return {
     waiters,
     handledRequestId,
+    waitersConfirmed: confirmedFor === sid,
     reset,
     refreshWaiters,
     requestWaitersRefresh,

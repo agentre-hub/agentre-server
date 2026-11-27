@@ -11,7 +11,7 @@
  */
 import { AccountChannelSyncVersion } from "@agentre-hub/agentre-wire";
 
-import { api } from "@/lib/api";
+import { api, ApiTimeoutError } from "@/lib/api";
 import { createRoster } from "@/lib/rosterFetch";
 
 export interface OrgWriteResponse {
@@ -113,14 +113,90 @@ export async function fetchProjects(): Promise<ProjectNode[]> {
  * 共享的那一份项目树（`@/lib/rosterFetch`）：对话页与详情同一屏上共用一个在飞请求、
  * 10 秒内复用。同步版本推进与本文件里的每一个写作废它。
  */
-export const projectRoster = createRoster(fetchProjects, [
-  AccountChannelSyncVersion,
-]);
+export const projectRoster = createRoster(
+  fetchProjects,
+  [AccountChannelSyncVersion],
+  "roster-projects",
+);
 
-export function createProject(
+/**
+ * 新建超时（F5）：请求发出去了，可能已经建好。**不自动重读**——抛这个，界面上是一行
+ * 「网络超时，可能已经建好了」+「刷新看看」，由按钮经 `verifyProjectCreate` 去核实。
+ * 消息里的 timed out 是包认超时的标记，不上屏。
+ */
+export class ProjectCreateTimeoutError extends Error {
+  constructor() {
+    super("project create timed out");
+    this.name = "ProjectCreateTimeoutError";
+  }
+}
+
+/** 在重读的整份名单里认出「刚提交的那个」：提交前没见过 + 名称、上级一致，取靠后的一条。 */
+export function findCreatedProject(
+  projects: ProjectNode[],
+  submitted: ProjectFields,
+  knownBefore: ReadonlySet<string>,
+): ProjectNode | null {
+  const matches = projects.filter(
+    (p) =>
+      !knownBefore.has(p.syncId) &&
+      p.name.trim() === (submitted.name ?? "").trim() &&
+      p.parentSyncId === (submitted.parent_sync_id ?? ""),
+  );
+  return matches.length > 0 ? matches[matches.length - 1] : null;
+}
+
+/**
+ * 新建的「提交前」基线：此刻名单里全部项目的标识，读不到为 null。
+ *
+ * 走共享名单（在飞就共用、10 秒内复用）：它只要是一次**在 POST 发出之前就答完了**的读
+ * 就成立，调用方因此必须先等它、再发 POST（见 `createProjectCreatePorts`）。
+ */
+export function readProjectBaseline(): Promise<ReadonlySet<string> | null> {
+  return projectRoster.get().then(
+    (rows) => new Set(rows.map((p) => p.syncId)) as ReadonlySet<string>,
+    () => null,
+  );
+}
+
+/**
+ * 建项目。POST 超时时请求可能已经写进去了：抛 `ProjectCreateTimeoutError`，由「刷新看看」
+ * 核实（`verifyProjectCreate`）。基线不归这里取——它必须先于 POST 答完，见
+ * `readProjectBaseline`。
+ */
+export async function createProject(
   fields: ProjectFields,
 ): Promise<OrgWriteResponse> {
-  return post("/v1/workspace/org/projects", fields);
+  try {
+    return await post<OrgWriteResponse>("/v1/workspace/org/projects", fields);
+  } catch (err) {
+    if (!(err instanceof ApiTimeoutError)) throw err;
+    throw new ProjectCreateTimeoutError();
+  }
+}
+
+/**
+ * 新建超时后核实：**每次都现读整份名单**（不走共享名单），读失败原样抛——仍不知道建没
+ * 建，不能说没找到。
+ *
+ * 有基线时认「提交前没见过 + 同名同上级」的那个；基线没取到时退一步，名单里有同名同上级
+ * 的就算找到：认错成同名旧项目的代价是打开了它，认不出的代价是再提交建出第二个。
+ *
+ * `knownNow` 是这次读到的全部标识：认不出、用户再提交时，它就是那一次的「提交前」基线。
+ */
+export async function verifyProjectCreate(
+  fields: ProjectFields,
+  knownBefore: ReadonlySet<string> | null,
+): Promise<{
+  created: OrgWriteResponse | null;
+  knownNow: ReadonlySet<string>;
+}> {
+  const rows = await fetchProjects();
+  const found = findCreatedProject(rows, fields, knownBefore ?? new Set());
+  return {
+    created: found ? { sync_id: found.syncId, version: 0 } : null,
+    knownNow: new Set(rows.map((p) => p.syncId)),
+  };
 }
 
 export function updateProject(

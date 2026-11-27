@@ -173,6 +173,7 @@ They live next to what they guard.
 | `internal/model/entity/schema_test.go` | Every writable entity field has a column in the baseline DDL, and every baseline table is claimed by an entity |
 | `internal/api/http_golden_test.go` | The committed `/v1/sync/*` and `/v1/engine/*` response samples still match what the real server emits |
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token, token-role, structural-line (divider-coloured edge, `divide-*`, field edge — a borderless fill is accepted), native-control, secure-context, Alert-slot and i18n rules fire, at error severity, over `src/` |
+| `frontend/src/__tests__/pwa-install.test.ts` | The manifest and `index.html` install metadata are complete; the colours `public/offline.html` and the `index.html` boot shell copy as custom properties equal the pinned package's `tokens.css`, their styles hold no other colour literal, and the manifest / `theme-color` colours are `--background` |
 | `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the explicitly numbered Device Flow, passkey and account codes in `internal/pkg/code/code.go` |
 | `frontend/src/__tests__/user-code-contract.test.ts` | `lib/userCode.ts`'s alphabet and length still match `internal/pkg/usercode` |
 | `frontend/src/__tests__/login-error-contract.test.ts` | `Login.tsx`'s `KNOWN_ERRORS` still matches the `/login?err=` values `auth_ctr` redirects with, and each has copy in both locales |

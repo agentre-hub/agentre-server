@@ -13,6 +13,7 @@ import { Link } from "react-router-dom";
 
 import {
   Button,
+  cn,
   MachineOfflineBanner,
   StatusBanner,
   type StatusBannerTone,
@@ -22,6 +23,7 @@ import {
   type ProtocolRejection,
 } from "@/lib/protocolMismatch";
 import { useIsMobile } from "@/components/use-is-mobile";
+import { reloadPage } from "@/hooks/use-update-available";
 import { formatRelativeTime, type SessionViewStatus } from "@/lib/sessionView";
 
 /**
@@ -130,12 +132,19 @@ export default function SessionStatusBanner({
 }) {
   const { t, i18n } = useTranslation();
   const isMobile = useIsMobile();
+  // 触屏上出口按钮不小于 44px（规格：触屏可点区域）；桌面保持 sm 档不变。
+  const touchTarget = isMobile ? "min-h-11" : undefined;
   const tier = tierOf(status);
   // 正常态与瞬态都不占内容区（决策 1 / 2）。
   if (tier === null || tier === "transient") return null;
   // 手机上离线不挂横幅（规格 2026-11-05 决策 8）：页头写「离线 · 时间」，输入框
   // 那一位换成只读带——默认停在底部时顶上的横幅本来就看不到。
-  if (isMobile && status === "machineOffline") return null;
+  // 规格 H5：离线 / App 没开时只留底部只读带（它写「最后在线 …」），页头只写「离线」。
+  if (
+    isMobile &&
+    (status === "machineOffline" || status === "desktopAppNotRunning")
+  )
+    return null;
 
   /**
    * 「最后在线」走全站的相对时间口径（`formatRelativeTime`，与索引行、详情头部
@@ -219,7 +228,7 @@ export default function SessionStatusBanner({
           <Button
             variant="outline"
             size="sm"
-            className="w-full @md:w-auto"
+            className={cn("w-full @md:w-auto", touchTarget)}
             onClick={onReconnect}
           >
             <RotateCw aria-hidden className="size-3.5" />
@@ -229,16 +238,33 @@ export default function SessionStatusBanner({
       // 这三档的出口都是设备页。`protocolMismatch` 尤其不能给「重新连接」：重拨
       // 一次只会被同样拒一次（客户端那一侧已经据此停掉重试了），要动的是那台机器
       // 上的构建。
-      // 页面旧的那一头例外：要动的是这个控制台自己，用户在设备页什么都做不了。
+      // 页面旧的那一头例外：要动的是这个控制台自己，用户在设备页什么都做不了——
+      // 出口是「重新加载」，与新版本提示条同一个动作（规格 2026-11-25 决策 B1）。
       case "protocolMismatch":
-        if (rejection?.stale === "page") return null;
+        if (rejection?.stale === "page") {
+          return (
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn("w-full @md:w-auto", touchTarget)}
+              onClick={reloadPage}
+            >
+              <RotateCw aria-hidden className="size-3.5" />
+              {t("common.reload")}
+            </Button>
+          );
+        }
         return deviceLink();
       case "desktopAppNotRunning":
       case "pinnedAgentredUnavailable":
         return deviceLink();
       case "loggedOut":
         return (
-          <Button asChild size="sm" className="w-full @md:w-auto">
+          <Button
+            asChild
+            size="sm"
+            className={cn("w-full @md:w-auto", touchTarget)}
+          >
             {/* 早就写好、却从没被任何一处引用过的那个键，终于有了归宿。 */}
             <Link to="/login">{t("session.relogin")}</Link>
           </Button>
@@ -251,7 +277,12 @@ export default function SessionStatusBanner({
 
   function deviceLink(): ReactNode {
     return (
-      <Button asChild variant="outline" size="sm" className="w-full @md:w-auto">
+      <Button
+        asChild
+        variant="outline"
+        size="sm"
+        className={cn("w-full @md:w-auto", touchTarget)}
+      >
         <Link to="/devices">{t("session.banner.viewDevice")}</Link>
       </Button>
     );

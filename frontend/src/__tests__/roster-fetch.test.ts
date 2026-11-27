@@ -7,6 +7,7 @@
  * 断言一律数 `api()` 的调用次数：这里要证的就是「同一屏上不再各打各的」。
  */
 import { renderHook } from "@testing-library/react";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
@@ -15,6 +16,7 @@ import { agentRoster } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { attentionRoster } from "@/lib/attentionCount";
 import { deviceRoster, renameDevice, revokeDevice } from "@/lib/devices";
+import { bindAccount } from "@/lib/localStore";
 import { createProject, projectRoster } from "@/lib/projects";
 import { invalidateRosters, RosterReuseMs } from "@/lib/rosterFetch";
 import { updateAgent, updateDepartment } from "@/pages/org/writes";
@@ -257,5 +259,66 @@ describe("作废", () => {
     await expect(createProject({ name: "n" })).rejects.toThrow("timeout");
     await projectRoster.get();
     expect(callsTo("/v1/workspace/projects")).toBe(3);
+  });
+});
+
+/**
+ * 本地优先（规格 2026-11-25 决策 A1、A5、A6）：每份名单最近一次成功的结果落进按账号
+ * 隔离的本机存储，冷启动时对话页先拿它铺上来。`get()` 的语义不变——它从不交出存储里
+ * 的旧数据，外壳、详情、目标设备那几处照旧只认网络。
+ */
+describe("落进本机存储", () => {
+  const g = globalThis as Record<string, unknown>;
+
+  beforeEach(() => {
+    g.indexedDB = new IDBFactory();
+    g.IDBKeyRange = IDBKeyRange;
+    bindAccount(1);
+  });
+
+  afterEach(() => {
+    bindAccount(null);
+    delete g.indexedDB;
+    delete g.IDBKeyRange;
+  });
+
+  it("成功取回的名单落进存储，stored() 读回最近那一份；get() 不读存储", async () => {
+    expect(await deviceRoster.stored()).toBeUndefined();
+
+    const devices = await deviceRoster.get();
+    const agents = await agentRoster.get();
+    const projects = await projectRoster.get();
+    const counts = await attentionRoster.get();
+
+    expect(await deviceRoster.stored()).toEqual(devices);
+    expect(await agentRoster.stored()).toEqual(agents);
+    expect(await projectRoster.stored()).toEqual(projects);
+    expect(await attentionRoster.stored()).toEqual(counts);
+
+    // 作废之后 get 一定发新请求，不会拿存储里那份顶上。
+    invalidateRosters(null);
+    await deviceRoster.get();
+    expect(callsTo("/v1/devices")).toBe(2);
+  });
+
+  it("失败不落、不覆盖上一份", async () => {
+    const first = await deviceRoster.get();
+    invalidateRosters(null);
+    mockedApi.mockRejectedValueOnce(new Error("network down"));
+    await expect(deviceRoster.get()).rejects.toThrow("network down");
+
+    expect(await deviceRoster.stored()).toEqual(first);
+  });
+
+  it("按账号隔离：换了账号读不到上一个账号的名单", async () => {
+    await deviceRoster.get();
+    bindAccount(2);
+    expect(await deviceRoster.stored()).toBeUndefined();
+  });
+
+  it("存储不可用：stored() 给 undefined，get() 照常联网", async () => {
+    delete g.indexedDB;
+    expect(await deviceRoster.get()).toEqual([{ id: 1 }]);
+    expect(await deviceRoster.stored()).toBeUndefined();
   });
 });

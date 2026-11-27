@@ -69,11 +69,13 @@
         "wed": "Wed",
         "fri": "Fri"
       },
-      "timeZone": "Days are cut in the server's timezone, {{zone}}"
+      "timeZone": "Days are counted in {{zone}}.",
+      "timeZoneUnknown": "Days are counted as calendar days in the server's timezone."
     },
     "agents": {
       "title": "Agent usage",
       "all": "All agents →",
+      "deleted": "Deleted Agent",
       "empty": "No agent has run a conversation in this range."
     },
     "backends": {
@@ -86,6 +88,7 @@
     "projects": {
       "title": "Projects",
       "unassigned": "No project",
+      "deleted": "Deleted project",
       "empty": "No projects yet."
     }
   }

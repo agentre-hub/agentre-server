@@ -1,8 +1,11 @@
 import {
   Fragment,
+  useEffect,
+  useImperativeHandle,
   useRef,
   type ClipboardEvent,
   type KeyboardEvent,
+  type Ref,
 } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -17,7 +20,13 @@ import { CODE_LENGTH, parseUserCode, sanitize } from "@/lib/userCode";
  * 也只认这种形态。第三与第四格之间那条短横是纯装饰（aria-hidden），
  * 不是可输入格。
  */
+/** 宿主可以调的命令：提交校验没过时把焦点送到第一个空格。 */
+export interface CodeInputHandle {
+  focusFirstEmpty: () => void;
+}
+
 export interface CodeInputProps {
+  ref?: Ref<CodeInputHandle>;
   /** 定长 CODE_LENGTH 的受控值，空格用空串。 */
   value: string[];
   onChange: (next: string[]) => void;
@@ -28,6 +37,7 @@ export interface CodeInputProps {
 }
 
 export default function CodeInput({
+  ref,
   value,
   onChange,
   invalid = false,
@@ -35,6 +45,14 @@ export default function CodeInput({
 }: CodeInputProps) {
   const { t } = useTranslation();
   const refs = useRef<Array<HTMLInputElement | null>>([]);
+  const groupRef = useRef<HTMLDivElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    focusFirstEmpty() {
+      const i = value.findIndex((c) => c === "");
+      focusBox(i === -1 ? CODE_LENGTH - 1 : i);
+    },
+  }));
 
   function focusBox(index: number) {
     const clamped = Math.max(0, Math.min(CODE_LENGTH - 1, index));
@@ -72,22 +90,74 @@ export default function CodeInput({
     fill(index, chars);
   }
 
+  /** 退一格：本格有字只清本格；空格则清上一格并把焦点退回去。 */
+  function backspace(index: number) {
+    const next = [...value];
+    if (next[index]) {
+      next[index] = "";
+      onChange(next);
+      return;
+    }
+    if (index > 0) {
+      next[index - 1] = "";
+      onChange(next);
+      focusBox(index - 1);
+    }
+  }
+
+  /** 一段文字（粘贴、输入法整段插入）：整串合法码铺满六格，否则从当前格往后填。 */
+  function insertText(index: number, text: string) {
+    // 整串（含或不含连字符、大小写任意）走严格解析，一次填满六格；
+    // 半截或带杂质的退回宽松清洗，从当前格往后填。
+    const whole = parseUserCode(text);
+    if (whole) {
+      fill(0, whole.replace("-", ""));
+      return;
+    }
+    const chars = sanitize(text);
+    if (chars) fill(index, chars);
+  }
+
+  // 输入法的两件事 keydown / change 接不住，所以挂原生 beforeinput：
+  // - maxLength=1 会在 change 之前就把整段插入截成首字符，必须在这之前拦下；
+  // - Android 键盘退格的 keydown 是 key="Unidentified"，只有 deleteContentBackward。
+  // 桌面 Backspace 的 keydown 已 preventDefault，不会再触发 beforeinput，不会重复处理。
+  const beforeInputRef = useRef<(e: InputEvent) => void>(() => {});
+  useEffect(() => {
+    beforeInputRef.current = (e: InputEvent) => {
+      const el = e.target as HTMLInputElement;
+      const index = refs.current.indexOf(el);
+      if (index < 0) return;
+      if (e.inputType === "deleteContentBackward") {
+        e.preventDefault();
+        backspace(index);
+        return;
+      }
+      if (
+        (e.inputType === "insertText" ||
+          e.inputType === "insertReplacementText") &&
+        e.data &&
+        e.data.length > 1
+      ) {
+        e.preventDefault();
+        insertText(index, e.data);
+      }
+    };
+  });
+  useEffect(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const listener = (e: Event) => beforeInputRef.current(e as InputEvent);
+    group.addEventListener("beforeinput", listener);
+    return () => group.removeEventListener("beforeinput", listener);
+  }, []);
+
   function handleKeyDown(index: number, e: KeyboardEvent) {
     if (e.key === "Backspace") {
       // 自己接管而不是交给浏览器默认行为：默认只在本格里删，
       // 于是在空格上连按退格会卡住，用户得手动点回上一格。
       e.preventDefault();
-      const next = [...value];
-      if (next[index]) {
-        next[index] = "";
-        onChange(next);
-        return;
-      }
-      if (index > 0) {
-        next[index - 1] = "";
-        onChange(next);
-        focusBox(index - 1);
-      }
+      backspace(index);
       return;
     }
     if (e.key === "ArrowLeft") {
@@ -103,20 +173,12 @@ export default function CodeInput({
 
   function handlePaste(index: number, e: ClipboardEvent) {
     e.preventDefault();
-    const text = e.clipboardData.getData("text");
-    // 整串（含或不含连字符、大小写任意）走严格解析，一次填满六格；
-    // 半截或带杂质的粘贴退回宽松清洗，从当前格往后填。
-    const whole = parseUserCode(text);
-    if (whole) {
-      fill(0, whole.replace("-", ""));
-      return;
-    }
-    const chars = sanitize(text);
-    if (chars) fill(index, chars);
+    insertText(index, e.clipboardData.getData("text"));
   }
 
   return (
     <div
+      ref={groupRef}
       role="group"
       aria-label={t("device.entry.groupLabel")}
       aria-describedby={describedBy}

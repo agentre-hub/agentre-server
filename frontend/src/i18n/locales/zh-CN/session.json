@@ -13,7 +13,11 @@
   },
   "status": {
     "connecting": "连接中…",
-    "reconnecting": "重连中…"
+    "reconnecting": "重连中…",
+    "unreachable": "连不上",
+    "retryNow": "立即重试",
+    "unreachableRetry": "连不上 · 立即重试",
+    "retryCountdown": "执行端暂时连不上 · 下次自动重试 {{seconds}} 秒后"
   },
   "banner": {
     "lost": {
@@ -51,8 +55,8 @@
   "relogin": "重新登录",
   "sendFailure": {
     "transport": {
-      "title": "没送到 {{machine}}",
-      "titleUnknown": "没送到那台机器",
+      "title": "可能已送达 {{machine}}",
+      "titleUnknown": "可能已送达那台机器",
       "body": "网络中断在半路。它可能已经送到了——再发一次可能变成两条。"
     },
     "rejected": {
@@ -79,7 +83,9 @@
   "sendPending": {
     "title": "连上后自动发出",
     "sending": "发送中…",
-    "cancel": "撤销"
+    "cancel": "撤销",
+    "uploaded": "已传 {{sent}} / 共 {{total}}",
+    "uploadProgress": "上传进度"
   },
   "compose": {
     "readonly": "只读",
@@ -101,8 +107,7 @@
     "idle": "空闲",
     "interrupted": "已中断",
     "failed": "出错",
-    "waiting": "正在等待你的输入",
-    "untitled": "{{cwd}} · {{backend}} · {{status}}"
+    "waiting": "正在等待你的输入"
   },
   "transcript": {
     "empty": "还没有消息。",
@@ -116,7 +121,9 @@
   "decision": {
     "alreadyHandled": "该请求已被处理。",
     "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。",
-    "retry": "重试"
+    "timedOut": "没收到确认，可能已经生效",
+    "retry": "重试",
+    "confirmingWaiting": "正在确认是否还在等你"
   },
   "phoneHeader": {
     "status": {
@@ -127,7 +134,8 @@
       "idle": "空闲",
       "offline": "离线 · {{time}}",
       "offlineNoTime": "离线",
-      "connecting": "正在连接"
+      "connecting": "正在连接",
+      "syncing": "同步中"
     },
     "info": {
       "title": "对话信息",
@@ -151,5 +159,10 @@
       "body": "它可能已经被删除，或者不在这个账号里。"
     },
     "loadError": "这条对话没加载出来，请重试。"
+  },
+  "stop": {
+    "failed": "没停下来",
+    "failedWhat": "停止这一轮没成",
+    "retry": "重试"
   }
 }

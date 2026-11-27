@@ -15,6 +15,7 @@
  * 以及两处「不做注定失败的网络往返」：不支持技能的后端（白名单，不拨就知道）不给
  * 展开入口；离线的档展开了也不拨号，直接给离线说明——已授权的仍列得出、移得掉。
  */
+import { MemoryRouter } from "react-router-dom";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -65,6 +66,8 @@ function renderOne(
       onChangeSkills={onChangeSkills}
       onReordered={vi.fn()}
     />,
+    // 产品里它总在路由内：「添加执行目标」菜单接系统返回（D1）要读路由。
+    { wrapper: MemoryRouter },
   );
   return onChangeSkills;
 }

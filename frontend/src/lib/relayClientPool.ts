@@ -76,6 +76,8 @@ export interface RelayListener {
   onStateChange?: (state: RelayState) => void;
   /** 对端按协议版本拒了这条通道的握手，见 `RelayClientOptions.onHandshakeRejected`。 */
   onHandshakeRejected?: (detail: string) => void;
+  /** 下一次自动重试排在哪个时刻，见 `RelayClientOptions.onNextRetryAt`。 */
+  onNextRetryAt?: (at: number | null) => void;
 }
 
 /** 一份租约。 */
@@ -200,6 +202,8 @@ export class RelayClientPool {
     // 自己的初值「连接中」。所以交出租约时把当下的状态当场补一遍——信号那一路
     // （subscribeSignals）早就这么做了，普通通道漏了这一下。
     listener.onStateChange?.(entry.client.state);
+    // 倒计时同理：排着的那次重试早就报过了，新监听者等不到它。
+    listener.onNextRetryAt?.(entry.client.nextRetryAt ?? null);
 
     if (options.waitForConnect === false) return lease;
     // 已经连着就不必等那个早已落定的首次握手：它可能是一次**失败**的首次握手，
@@ -229,7 +233,8 @@ export class RelayClientPool {
   async reconnect(target: string): Promise<boolean> {
     const entry = this.entries.get(target);
     if (!entry || !this.connection) return false;
-    await this.mintTicket();
+    // 票由连接自己的 refreshCredentials 去换：它换票期间说「连接中」、401 时转登出态。
+    // 在这里另换一张，那次的 401 就落在了连接看不见的地方。
     await this.connection.reconnect();
     // 通道级失败（目标不存在 / 离线 / 转发失败）只关掉这一条通道，它随即从连接的
     // 通道表里消失——换 socket 只重新声明表里还在的那些，带不回它。所以这里显式
@@ -411,6 +416,8 @@ export class RelayClientPool {
     const longAway =
       this.hiddenAt !== null &&
       Date.now() - this.hiddenAt >= FOREGROUND_REPLACE_AFTER_MS;
+    // 登出是终态：回到前台再去换票只会再拿一次 401。
+    if (connection.state === "signedOut") return false;
     if (longAway) return true;
     // connecting：首次握手 / 一次重连已在途中。
     return (
@@ -531,6 +538,7 @@ export class RelayClientPool {
       ),
       onStateChange: fanout<[RelayState]>((l) => l.onStateChange),
       onHandshakeRejected: fanout<[string]>((l) => l.onHandshakeRejected),
+      onNextRetryAt: fanout<[number | null]>((l) => l.onNextRetryAt),
     });
   }
 

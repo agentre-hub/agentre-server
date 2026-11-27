@@ -1,14 +1,22 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+import { toast, Toaster } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "@/lib/api";
+import { api, ApiError, ApiTimeoutError, ApiUnavailableError } from "@/lib/api";
 import * as accountChannel from "@/lib/accountChannel";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -610,5 +618,719 @@ describe("部门详情手机页头", () => {
     const header = await screen.findByTestId("org-detail-header");
     expect(within(header).getByRole("button", { name: "Close" })).toBeTruthy();
     expect(within(header).getByRole("textbox", { name: "Name" })).toBeTruthy();
+  });
+});
+
+function HistoryProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <span data-testid="path">{location.pathname}</span>
+      <button onClick={() => navigate(-1)}>system-back</button>
+    </>
+  );
+}
+
+function renderOrgHistory(entries: string[]) {
+  return render(
+    <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+      <ThemeProvider>
+        <HistoryProbe />
+        <Routes>
+          <Route path="/org/:kind?/:syncId?" element={<Org />} />
+        </Routes>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+const systemBack = () => fireEvent.click(screen.getByText("system-back"));
+
+/** react-router 在 window.history.state 记着自己的位置；MemoryRouter 不写它，用例手动垫。 */
+function setHistoryIdx(idx: number | undefined) {
+  window.history.replaceState(idx === undefined ? null : { idx }, "");
+}
+
+/**
+ * 页头 ‹ = 回到上一处（规格 2026-11-25 D3）：有上一处就退一步，否则以替换方式回到
+ * 上级；两种情况历史都不能变长。
+ */
+describe("Agent / 部门详情 ‹ 不 push（D3、I11）", () => {
+  afterEach(() => setHistoryIdx(undefined));
+
+  it("有上一处：‹ 退一步，随后系统返回直接到更早的一页，不会回到刚离开的 Agent", async () => {
+    mockMobileViewport();
+    setHistoryIdx(2);
+    renderOrgHistory(["/start", "/org", "/org/agent/agent-alice"]);
+
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/org"),
+    );
+    systemBack();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/start"),
+    );
+  });
+
+  it("深链进 Agent 没有上一处：‹ 以替换回 /org，系统返回回到进来之前", async () => {
+    mockMobileViewport();
+    setHistoryIdx(undefined);
+    renderOrgHistory(["/start", "/org/agent/agent-alice"]);
+
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/org"),
+    );
+    systemBack();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/start"),
+    );
+  });
+
+  it("部门详情同一条规则", async () => {
+    mockMobileViewport();
+    setHistoryIdx(undefined);
+    renderOrgHistory(["/start", "/org/department/dept-eng"]);
+
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/org"),
+    );
+    systemBack();
+    await waitFor(() =>
+      expect(screen.getByTestId("path").textContent).toBe("/start"),
+    );
+  });
+});
+
+/**
+ * Agent 系统提示词与描述离开页面时自动保存（F4、I12）：返回、卸载、页面进后台
+ * （pagehide）都先存一次；没改过不存，已经存过不重复存。
+ */
+describe("Agent 系统提示词与描述离开即存（F4、I12）", () => {
+  const updates = () =>
+    mockedApi.mock.calls
+      .filter((c) => c[0] === "/v1/workspace/org/agents/update")
+      .map((c) => JSON.parse((c[1] as RequestInit).body as string));
+  const promptBox = () =>
+    screen.getByLabelText("System prompt", { selector: "textarea" });
+
+  afterEach(() => setHistoryIdx(undefined));
+
+  it("打完字直接点 ‹（不失焦）：提示词与描述都存了", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "Ops helper" },
+    });
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+
+    await waitFor(() => expect(updates().length).toBe(2));
+    expect(updates()).toContainEqual({
+      sync_id: "agent-alice",
+      prompt_json: JSON.stringify(["Be brief"]),
+    });
+    expect(updates()).toContainEqual({
+      sync_id: "agent-alice",
+      description: "Ops helper",
+    });
+  });
+
+  it("页面进后台（pagehide）也存，随后离开不再重复存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    window.dispatchEvent(new Event("pagehide"));
+    await waitFor(() => expect(updates().length).toBe(1));
+
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+    expect(updates().length).toBe(1);
+  });
+
+  it("失焦已存过，再离开不重复存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    fireEvent.blur(promptBox());
+    await waitFor(() => expect(updates().length).toBe(1));
+
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+    expect(updates().length).toBe(1);
+  });
+
+  it("没改过的文字离开不存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    window.dispatchEvent(new Event("pagehide"));
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+    expect(updates().length).toBe(0);
+  });
+
+  it("存失败：文字留在框里，页头出现既有的「保存失败 + 重试」", async () => {
+    mockMobileViewport();
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && (!init || init.method === undefined))
+        return chart;
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      if (path === "/v1/workspace/org/agents/update") throw new Error("boom");
+      throw new Error(`unexpected request: ${path}`);
+    });
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    window.dispatchEvent(new Event("pagehide"));
+
+    const status = await within(header).findByTestId("org-detail-save-status");
+    await waitFor(() => expect(status.textContent).toContain("boom"));
+    expect(within(status).getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect((promptBox() as HTMLTextAreaElement).value).toBe("Be brief");
+  });
+
+  it("离开后才存失败：页头已经不在了，顶部提示没保存上并给「重试」，重试把同一份文字再存一次", async () => {
+    mockMobileViewport();
+    let fail = true;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && (!init || init.method === undefined))
+        return chart;
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      if (path === "/v1/workspace/org/agents/update") {
+        if (fail) throw new Error("boom");
+        return { sync_id: "agent-alice", version: 2 };
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+    render(<Toaster />);
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+    await screen.findByTestId("org-index-col");
+
+    const notice = (await screen.findByText("Your edit wasn't saved")).closest(
+      "[data-sonner-toast]",
+    ) as HTMLElement;
+    expect(within(notice).getByText("boom")).toBeTruthy();
+    fail = false;
+    fireEvent.click(within(notice).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(updates().length).toBe(2));
+    expect(updates()[1]).toEqual({
+      sync_id: "agent-alice",
+      prompt_json: JSON.stringify(["Be brief"]),
+    });
+    toast.dismiss();
+  });
+
+  it("存成功：页头下显示「已保存」", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(promptBox(), { target: { value: "Be brief" } });
+    window.dispatchEvent(new Event("pagehide"));
+
+    const status = await within(header).findByTestId("org-detail-save-status");
+    await waitFor(() => expect(status.textContent).toMatch(/Saved/));
+  });
+
+  it("部门描述同样离开即存", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org/department/dept-eng"]);
+    const header = await screen.findByTestId("org-detail-header");
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "Builders" },
+    });
+    fireEvent.click(within(header).getByRole("button", { name: "Back" }));
+
+    await waitFor(() =>
+      expect(mockedApi).toHaveBeenCalledWith(
+        "/v1/workspace/org/departments/update",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+  });
+});
+
+describe("组织页筛选 chip 写「类型 · 机器名」（J2、F4）", () => {
+  const targetOf = (
+    id: string,
+    backend: string,
+    device: number,
+    name: string,
+  ) => ({
+    sync_id: id,
+    rank: 1,
+    backend_sync_id: backend,
+    backend_name: "Claude Code",
+    device_id: device,
+    device_name: name,
+    device_unspecified: false,
+    availability: "available" as const,
+    current: true,
+  });
+  const backendsRes = {
+    backends: [
+      {
+        sync_id: "b1",
+        name: "Claude Code",
+        backend_type: "claudecode",
+        device_id: 7,
+        device_name: "mac-mini",
+        device_unspecified: false,
+      },
+      {
+        sync_id: "b2",
+        name: "Claude Code",
+        backend_type: "claudecode",
+        device_id: 8,
+        device_name: "linux-box",
+        device_unspecified: false,
+      },
+      // 机器名未知：不凭空补后缀。
+      { sync_id: "b3", name: "Codex", backend_type: "codex" },
+    ],
+  };
+  const twoChart: OrgChartResponse = {
+    departments: [],
+    agents: [
+      {
+        sync_id: "a1",
+        name: "Alice",
+        sort_order: 0,
+        exec_targets: [targetOf("t1", "b1", 7, "mac-mini")],
+      },
+      {
+        sync_id: "a2",
+        name: "Bob",
+        sort_order: 1,
+        exec_targets: [targetOf("t2", "b2", 8, "linux-box")],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/org") return twoChart;
+      if (path === "/v1/workspace/org/backends") return backendsRes;
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 7,
+              name: "mac-mini",
+              display_name: "Studio",
+              kind: "agentred",
+            },
+          ],
+        };
+      throw new Error(`unexpected request: ${path}`);
+    });
+  });
+
+  it("同类型的两个后端各是一颗 chip：备注名优先，其次自报名；机器名未知就只写类型", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+    const chips = screen.getByTestId("org-index-filter-chips");
+    await within(chips).findByRole("button", { name: "Claude Code · Studio" });
+    expect(
+      within(chips).getByRole("button", { name: "Claude Code · linux-box" }),
+    ).toBeTruthy();
+    expect(within(chips).getByRole("button", { name: "Codex" })).toBeTruthy();
+    // 点哪一颗就只剩那台机器上的那个后端。
+    fireEvent.click(
+      within(chips).getByRole("button", { name: "Claude Code · linux-box" }),
+    );
+    expect(screen.queryByText("Alice")).toBeNull();
+    expect(screen.getByText("Bob")).toBeTruthy();
+  });
+
+  it("chip 前半写后端类型而不是用户给后端起的名字", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/org") return twoChart;
+      if (path === "/v1/workspace/org/backends")
+        return {
+          backends: [
+            { ...backendsRes.backends[0], name: "我的 Claude" },
+            backendsRes.backends[1],
+          ],
+        };
+      if (path === "/v1/devices") return { devices: [] };
+      throw new Error(`unexpected request: ${path}`);
+    });
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+    const chips = screen.getByTestId("org-index-filter-chips");
+    await within(chips).findByRole("button", {
+      name: "Claude Code · mac-mini",
+    });
+    expect(
+      within(chips).queryByRole("button", { name: /我的 Claude/ }),
+    ).toBeNull();
+  });
+});
+
+describe("Agent / 部门新建超时：刷新看看（F5、W13 组织侧）", () => {
+  const timeout = () => new ApiTimeoutError("/v1/workspace/org/agents", 15000);
+  let serverChart: OrgChartResponse;
+  let postFails = true;
+  let orgGate: Promise<void> | null = null;
+  const posts = (path: string) =>
+    mockedApi.mock.calls.filter(
+      ([p, init]) =>
+        p === path && (init as RequestInit | undefined)?.method === "POST",
+    );
+
+  async function openCreate(menuName: string, name: string) {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+    fireEvent.pointerDown(
+      within(screen.getByTestId("app-topbar")).getByRole("button", {
+        name: "Add agent or department",
+      }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: menuName }));
+    await screen.findByRole("dialog");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: name },
+    });
+  }
+
+  beforeEach(() => {
+    serverChart = JSON.parse(JSON.stringify(chart));
+    postFails = true;
+    orgGate = null;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && !init?.method) {
+        if (orgGate) await orgGate;
+        return serverChart;
+      }
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      if (path === "/v1/devices") return { devices: [] };
+      if (init?.method === "POST") {
+        if (postFails) throw timeout();
+        return { sync_id: "new-sync-id", version: 1 };
+      }
+      throw new Error(`unexpected request: ${path}`);
+    });
+  });
+
+  it("超时只写一行中文提示 + 「刷新看看」，不露英文原文；提交本身不等任何读", async () => {
+    await openCreate("New agent", "Zed");
+    await screen.findByText("Alice");
+    // 提交之后若还有读，都挂起：POST 必须已经发出（基线取自内存里的那份，不拦在读后面）。
+    orgGate = new Promise(() => {});
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = await screen.findByRole("alert");
+    expect(posts("/v1/workspace/org/agents")).toHaveLength(1);
+    expect(alert.textContent).toContain(
+      "The network timed out. It may already have been created.",
+    );
+    expect(alert.textContent).not.toMatch(/timed out after|\/v1\//);
+    expect(
+      within(alert).getByRole("button", { name: "Refresh to check" }),
+    ).toBeTruthy();
+  });
+
+  it("刷新后认出刚提交的那条（新的、同名同部门）就直接打开，且不再 POST", async () => {
+    // 提交前板上就有一条同名的旧 Agent，不能被认错。
+    serverChart.agents.push({
+      sync_id: "old-zed",
+      name: "Zed",
+      sort_order: 5,
+      exec_targets: [],
+    });
+    await openCreate("New agent", "Zed");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = await screen.findByRole("alert");
+    // 服务端其实建好了。
+    serverChart.agents.push({
+      sync_id: "made-zed",
+      name: "Zed",
+      sort_order: 6,
+      exec_targets: [],
+    });
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Refresh to check" }),
+    );
+    await screen.findByTestId("org-detail-col");
+    expect(posts("/v1/workspace/org/agents")).toHaveLength(1);
+  });
+
+  it("没找到：提示换成「可以重新提交」，再提交才发第二个 POST", async () => {
+    await openCreate("New agent", "Zed");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(
+      within(await screen.findByRole("alert")).getByRole("button", {
+        name: "Refresh to check",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toMatch(
+        /not found|couldn't find|resubmit/i,
+      ),
+    );
+    expect(posts("/v1/workspace/org/agents")).toHaveLength(1);
+    postFails = false;
+    fireEvent.pointerDown(
+      within(screen.getByTestId("app-topbar")).getByRole("button", {
+        name: "Add agent or department",
+      }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New agent" }));
+    await screen.findByRole("dialog");
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Zed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(posts("/v1/workspace/org/agents")).toHaveLength(2),
+    );
+  });
+
+  it("超时后直接再提交、核实的那次读也失败：仍不知道建没建，不发第二个 POST", async () => {
+    await openCreate("New agent", "Zed");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByRole("alert");
+    // 之后的读都失败。
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && !init?.method)
+        throw new ApiTimeoutError(path, 15000);
+      if (init?.method === "POST") throw timeout();
+      return { backends: [], devices: [] };
+    });
+    for (let round = 0; round < 2; round += 1) {
+      fireEvent.pointerDown(
+        within(screen.getByTestId("app-topbar")).getByRole("button", {
+          name: "Add agent or department",
+        }),
+        { button: 0, ctrlKey: false },
+      );
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "New agent" }),
+      );
+      await screen.findByRole("dialog");
+      fireEvent.change(screen.getByLabelText("Name"), {
+        target: { value: "Zed" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert").textContent).toMatch(
+          /couldn't refresh/i,
+        ),
+      );
+    }
+    expect(posts("/v1/workspace/org/agents")).toHaveLength(1);
+  });
+
+  it("部门新建超时同样：刷新认出就打开该部门", async () => {
+    await openCreate("New top-level department", "Platform");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toMatch(/timed out after/);
+    serverChart.departments.push({
+      sync_id: "made-dept",
+      name: "Platform",
+      sort_order: 3,
+    });
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Refresh to check" }),
+    );
+    await screen.findByTestId("org-detail-col");
+    expect(posts("/v1/workspace/org/departments")).toHaveLength(1);
+  });
+});
+
+describe("组织索引空态按钮手机 44px（J1、F18）", () => {
+  it("没有部门时「新建部门 / 添加 Agent」与筛空时「清除筛选」点按区 44px", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/org")
+        return {
+          ...chart,
+          departments: [],
+          agents: [{ ...chart.agents[0], department_sync_id: undefined }],
+        };
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      throw new Error(`unexpected request: ${path}`);
+    });
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+    const empty = document.querySelector(
+      '[data-slot="org-index-empty-departments"]',
+    ) as HTMLElement;
+    for (const b of within(empty).getAllByRole("button"))
+      expect(b.className).toContain("h-11");
+
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "zzz" },
+    });
+    const noMatch = await screen.findByTestId("org-index-no-match");
+    expect(
+      within(noMatch).getByRole("button", { name: "Clear filters" }).className,
+    ).toContain("h-11");
+  });
+});
+
+describe("组织页读失败统一呈现（G1、G2）", () => {
+  function failOrgWith(err: unknown) {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/org") throw err;
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      throw new Error(`unexpected request: ${path}`);
+    });
+  }
+
+  it("首次读失败：原位一行说清原因（502 归服务不可用、不露原文）+ 44px 重试", async () => {
+    failOrgWith(new ApiUnavailableError("/v1/workspace/org", 502, "<html>"));
+    mockMobileViewport();
+    renderOrgAt("/org");
+    const failed = await screen.findByTestId("org-index-failed");
+    expect(failed.textContent).toContain("502");
+    expect(failed.textContent).not.toContain("non-JSON");
+    expect(
+      within(failed).getByRole("button", { name: "Retry" }).className,
+    ).toContain("min-h-11");
+  });
+
+  it("首次读 401：给「重新登录」而不是重试", async () => {
+    failOrgWith(new ApiError(401, "未登录", 401));
+    mockMobileViewport();
+    renderOrgAt("/org");
+    const failed = await screen.findByTestId("org-index-failed");
+    expect(
+      within(failed).getByRole("link", { name: "Sign in again" }),
+    ).toBeTruthy();
+    expect(within(failed).queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("已有数据时刷新失败：行留着，提示带原因与 44px 重试", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+    failOrgWith(new ApiTimeoutError("/v1/workspace/org", 15000));
+    await act(async () => mockedStartChannel.mock.calls[0][0].onRefresh(null));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toContain("timed out");
+    expect(screen.getByText("Alice")).toBeTruthy();
+    const retry = within(alert).getByRole("button", { name: "Retry" });
+    expect(retry.className).toContain("min-h-11");
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/org") return chart;
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      throw new Error(`unexpected request: ${path}`);
+    });
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+});
+
+/**
+ * 组织面手机上的浮层（规格 2026-11-25 D1、F3）：页头 •••、工具栏 ＋ 菜单、新建弹层、
+ * 提示词展开框、执行目标的添加菜单，系统返回都先关它、停在原页；删除确认是底部 sheet。
+ */
+describe("组织面手机浮层：系统返回先关浮层（D1）、删除走底部 sheet（F3）", () => {
+  const where = () => screen.getByTestId("path").textContent;
+  const press = (el: HTMLElement) =>
+    fireEvent.pointerDown(el, { button: 0, ctrlKey: false });
+
+  it("Agent 详情 •••：返回只关菜单；菜单里点删除出底部 sheet（危险键在上、44px），返回即取消", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org", "/org/agent/agent-alice"]);
+    const header = await screen.findByTestId("org-detail-header");
+    press(within(header).getByRole("button", { name: "More actions" }));
+    await screen.findByRole("menu");
+    systemBack();
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(where()).toBe("/org/agent/agent-alice");
+
+    press(within(header).getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    const sheet = await screen.findByTestId("confirm-sheet");
+    const buttons = within(sheet).getAllByRole("button");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Delete", "Cancel"]);
+    for (const b of buttons) expect(b.className).toContain("h-11");
+    systemBack();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(where()).toBe("/org/agent/agent-alice");
+    expect(
+      mockedApi.mock.calls.some(
+        (c) => (c[1] as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toBe(false);
+  });
+
+  it("工具栏 ＋ 菜单与新建 Agent 弹层：返回各关一层，停在组织页", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/start", "/org"]);
+    await screen.findByText("Alice");
+    const add = () =>
+      within(screen.getByTestId("app-topbar")).getByRole("button", {
+        name: "Add agent or department",
+      });
+    press(add());
+    await screen.findByRole("menu");
+    systemBack();
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(where()).toBe("/org");
+
+    press(add());
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New agent" }));
+    await screen.findByRole("dialog");
+    systemBack();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(where()).toBe("/org");
+    systemBack();
+    await waitFor(() => expect(where()).toBe("/start"));
+  });
+
+  it("提示词展开框：返回关掉它，停在 Agent 详情", async () => {
+    mockMobileViewport();
+    renderOrgHistory(["/org", "/org/agent/agent-alice"]);
+    await screen.findByTestId("org-detail-header");
+    fireEvent.click(screen.getByRole("button", { name: "Expand editor" }));
+    await screen.findByRole("dialog");
+    systemBack();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(where()).toBe("/org/agent/agent-alice");
+  });
+});
+
+describe("组织详情字段保存失败的说法（F5、G2）", () => {
+  it("超时不露英文原文；手机上「重试」44px", async () => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && !init?.method) return chart;
+      if (path === "/v1/workspace/org/backends") return { backends: [] };
+      if (path.endsWith("/update")) throw new ApiTimeoutError(path, 15000);
+      throw new Error(`unexpected request: ${path}`);
+    });
+    mockMobileViewport();
+    renderOrgAt("/org/agent/agent-alice");
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    fireEvent.change(name, { target: { value: "Alice 2" } });
+    fireEvent.blur(name);
+    const status = await screen.findByTestId("org-detail-save-status");
+    await waitFor(() => expect(status.textContent).toContain("Save failed"));
+    expect(status.textContent).not.toMatch(/timed out|\/v1\//);
+    expect(
+      within(status).getByRole("button", { name: "Retry" }).className,
+    ).toContain("min-h-11");
   });
 });

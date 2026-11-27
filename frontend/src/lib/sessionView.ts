@@ -100,7 +100,9 @@ export function deriveSessionViewStatus(
     relayTargetResolved,
     protocolMismatch,
   } = input;
-  if (!meValid) return "loggedOut";
+  // 中继取票/重拨撞上 401（relayState=signedOut）与 /auth/me 失效是同一件事：账号没了，
+  // 不再重拨，出口只有重新登录。排在最前：它比其余任何一档都更接近用户此刻要做的事。
+  if (!meValid || relayState === "signedOut") return "loggedOut";
   if (deviceRevoked) return "deviceRevoked";
   if (machineOnline === false) {
     return targetKind === "desktop" ? "desktopAppNotRunning" : "machineOffline";
@@ -274,19 +276,16 @@ export function sessionStatusLabel(
 }
 
 /**
- * 会话行的标题。标题由首条消息派生，所以还没发出第一句的会话既没有标题也没有
- * Agent 标识，如实退化为「工作目录 · 后端 · 状态」——不猜标题、不填占位名。
+ * 会话行与对话页头的标题。标题由首条消息派生，所以还没发出第一句的会话没有标题：
+ * 叫「未命名对话」（规格 2026-11-25 H6）。工作目录永不下行到本端，此前拼出来的
+ * 「— · 后端 · 状态」只剩噪音；其余入参保留，让调用方不必为这一档改形状。
  */
 export function sessionTitle(
   s: Pick<SessionSummary, "title" | "cwd" | "backendType" | "lifecycleState">,
   t: Translate,
 ): string {
   if (s.title?.trim()) return s.title;
-  return t("session.list.untitled", {
-    cwd: s.cwd?.trim() ? s.cwd : "—",
-    backend: s.backendType?.trim() ? s.backendType : "—",
-    status: lifecycleLabel(s.lifecycleState, t),
-  });
+  return t("chat.untitled");
 }
 
 /**

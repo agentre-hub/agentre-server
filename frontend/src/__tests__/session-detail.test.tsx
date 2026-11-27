@@ -5627,6 +5627,81 @@ describe("会话详情：头部", () => {
   });
 
   /**
+   * 规格 2026-11-25 K3：Agent 清单读失败（断网）时抬头退回中性的「Assistant」；网络回来
+   * 之后它要自己再取一次，真名随之恢复——此前一直是「Assistant」，直到整页刷新。
+   */
+  it("Agent 清单读失败后网络恢复：自动再取一次，转录抬头换回真名", async () => {
+    let agentsFail = true;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      if (path === "/v1/workspace/agents") {
+        if (agentsFail) throw new Error("offline");
+        return { agents: workspaceAgents };
+      }
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [
+            {
+              peer_fingerprint: "fp-1",
+              conversation_id: "42",
+              title: "重构登录页",
+              agent_sync_id: "ag-1",
+              lifecycle_state: "idle",
+            },
+          ],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          frames: [
+            {
+              seq: 1,
+              method: "runtime.event",
+              params: {
+                conversationId: "42",
+                event: { kind: "text_delta", text: "离线转录" },
+              },
+            },
+          ],
+          cursor: 1,
+          has_more: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    renderEmbeddedDetail();
+
+    await screen.findByText(/离线转录/);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-transcript").textContent,
+      ).toContain("Assistant"),
+    );
+
+    agentsFail = false;
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-transcript").textContent,
+      ).toContain("后端 Agent"),
+    );
+  });
+
+  /**
    * 从草稿页交接过来的那一拍，而这条对话**是谁**还没解开：账号镜像里还没有那一行
    * （刚派发出去的对话就是这样），中继的 `session.list` 也还在路上。`initialUserText`
    * 与 `seeded` 让转录、头部与底栏就地全都铺出来了 —— 这一屏是用户第一眼看到的。
@@ -5886,8 +5961,9 @@ describe("会话详情：头部", () => {
 
     await screen.findByText(/老会话转录/);
     const head = screen.getByTestId("session-detail-header");
-    // 与索引同一套退化：后端与状态说得出来，cwd 永不下行（R19）所以是「—」。
-    expect(head.textContent).toContain("claude");
+    // 与索引同一套：没有标题就叫「未命名对话」（H6），不拼 cwd 永不下行（R19）的「—」。
+    expect(head.textContent).toContain("Untitled conversation");
+    expect(head.textContent).not.toContain("—");
     expect(head.textContent).not.toContain("#42");
   });
 
@@ -7136,6 +7212,48 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     expect(screen.queryByTestId("session-earlier-failed")).toBeNull();
   });
 
+  // 规格 2026-11-25 K3：网络回来之后「没能读到更早的内容」自己再读一次，不等用户点。
+  it("往回读失败后网络恢复：自动再读一次，失败条随之撤掉", async () => {
+    let n = 0;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?")) return mirrorRow;
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        n += 1;
+        if (n === 1) return tailPage([{ seq: 99, text: "最后一句" }], true);
+        if (n === 2) throw new Error("mirror unavailable");
+        return tailPage([{ seq: 50, text: "更早的那句" }], false);
+      }
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/最后一句/);
+    const el = scroller();
+    await waitFor(() => expect(el.scrollTop).toBe(2000));
+
+    fireEvent.wheel(el, { deltaY: -600 });
+    el.scrollTop = 900;
+    fireEvent.scroll(el);
+    await screen.findByTestId("session-earlier-failed");
+
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    expect(await screen.findByText(/更早的那句/)).toBeTruthy();
+    expect(screen.queryByTestId("session-earlier-failed")).toBeNull();
+    expect(n).toBe(3);
+  });
+
   it("前插之后视口不跳：加了多少高度就往下挪多少", async () => {
     serveMirror([
       tailPage([{ seq: 99, text: "最后一句" }], true),
@@ -8381,6 +8499,35 @@ describe("会话详情：重连期间的发送", () => {
       i18n.t("session.sendFailure.resend"),
     );
     expect(bubble.textContent).not.toMatch(/may already have arrived/i);
+  });
+
+  // 规格 E3「换连接取票期间状态即为「连接中」，此时发送走排队」：连上过之后又落回
+  // connecting（换连接 / 立即重试）时同样可以打字、发送即排队，连上只发一次。
+  it("连上过之后换连接（连接中）：输入框可用，发送排队，连上只发一次", async () => {
+    mountReconnecting();
+    await moveRelayTo("connected");
+    await screen.findByTestId("session-detail-send");
+    await moveRelayTo("connecting");
+    expect(composerDisabled()).toBe(false);
+
+    await sendInComposer("换连接时说的这句");
+    const queued = await screen.findByTestId("send-pending");
+    expect(queued.textContent).toContain("换连接时说的这句");
+    expect(runCalls().length).toBe(0);
+
+    await moveRelayTo("connected");
+    await waitFor(() => {
+      expect(runCalls().length).toBe(1);
+    });
+    await act(async () => {});
+    expect(runCalls().length).toBe(1);
+  });
+
+  it("从没连上过的首拨（连接中）：输入框仍禁用，不许一个不知道会不会到的承诺", async () => {
+    mountReconnecting();
+    await moveRelayTo("connecting");
+    await screen.findByTestId("session-detail-send");
+    expect(composerDisabled()).toBe(true);
   });
 
   it("排着的那条可以撤销:撤了就什么都不发", async () => {

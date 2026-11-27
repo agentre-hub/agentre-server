@@ -5,13 +5,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { edgeClasses } from "./helpers/edge-classes";
+import { ActivityStatsPanel } from "@/components/settings/ActivityStatsPanel";
 import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -677,5 +678,189 @@ describe("设置 · 隐私：关闭并删除", () => {
 
       expect(toggle()).toBe("false");
     });
+  });
+});
+
+// ── 任务 30：ActivityStatsPanel 的读失败走 CardLoadError，触屏控件 44px ──
+describe("设置 · 隐私：读失败与触屏点按区（任务 30）", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function setViewport(mobile: boolean) {
+    window.matchMedia = ((query: string) => ({
+      matches: mobile && query.includes("max-width"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  const tall = (el: HTMLElement) => /\bmin-h-11\b/.test(el.className);
+
+  function renderPanel() {
+    return render(
+      <MemoryRouter initialEntries={["/settings?tab=privacy"]}>
+        <ActivityStatsPanel />
+      </MemoryRouter>,
+    );
+  }
+
+  it("401：给「重新登录」链接（带 next），不给重试", async () => {
+    setViewport(true);
+    serve({
+      "/v1/stats/settings": () => {
+        throw new ApiError(30004, "未登录", 401);
+      },
+    });
+    renderPanel();
+
+    const alert = await screen.findByRole("alert");
+    const link = within(alert).getByRole("link", { name: "Sign in again" });
+    expect(link.getAttribute("href")).toBe(
+      `/login?next=${encodeURIComponent("/settings?tab=privacy")}`,
+    );
+    expect(tall(link)).toBe(true);
+    expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("其它失败：手机上「重试」44px，桌面不撑高；读不到不画开关", async () => {
+    setViewport(true);
+    serve({
+      "/v1/stats/settings": () => {
+        throw new Error("stats settings unavailable");
+      },
+    });
+    const { unmount } = renderPanel();
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(tall(retry)).toBe(true);
+    expect(screen.queryByRole("switch")).toBeNull();
+    unmount();
+
+    setViewport(false);
+    renderPanel();
+    expect(tall(await screen.findByRole("button", { name: "Retry" }))).toBe(
+      false,
+    );
+  });
+
+  it("手机：开关有 44px 点按区、危险区按钮 44px；桌面不变", async () => {
+    setViewport(true);
+    serve();
+    const { unmount } = renderPanel();
+    const sw = await screen.findByRole("switch");
+    expect(sw.className).toMatch(/after:h-11/);
+    expect(sw.className).toMatch(/after:w-11/);
+    expect(
+      tall(screen.getByRole("button", { name: "Turn off and delete" })),
+    ).toBe(true);
+    unmount();
+
+    setViewport(false);
+    renderPanel();
+    const desktopSwitch = await screen.findByRole("switch");
+    expect(desktopSwitch.className).not.toMatch(/after:h-11/);
+    expect(
+      tall(screen.getByRole("button", { name: "Turn off and delete" })),
+    ).toBe(false);
+  });
+});
+
+/**
+ * 手机上的两个确认（规格 2026-11-25 D1、F3）：系统返回先关它、停在设置页；关闭并删除
+ * 是危险确认，走底部 sheet（危险键在上、44px 满宽），桌面仍是对话框。
+ */
+describe("设置 · 隐私：手机上的确认与返回（D1、F3）", () => {
+  const originalMatchMedia = window.matchMedia;
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  });
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  function Probe() {
+    const navigate = useNavigate();
+    const { pathname } = useLocation();
+    return (
+      <>
+        <span data-testid="where">{pathname}</span>
+        <button data-testid="system-back" onClick={() => void navigate(-1)}>
+          back
+        </button>
+      </>
+    );
+  }
+  function renderPhone() {
+    return render(
+      <MemoryRouter
+        initialEntries={["/prev", "/settings?tab=privacy"]}
+        initialIndex={1}
+      >
+        <ThemeProvider>
+          <Probe />
+          <Settings />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+  const back = () => fireEvent.click(screen.getByTestId("system-back"));
+
+  it("关闭并删除：底部确认 sheet，危险键在上；系统返回即取消、不发请求", async () => {
+    serve();
+    renderPhone();
+    await screen.findByTestId("privacy-activity-panel");
+    fireEvent.click(
+      within(screen.getByTestId("privacy-danger-zone")).getByRole("button", {
+        name: "Turn off and delete",
+      }),
+    );
+    const sheet = await screen.findByTestId("confirm-sheet");
+    const buttons = within(sheet).getAllByRole("button");
+    expect(buttons[0].textContent).toBe("Turn off and delete");
+    for (const b of buttons) expect(b.className).toContain("h-11");
+    back();
+    await waitFor(() =>
+      expect(screen.queryByTestId("confirm-sheet")).toBeNull(),
+    );
+    expect(screen.getByTestId("where").textContent).toBe("/settings");
+    expect(
+      mockedApi.mock.calls.some(
+        (c) => (c[1] as RequestInit | undefined)?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  it("开启的说明框：系统返回关掉它、停在设置页", async () => {
+    serve({
+      "/v1/stats/settings": settingsResponse({
+        activity_stats_enabled: false,
+        devices: undefined,
+      }),
+    });
+    renderPhone();
+    const panel = await screen.findByTestId("privacy-activity-panel");
+    fireEvent.click(
+      within(panel).getByRole("switch", { name: "Activity stats" }),
+    );
+    await screen.findByRole("dialog");
+    back();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByTestId("where").textContent).toBe("/settings");
   });
 });

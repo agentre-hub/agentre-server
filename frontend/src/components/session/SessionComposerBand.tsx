@@ -7,6 +7,7 @@ import {
   Button,
   isPendingToolPermission,
   QueuedMessagesBar,
+  Spinner,
   ToolPermissionDock,
   TranscriptPortsProvider,
   type ChatComposerHandle,
@@ -17,7 +18,7 @@ import {
   type TranscriptPorts,
 } from "@agentre-hub/agentre-ui";
 
-import { computeContextUsage } from "@/lib/sessionView";
+import { computeContextUsage, formatRelativeTime } from "@/lib/sessionView";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { usePutBackUndelivered } from "@/components/session/useSteerQueue";
 import { TranscriptSessionId } from "@/components/session/transcriptFrame";
@@ -76,18 +77,40 @@ export interface DockedPermission {
  * 手机上要停靠的那条审批（规格 2026-11-05「底部停靠区 · 等你审批」）：转录里最早
  * 一条还没决定的工具权限请求。提问与计划审批不算（`isPendingToolPermission`），
  * 它们留在转录里作答。没有就是 null，停靠区回到输入框。
+ *
+ * `skip` 里的那几条不停靠：本地先画出来、问过之后那台机器已经不在等的审批（规格
+ * 2026-11-25 d9「不再等则收起」）。
  */
 export function pickDockedPermission(
   messages: readonly TranscriptMessage[],
+  skip?: ReadonlySet<string>,
 ): DockedPermission | null {
   for (const message of messages) {
     for (const block of message.blocks) {
-      if (isPendingToolPermission(block)) {
+      if (
+        isPendingToolPermission(block) &&
+        !skip?.has(dockedRequestId(block))
+      ) {
         return { toolBlock: block, messageId: message.id };
       }
     }
   }
   return null;
+}
+
+/**
+ * 一条工具权限块的请求号（`isPendingToolPermission` 认的同一格：canonical 的
+ * `tool.permission` 载荷）。共享包没有导出它的读取器，这里只读这一格。
+ */
+export function dockedRequestId(block: TranscriptBlock): string {
+  const canonical = (
+    block as {
+      canonical?: { kind?: string; toolPermission?: { requestId?: string } };
+    }
+  ).canonical;
+  return canonical?.kind === "tool.permission"
+    ? (canonical.toolPermission?.requestId ?? "")
+    : "";
 }
 
 export interface SessionComposerBandProps {
@@ -97,6 +120,8 @@ export interface SessionComposerBandProps {
   /** 贴底与否决定这一带的上边界（规格 2026-08-23 决策 6）。 */
   atBottom: boolean;
   machineName: string | undefined;
+  /** 那台机器最后在线的时刻（Unix 毫秒）；只读带上写「最后在线 …」。取不到就不写。 */
+  machineLastSeenMs?: number;
   backendType: string | undefined;
   /**
    * 「问哪台机器要 Skill 补全」的三样事实，原样透传给输入框（见 SessionComposer 的
@@ -144,7 +169,25 @@ export interface SessionComposerBandProps {
   dockedPermission?: DockedPermission | null;
   /** 停靠审批提交时走的端口，与转录里那张卡同一组。 */
   decisionPorts?: TranscriptPorts;
+  /**
+   * 停靠的那条审批是本地先画出来的，还没问到那台机器是不是还在等（规格 2026-11-25
+   * d9）：三键置灰、键上方写「正在确认是否还在等你」。不给 = 原样。
+   */
+  dockConfirming?: boolean;
+  /**
+   * 这条对话连上过、此刻在换连接（取票期间「连接中」，规格 E3）：输入框照常可用，
+   * 发送走排队。不给 = 原样（只有已连接 / 重连中可用）。
+   */
+  connectionReplacing?: boolean;
 }
+
+/**
+ * 「正在确认」那一行排在「允许」之上。停靠条是共享包的组件，它只留了一个槽（停止，
+ * 排在最下面），所以这一行从那个槽进去，再用 flex 的 order 挪到按钮前面：按钮、按钮
+ * 那一排与错误行排到后面，标题与工具入参留在前面。只在确认期间套用。
+ */
+const DOCK_CONFIRMING_ORDER =
+  "[&>button]:order-2 [&>.grid]:order-2 [&>p]:order-2";
 
 /**
  * 钉住的那一带：输入框，或者三档「等下去也不会变」时的只读条；手机上还可能是
@@ -159,6 +202,7 @@ export default function SessionComposerBand({
   status,
   atBottom,
   machineName,
+  machineLastSeenMs,
   backendType,
   agentSyncId,
   targetFingerprint,
@@ -187,8 +231,10 @@ export default function SessionComposerBand({
   composerHandleRef,
   dockedPermission,
   decisionPorts,
+  dockConfirming = false,
+  connectionReplacing = false,
 }: SessionComposerBandProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const composerModule = useSessionComposerModule();
   // 手机：输入框走触屏档，只读条带「查看设备」的出口（规格 2026-11-05 决策 8 / 9）。
   const isMobile = useIsMobile();
@@ -281,7 +327,29 @@ export default function SessionComposerBand({
             ) : (
               <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />
             )}
-            {readonlyNote}
+            {/* 最后在线只在这一处说（规格 H5）：页头只写「离线」，手机上顶部横幅撤了。
+                桌面宽度横幅还在、由它说「最后在线」，这一带保持原样（桌面布局不变）。 */}
+            {isMobile ? (
+              <span className="flex min-w-0 flex-col">
+                <span>{readonlyNote}</span>
+                {machineLastSeenMs && status !== "deviceRevoked" ? (
+                  <time
+                    data-testid="session-compose-last-seen"
+                    dateTime={new Date(machineLastSeenMs).toISOString()}
+                    title={new Date(machineLastSeenMs).toLocaleString()}
+                  >
+                    {t("session.banner.lastSeen", {
+                      time: formatRelativeTime(
+                        machineLastSeenMs,
+                        i18n.language,
+                      ),
+                    })}
+                  </time>
+                ) : null}
+              </span>
+            ) : (
+              readonlyNote
+            )}
             {/* 手机上停在这一带的出口：去看那台机器（撤销那一档它不会回来，不摆）。 */}
             {isMobile && status !== "deviceRevoked" ? (
               <Link
@@ -294,27 +362,51 @@ export default function SessionComposerBand({
           </p>
         ) : dockedPermission && decisionPorts ? (
           <TranscriptPortsProvider ports={decisionPorts}>
-            <ToolPermissionDock
-              toolBlock={dockedPermission.toolBlock}
-              messageId={dockedPermission.messageId}
-              sessionId={TranscriptSessionId}
-              cwd={cwd}
-              // 「■ 停止」与输入框提交位那颗同一份停止中状态（useTurnStop）。
-              stop={
-                running && onStop ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="min-h-11 self-start text-muted-foreground"
-                    disabled={stopping}
-                    onClick={onStop}
-                  >
-                    <Square aria-hidden="true" className="size-3.5" />
-                    {t("session.abort")}
-                  </Button>
-                ) : null
-              }
-            />
+            {/*
+              确认期间整条停靠条禁用：共享包的停靠条没有「另一种原因的禁用」入参（它的
+              connecting 会写「正在连接」，说的不是这件事），fieldset 的 disabled 让里面
+              每一颗按钮都按 :disabled 置灰、点不动。contents 不占一层盒子。
+            */}
+            <fieldset disabled={dockConfirming} className="contents">
+              <ToolPermissionDock
+                toolBlock={dockedPermission.toolBlock}
+                messageId={dockedPermission.messageId}
+                sessionId={TranscriptSessionId}
+                cwd={cwd}
+                className={dockConfirming ? DOCK_CONFIRMING_ORDER : undefined}
+                // 连接没就绪：三键禁用、点下的那颗单独转圈、失败写原因 + 重试、超时说
+                // 「没收到确认」（共享包的宿主级反馈，传了就打开）。确认期间由 dockConfirming
+                // 那一行说话，不再叠一行「正在连接」。
+                connecting={!dockConfirming && status !== "connected"}
+                // 「■ 停止」与输入框提交位那颗同一份停止中状态（useTurnStop）。
+                stop={
+                  <>
+                    {dockConfirming ? (
+                      <div
+                        role="status"
+                        data-testid="tool-permission-dock-confirming"
+                        className="order-1 flex items-center gap-2 text-aux text-muted-foreground"
+                      >
+                        <Spinner className="size-3.5" />
+                        {t("session.decision.confirmingWaiting")}
+                      </div>
+                    ) : null}
+                    {running && onStop ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="min-h-11 self-start text-muted-foreground"
+                        disabled={stopping}
+                        onClick={onStop}
+                      >
+                        <Square aria-hidden="true" className="size-3.5" />
+                        {t("session.abort")}
+                      </Button>
+                    ) : null}
+                  </>
+                }
+              />
+            </fieldset>
           </TranscriptPortsProvider>
         ) : composerModule ? (
           <composerModule.default
@@ -331,7 +423,11 @@ export default function SessionComposerBand({
                 重连期间**不禁用**（决策 6）：重连通常几秒就回来，禁用换来的只是
                 让人干等着。这时按发送会排一条看得见的队，连上自动发出。
               */
-            disabled={status !== "connected" && status !== "reconnecting"}
+            disabled={
+              status !== "connected" &&
+              status !== "reconnecting" &&
+              !connectionReplacing
+            }
             // 在途单独说，不折进 disabled：包据此把提交键转成 spinner，输入框保持
             // 可用，用户还能接着敲下一句。
             sending={sending}

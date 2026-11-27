@@ -1,5 +1,6 @@
 {
   "brand": "Agentre",
+  "back": "Back to sign in",
   "footer": {
     "copyright": "© {{year}} Agentre",
     "terms": "Terms of Service",

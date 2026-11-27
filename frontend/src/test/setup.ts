@@ -168,6 +168,17 @@ configure({ asyncUtilTimeout: 5_000 });
 // 共享名单（`@/lib/rosterFetch`）是模块级的：不清的话，上一条用例取回来的设备 / 项目
 // 会在 10 秒内原样交给下一条，而页面用例是每条各自 mock `@/lib/api` 的——红在一条
 // 自己什么都没做错的用例上。每条用例开始前全部作废，等于每条都从一个刚打开的标签页起。
-beforeEach(() => {
+//
+// 身份（`@/hooks/use-me`）同理：全标签页只取一次，不清的话上一条用例的那个人、它的
+// 重试定时器和监听会原样留给下一条。它在钩子里**动态** import：本文件先于用例文件
+// 求值，静态 import 会让 use-me 绑上真的 `@/lib/api`，用例文件里的 vi.mock 就替不到它。
+// 到 beforeEach 时用例文件的 mock 已经登记，拿到的是与用例同一份实例。
+//
+// IndexedDB 这里不装：jsdom 没有它，本地存储于是按「不可用」静默退回每次联网；要测
+// 本地存储的用例自己装一份 fake-indexeddb。
+beforeEach(async () => {
   invalidateRosters(null);
+  const identity = await import("@/hooks/use-me");
+  // 整个替掉 use-me 的用例文件（vi.mock 不带 importOriginal）没有身份状态可清。
+  if ("invalidateMe" in identity) identity.invalidateMe();
 });

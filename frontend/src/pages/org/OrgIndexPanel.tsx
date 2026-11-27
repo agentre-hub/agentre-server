@@ -41,6 +41,7 @@ import {
   OrgAgentRow,
   SearchInput,
   OrgGroupHeader,
+  orgBackendTypeLabel,
   type OrgAgentModel,
   type OrgDepartmentModel,
   type OrgIndexGroup,
@@ -48,6 +49,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import { InlineEmpty } from "@/components/console";
+import { useBackDismissOpen } from "@/hooks/use-back-dismiss";
 import { deviceDisplayName } from "@/lib/devices";
 
 import { filterRowsByBackend, type OrgIdMaps } from "./adapter";
@@ -109,6 +111,25 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
         : undefined)
     );
   };
+  // 手机筛选 chip 写「类型 · 机器名」：同一种后端装在几台机器上时，只写类型会出现几颗
+  // 一模一样的 chip（J2）。机器名与行的第二行同一口径（备注名优先、回落自报名）；
+  // 取不到机器名时不补后缀；一种类型只在一台机器上也照写机器名，与对比稿 B 栏一致
+  // （「Codex · 工作站」）。桌面的筛选菜单不变。
+  const backendLabel = (b: OrgBackendItem): string => {
+    if (!props.isMobile) return b.name ?? b.sync_id;
+    // 前半是后端的类型（用户可能给后端另起了名字，那不是「类型」）；类型缺席才回落名字。
+    const type = b.backend_type
+      ? orgBackendTypeLabel(b.backend_type)
+      : (b.name ?? b.sync_id);
+    const machine =
+      (b.device_id ? deviceNames.get(b.device_id) : undefined) ??
+      (b.device_name ? deviceDisplayName({ name: b.device_name }) : undefined);
+    return machine ? `${type} · ${machine}` : type;
+  };
+  // 空态里的动作键：手机点按区 44px（J1），桌面保持原来的紧凑尺寸。
+  const emptyActionClass = props.isMobile
+    ? "h-11 px-4 text-sm"
+    : "h-7 px-2.5 text-2xs";
   const rowDensity = props.isMobile
     ? ({ density: "stacked" } as const)
     : undefined;
@@ -172,8 +193,8 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
     return visible;
   }, [matchedGroups, collapsed]);
 
-  const backendName =
-    backends.find((b) => b.sync_id === backendSyncId)?.name ?? "";
+  const selectedBackend = backends.find((b) => b.sync_id === backendSyncId);
+  const backendName = selectedBackend ? backendLabel(selectedBackend) : "";
   const reportsToName =
     reportsToOptions.find((a) => a.id === reportsToId)?.name ?? "";
 
@@ -331,7 +352,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                   )
                 }
               >
-                {b.name ?? b.sync_id}
+                {backendLabel(b)}
               </FilterChip>
             ))}
           </div>
@@ -379,7 +400,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 px-2.5 text-2xs"
+                className={emptyActionClass}
                 onClick={clearAll}
               >
                 {t("org.index.filters.clearAll")}
@@ -458,7 +479,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-7 px-2.5 text-2xs"
+                      className={emptyActionClass}
                       onClick={() => props.onCreateDepartment()}
                     >
                       <FolderPlus className="size-3" aria-hidden="true" />
@@ -467,7 +488,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-7 px-2.5 text-2xs"
+                      className={emptyActionClass}
                       onClick={() => props.onCreateAgent()}
                     >
                       <Plus className="size-3" aria-hidden="true" />
@@ -506,8 +527,10 @@ export function OrgAddMenu(props: {
   onCreateDepartment: () => void;
 }) {
   const { t } = useTranslation();
+  // 手机上的菜单都是浮层：系统返回先关菜单、停在原页（D1）。
+  const menu = useBackDismissOpen();
   return (
-    <DropdownMenu>
+    <DropdownMenu {...menu}>
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
@@ -542,6 +565,7 @@ function GroupActions(props: {
 }) {
   const { t } = useTranslation();
   const { department } = props;
+  const menu = useBackDismissOpen();
   const actionClass =
     "inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:focus-outline motion-reduce:transition-none";
   return (
@@ -556,7 +580,7 @@ function GroupActions(props: {
       >
         <Plus className="size-3" aria-hidden="true" />
       </button>
-      <DropdownMenu>
+      <DropdownMenu {...menu}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -631,8 +655,9 @@ function FilterEntry(props: {
   touch?: boolean;
 }) {
   const active = props.activeCount > 0;
+  const menu = useBackDismissOpen();
   return (
-    <DropdownMenu>
+    <DropdownMenu {...menu}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"

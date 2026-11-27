@@ -32,6 +32,7 @@ import {
   type SessionRowModel,
   Button,
   cn,
+  useTouch,
 } from "@agentre-hub/agentre-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -1361,6 +1362,8 @@ export function LoadMore({
 }) {
   const { t } = useTranslation();
   const ref = useRef<HTMLButtonElement>(null);
+  // 触屏档（手机首页）点按区补到 44px（规格 2026-11-25「所有「重试」…按钮 44px」）。
+  const touch = useTouch();
 
   useEffect(() => {
     // 失败之后不再自动重试：同一个错误会被一路滚到底反复触发。要再来一次由用户按。
@@ -1381,7 +1384,10 @@ export function LoadMore({
       data-testid="index-load-more"
       disabled={loading}
       onClick={onLoadMore}
-      className="rounded-md bg-button-fill px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-button-fill-hover disabled:cursor-default disabled:opacity-60"
+      className={cn(
+        "rounded-md bg-button-fill px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-button-fill-hover disabled:cursor-default disabled:opacity-60",
+        touch && "min-h-11 px-4",
+      )}
     >
       {t(
         loading

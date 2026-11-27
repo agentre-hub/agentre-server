@@ -26,7 +26,7 @@ import {
   cn,
   orgBackendTypeLabel,
 } from "@agentre-hub/agentre-ui";
-import AppShell from "@/components/AppShell";
+import AppShell, { IdentityUnstableStrip } from "@/components/AppShell";
 import { PhonePage, PhonePageHeader } from "@/components/PhonePageHeader";
 import {
   Heatmap,
@@ -37,6 +37,7 @@ import {
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useMe } from "@/hooks/use-me";
 import {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,
@@ -89,9 +90,12 @@ interface AgentItem {
 function RangeSwitch({
   value,
   onChange,
+  touch = false,
 }: {
   value: StatsRange;
   onChange: (next: StatsRange) => void;
+  /** 手机：每一段都是 44px 的点按区（任务 30 / F21）；桌面不撑高。 */
+  touch?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -101,7 +105,11 @@ function RangeSwitch({
       onValueChange={(next) => onChange(next as StatsRange)}
     >
       {STATS_RANGES.map((range) => (
-        <SegmentedControlItem key={range} value={range}>
+        <SegmentedControlItem
+          key={range}
+          value={range}
+          className={touch ? "min-h-11" : undefined}
+        >
           {t(`overview.stats.range.${range}`)}
         </SegmentedControlItem>
       ))}
@@ -249,6 +257,7 @@ function CardSkeleton({ rows }: { rows: number }) {
 export default function Overview() {
   const { t, i18n } = useTranslation();
   const isMobile = useIsMobile();
+  const { status: identityStatus } = useMe();
 
   const [range, setRange] = useState<StatsRange>("30d");
   /** 手动重试用的一次性游标：改它即让取数 effect 重跑一轮。 */
@@ -343,7 +352,7 @@ export default function Overview() {
    * 画几列由**左列实测的宽度**说了算，不是由视口断点说了算：侧栏收起、右边那栏
    * 在不在、容器的 max-w 封顶都会改这个宽度，而它们都不体现在视口宽上。
    */
-  const { ref: heatmapRef, weeks: heatmapWeeks } = useHeatmapWeeks();
+  const { ref: heatmapRef, weeks: heatmapWeeks } = useHeatmapWeeks(isMobile);
 
   const monthRange = useMemo(() => {
     if (!stats) return "";
@@ -589,16 +598,22 @@ export default function Overview() {
                     {t("overview.stats.heatmap.greyNote")}
                   </p>
                 ) : null}
-                {/* 日界按服务端机器的时区切，不是按浏览器的。不写出来的话，一个在
-                      另一个时区的用户只会觉得自己的「今天」错了一格。 */}
-                {stats?.time_zone ? (
+                {/* 统计的日子按服务端机器的时区切，不是按浏览器的。不写出来的话，一个在
+                      另一个时区的用户只会觉得自己的「今天」错了一格。时区名服务端没给
+                      就只说「服务器时区」，不替它编一个。 */}
+                {stats !== null ? (
                   <p
                     data-testid="heatmap-timezone"
                     className="text-2xs text-muted-foreground"
                   >
-                    {t("overview.stats.heatmap.timeZone", {
-                      zone: stats.time_zone,
-                    })}
+                    {stats.time_zone
+                      ? t("overview.stats.heatmap.timeZone", {
+                          zone: timeZoneDisplayName(
+                            stats.time_zone,
+                            i18n.language,
+                          ),
+                        })
+                      : t("overview.stats.heatmap.timeZoneUnknown")}
                   </p>
                 ) : null}
               </div>
@@ -663,6 +678,7 @@ export default function Overview() {
                       key={row.sync_id || index}
                       row={row}
                       agent={agentsBySync.get(row.sync_id)}
+                      rosterLoaded={agents !== null}
                       max={stats.agents[0]?.count ?? row.count}
                     />
                   ))}
@@ -714,6 +730,7 @@ export default function Overview() {
                   <ProjectsBody
                     rows={stats.projects}
                     nameOf={(syncId) => projectsBySync.get(syncId)?.name}
+                    rosterLoaded={projects !== null}
                   />
                 )}
               </StatsCard>
@@ -727,6 +744,8 @@ export default function Overview() {
   return (
     <AppShell
       ownHeader={isMobile}
+      // 手机页头自己画，「网络不稳定」细条由 PhonePage 的 strip 槽摆在页头正下方。
+      ownStrip={isMobile}
       title={t("nav.overview")}
       /*
         窄屏顶栏不摆页面自己的控件：390 宽的手机上「标题 + 三档范围 + 头像 +
@@ -741,6 +760,9 @@ export default function Overview() {
     >
       {isMobile ? (
         <PhonePage
+          strip={
+            identityStatus === "unstable" ? <IdentityUnstableStrip /> : null
+          }
           header={
             /* 手机页头自己画（ownHeader）：☰ · 标题 · 范围分段。范围放在页头右端，
                页头因此与其它手机页同为 52px 一条（2026-11-20 第 14 项）。 */
@@ -748,7 +770,7 @@ export default function Overview() {
               testId="overview-mobile-header"
               leading={<MobileNavButton />}
               title={t("overview.stats.pageTitle")}
-              trailing={<RangeSwitch value={range} onChange={setRange} />}
+              trailing={<RangeSwitch value={range} onChange={setRange} touch />}
             />
           }
         >
@@ -762,6 +784,25 @@ export default function Overview() {
 }
 
 /** 今天（UTC）的 `YYYY-MM-DD`：还没取到数时用它把骨架网格的右端钉住。 */
+/**
+ * 时区标识（`Asia/Shanghai`）的人话名字（「中国标准时间」/ "China Standard Time"），
+ * 规格 J5「按北京时间统计」类的说法。Intl 认不得或叫不出名字时原样交回标识——
+ * 宁可露一个标识，也不替它编一个名字。
+ */
+function timeZoneDisplayName(zone: string, locale: string): string {
+  try {
+    const part = new Intl.DateTimeFormat(locale, {
+      timeZone: zone,
+      timeZoneName: "long",
+    })
+      .formatToParts(new Date())
+      .find((p) => p.type === "timeZoneName");
+    return part?.value || zone;
+  } catch {
+    return zone;
+  }
+}
+
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -797,12 +838,16 @@ function Highlight({
 function AgentRankRow({
   row,
   agent,
+  rosterLoaded,
   max,
 }: {
   row: { sync_id: string; count: number };
   agent?: AgentItem;
+  /** Agent 名单取回来了：此时名单里没有它才是「已删除」；没取回来不下结论。 */
+  rosterLoaded: boolean;
   max: number;
 }) {
+  const { t } = useTranslation();
   const current = agent?.exec_targets?.find((tt) => tt.current);
   const landing =
     agent?.has_available_target && current
@@ -833,7 +878,8 @@ function AgentRankRow({
           style={color ? { backgroundColor: color } : undefined}
         />
         <span className="min-w-0 truncate text-sm font-medium text-foreground">
-          {agent?.name ?? row.sync_id}
+          {agent?.name ??
+            (rosterLoaded ? t("overview.stats.agents.deleted") : row.sync_id)}
         </span>
         {agent?.department_name ? (
           <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
@@ -981,9 +1027,12 @@ function BackendsBody({
 function ProjectsBody({
   rows,
   nameOf,
+  rosterLoaded,
 }: {
   rows: { sync_id: string; count: number }[];
   nameOf: (syncId: string) => string | undefined;
+  /** 项目树取回来了：此时树里没有它才是「已删除」；没取回来不下结论。 */
+  rosterLoaded: boolean;
 }) {
   const { t } = useTranslation();
   const max = rows.reduce((m, r) => Math.max(m, r.count), 0);
@@ -1002,7 +1051,10 @@ function ProjectsBody({
               )}
             >
               {row.sync_id
-                ? (nameOf(row.sync_id) ?? row.sync_id)
+                ? (nameOf(row.sync_id) ??
+                  (rosterLoaded
+                    ? t("overview.stats.projects.deleted")
+                    : row.sync_id))
                 : t("overview.stats.projects.unassigned")}
             </span>
             <span className="flex-1" />

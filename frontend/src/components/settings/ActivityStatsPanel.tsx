@@ -3,8 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Check, MessagesSquare, X } from "lucide-react";
 
 import {
-  Alert,
-  AlertDescription,
   Button,
   Checkbox,
   DialogShell,
@@ -17,8 +15,11 @@ import {
   cn,
 } from "@agentre-hub/agentre-ui";
 
+import { CardLoadError } from "@/components/console";
+import { ConfirmSheet } from "@/components/console/ConfirmSheet";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
-import { loadErrorText } from "@/lib/loadError";
+import { useBackDismiss } from "@/hooks/use-back-dismiss";
 // 包里同名的那个 formatRelativeTime 收的是 t()，这里要的是按 locale 的 Intl 版本。
 import { formatRelativeTime } from "@/lib/sessionView";
 import {
@@ -80,12 +81,16 @@ export function ActivityStatsPanel({
   refreshSignal?: number;
 }) {
   const { t, i18n } = useTranslation();
+  const isMobile = useIsMobile();
 
   const [settings, setSettings] = useState<StatsSettings | null>(null);
   /** 手动重试用的一次性游标：改它即让取数 effect 重跑一轮。 */
   const [reloadKey, setReloadKey] = useState(0);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [confirm, setConfirm] = useState<"enable" | "disable" | null>(null);
+  // 开启说明框在手机上是浮层：系统返回先关它、停在原页（D1）。关闭确认在手机上是
+  // ConfirmSheet，它自己接返回。
+  useBackDismiss(confirm === "enable", () => setConfirm(null));
   const [backfill, setBackfill] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -140,30 +145,17 @@ export function ActivityStatsPanel({
   }
 
   if (loadError !== null) {
-    const message = loadErrorText(
-      loadError,
-      t,
-      "settings.privacy.activity.loadFailedWhat",
-    );
+    // 读不到就说读不到，并给回程：分类、401 的「重新登录」与手机 44px 的「重试」都由
+    // CardLoadError 给（规格 G1），不在这里再画一只红框。
     return (
-      // 一行摆开：文案 + 弹簧 + 重试（与总览统计那条同形）。读不到之后唯一的出路
-      // 不该是「刷新整页」。
-      <Alert variant="destructive">
-        <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-          <span className="min-w-0">{message}</span>
-          <span className="flex-1" />
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={() => {
-              setLoadError(null);
-              setReloadKey((k) => k + 1);
-            }}
-          >
-            {t("common.retry")}
-          </Button>
-        </AlertDescription>
-      </Alert>
+      <CardLoadError
+        error={loadError}
+        what={t("settings.privacy.activity.loadFailedWhat")}
+        onRetry={() => {
+          setLoadError(null);
+          setReloadKey((k) => k + 1);
+        }}
+      />
     );
   }
   if (settings === null) {
@@ -190,6 +182,12 @@ export function ActivityStatsPanel({
           <Switch
             aria-label={t("settings.privacy.activity.title")}
             checked={enabled}
+            // 手机：开关本体只有 32×18，用伪元素把点按区撑到 44×44（不改外观与布局）。
+            className={
+              isMobile
+                ? "relative after:absolute after:top-1/2 after:left-1/2 after:h-11 after:w-11 after:-translate-x-1/2 after:-translate-y-1/2 after:content-['']"
+                : undefined
+            }
             onCheckedChange={(next) => openConfirm(next ? "enable" : "disable")}
           />
         </div>
@@ -238,6 +236,7 @@ export function ActivityStatsPanel({
             <Button
               size="xs"
               variant="destructive"
+              className={isMobile ? "min-h-11 px-4" : undefined}
               onClick={() => openConfirm("disable")}
             >
               {t("settings.privacy.activity.danger.action")}
@@ -483,6 +482,35 @@ function DisableDialog({
   onSubmit: () => void;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  if (isMobile) {
+    // 手机：底部确认 sheet，危险键在上、44px 满宽堆叠（F3）；系统返回即取消（D1）。
+    return (
+      <ConfirmSheet
+        open={open}
+        title={t("settings.privacy.activity.disable.title")}
+        description={`${t("settings.privacy.activity.disable.body")} ${t("settings.privacy.activity.disable.note")}`}
+        error={error}
+        onCancel={() => {
+          if (!busy) onClose();
+        }}
+        actions={[
+          {
+            label: t("settings.privacy.activity.disable.submit"),
+            variant: "destructive",
+            disabled: busy,
+            onSelect: onSubmit,
+          },
+          {
+            label: t("common.cancel"),
+            variant: "secondary",
+            disabled: busy,
+            onSelect: onClose,
+          },
+        ]}
+      />
+    );
+  }
   return (
     <DialogShell
       open={open}
