@@ -156,6 +156,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	engine := root.IRouter.(*gin.Engine)
 	engine.RedirectTrailingSlash = false
 	engine.Use(portForwardHost.Dispatch)
+	// 错误消息的语言（agrctl 点名 en）：同样装在路由注册之前，每条路由的处理链都带上它。
+	engine.Use(middleware.Language())
 
 	g := root.Group("/")
 	// 写请求来源校验的名单（spec 2026-09-21「控制台加固」）：控制台自己的 origin 加已

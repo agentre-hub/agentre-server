@@ -579,3 +579,7 @@ Two channels, deliberately separate:
   `middleware.AttachOAuthErrorFields` injects the spec-mandated fields. Device-flow
   endpoints must return errors this way, or clients cannot interpret them.
 - **Everything else** — `i18n.NewError(ctx, code.Xxx)`, which carries the localized message.
+  The language is the one the request's `Accept-Language` names as its first tag, when that
+  tag is exactly a bundle's (`en`, `zh-CN`; `middleware.Language`) — agrctl and agentred's ctl
+  proxy send `en`. Anything else, including a browser's region tag such as `en-US`, gets the
+  `zh-CN` default.
