@@ -1196,9 +1196,21 @@ lies on captive and lossy networks. A 2xx switches it to 「网络恢复了」 a
 original address; a 5xx switches it to the server variant. Its 「重试」 button is 44px high.
 
 **The boot shell covers the screen until the app's first real screen is painted.**
-`index.html` carries `#boot-shell`, a static copy of the phone home (header with an
-indeterminate progress line, filter chips, list skeleton; only the `chrome` background at
-desktop width), outside `#root` and fixed above it. An inline script removes it two
+`index.html` carries `#boot-shell`, outside `#root` and fixed above it. It has the shape
+of the page being opened, picked from the address by the head script before first paint
+(`<html data-boot>`, matched case-insensitively against the routes in `App.tsx`): the
+conversation index for `/chat` (the phone home, with the real title 「全部」 and the real
+filter chips, the `SessionRowSkeleton` phone geometry and a progress line on the header's
+bottom edge); a conversation for `/chat/<id>` (back, `TranscriptSkeleton`, the touch
+composer); a `PhonePageHeader`-shaped header and cards for the other console pages (back
+instead of ☰ on `/devices/<id>` and `/account`); and only the `chrome` background for the
+public pages and unknown addresses, which render in `AuthLayout`. `/` is the index on a
+phone and the overview at desktop width, as `HomeRedirect` decides. At desktop width it
+draws the rail (56px when `agentre.console.navCollapsed` says collapsed) and the content
+sheet, plus the index column on `/chat` at the width stored in `agentre.sidebarWidth.chat`.
+Its words follow the app's language detection order (`?lang=`, `agentre.lang`, the
+browser). Its geometry is measured against those real components; when one of them
+changes shape, change the shell with it. An inline script removes it two
 animation frames after `#root` first contains something readable or actionable (`main`,
 `header`, `nav`, `form`, a heading, a button, a link or a field) — `RequireAuth`'s one-line
 「加载中…」, sonner's empty `<section>` and a code-split page still in flight do not count,

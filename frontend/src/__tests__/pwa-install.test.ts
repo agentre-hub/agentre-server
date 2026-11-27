@@ -382,11 +382,14 @@ describe("index.html 的启动壳（规格 B2、W31）", () => {
       language?: string;
       storage?: Record<string, string>;
       dark?: boolean;
+      path?: string;
+      search?: string;
     } = {},
   ) {
     const frames: FrameRequestCallback[] = [];
     const doc = runInlineScripts(indexHtml, {
       window: fakeWindow({ dark: opts.dark }),
+      location: { pathname: opts.path ?? "/chat", search: opts.search ?? "" },
       navigator: { language: opts.language ?? "zh-CN" },
       localStorage: memoryStorage(opts.storage),
       requestAnimationFrame: (cb: FrameRequestCallback) => frames.push(cb),
@@ -404,7 +407,7 @@ describe("index.html 的启动壳（规格 B2、W31）", () => {
     flushFrames();
   }
 
-  it("壳在 #root 之外、并且就是首页的形状（页头 + 筛选条 + 列表骨架）", () => {
+  it("壳在 #root 之外、首页是首页的形状（页头 + 筛选条 + 列表骨架）", () => {
     vi.useFakeTimers();
     const { doc } = boot();
     const shell = doc.getElementById("boot-shell");
@@ -468,6 +471,249 @@ describe("index.html 的启动壳（规格 B2、W31）", () => {
 
     // 撤掉之后 8 秒那一行也不再冒出来（计时器已撤）。
     await vi.advanceTimersByTimeAsync(8_000);
+  });
+
+  /** 壳在这一页上画的是哪一种形状（首帧之前由 head 里的脚本定下，CSS 按它显隐）。 */
+  const shapeOf = (doc: Document) =>
+    doc.documentElement.getAttribute("data-boot");
+  const visibleText = (el: Element | null) =>
+    (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+  it("首页的壳写真字：标题「全部」，筛选条「全部（选中）/ 需要你 / 进行中 / 未读」（L1）", () => {
+    vi.useFakeTimers();
+    const { doc } = boot();
+    const list = doc.querySelector("[data-shape='list']")!;
+
+    expect(visibleText(list.querySelector("[data-boot='title']"))).toBe("全部");
+    const chips = [...list.querySelectorAll("[data-boot='chip']")];
+    expect(chips.map((c) => visibleText(c))).toEqual([
+      "全部",
+      "需要你",
+      "进行中",
+      "未读",
+    ]);
+    expect(chips.map((c) => c.getAttribute("aria-current"))).toEqual([
+      "true",
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it("首页的壳与应用的行骨架同形：四行、每行带右侧时间占位，进度条在页头里（L1）", () => {
+    vi.useFakeTimers();
+    const { doc } = boot();
+    const list = doc.querySelector("[data-shape='list']")!;
+    const rows = [...list.querySelectorAll("[data-boot='row']")];
+
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      expect(row.querySelector("[data-boot='row-time']")).toBeTruthy();
+    }
+    expect(
+      list.querySelector("[data-boot='header'] [data-boot='progress']"),
+    ).toBeTruthy();
+    // 与 SessionRowSkeleton 的 DEFAULT_ROWS（不透明度）和标题条宽 68 - 9i % 逐项相同。
+    expect(rows.map((r) => (r as HTMLElement).style.opacity)).toEqual([
+      "0.95",
+      "0.75",
+      "0.55",
+      "0.35",
+    ]);
+    expect(
+      rows.map(
+        (r) =>
+          (r.querySelector("[data-boot='row-title']") as HTMLElement | null)
+            ?.style.width,
+      ),
+    ).toEqual(["68%", "59%", "50%", "41%"]);
+  });
+
+  it("英文环境下首页的壳也是英文（L1）", () => {
+    vi.useFakeTimers();
+    const { doc } = boot({ storage: { "agentre.lang": "en" } });
+    const list = doc.querySelector("[data-shape='list']")!;
+
+    expect(visibleText(list.querySelector("[data-boot='title']"))).toBe("All");
+    expect(
+      [...list.querySelectorAll("[data-boot='chip']")].map((c) =>
+        visibleText(c),
+      ),
+    ).toEqual(["All", "Needs you", "In progress", "Unread"]);
+  });
+
+  it.each([
+    // 根地址：手机上 HomeRedirect 去 /chat，桌面去 /overview，所以单独一种。
+    ["/", "home"],
+    ["/chat", "list"],
+    ["/chat/", "list"],
+    ["/Chat", "list"],
+    // 这条地址会被重定向到对话索引。
+    ["/devices/3/sessions", "list"],
+    ["/chat/01JABCDEF", "conv"],
+    ["/devices", "page"],
+    ["/devices/3", "page"],
+    ["/overview", "page"],
+    ["/issues", "page"],
+    ["/org/team/01JX", "page"],
+    ["/account", "page"],
+    ["/settings", "page"],
+    ["/login", "plain"],
+    ["/device", "plain"],
+    ["/device/success", "plain"],
+    ["/terms", "plain"],
+    ["/privacy", "plain"],
+    ["/status", "plain"],
+    // 认不出的地址落到 NotFound（AuthLayout，没有控制台外壳）。
+    ["/foo", "plain"],
+    ["/chat/a/b", "plain"],
+  ])("壳按地址选形状：%s → %s（L2、L3）", (path, shape) => {
+    vi.useFakeTimers();
+    expect(shapeOf(boot({ path }).doc)).toBe(shape);
+  });
+
+  it.each([
+    ["/devices/3", true],
+    ["/account", true],
+    ["/devices", false],
+    ["/settings", false],
+  ])("手机上的二级页（%s）页头是返回而不是 ☰：%s（L2）", (path, sub) => {
+    vi.useFakeTimers();
+    expect(
+      boot({ path }).doc.documentElement.hasAttribute("data-boot-sub"),
+    ).toBe(sub);
+  });
+
+  it("地址里的 ?lang= 优先于存着的语言，与应用的语言探测同序（L1）", () => {
+    vi.useFakeTimers();
+    const { doc } = boot({
+      search: "?lang=en",
+      storage: { "agentre.lang": "zh-CN" },
+    });
+    expect(
+      visibleText(doc.querySelector("[data-shape='list'] [data-boot='title']")),
+    ).toBe("All");
+  });
+
+  it("?lang= 是应用不支持的语言时不算数，回落到存着的语言（与 i18next 一样）", () => {
+    vi.useFakeTimers();
+    const { doc } = boot({
+      search: "?lang=ja",
+      storage: { "agentre.lang": "zh-CN" },
+    });
+    expect(
+      visibleText(doc.querySelector("[data-shape='list'] [data-boot='title']")),
+    ).toBe("全部");
+  });
+
+  it("其余页的手机页头：首颗可见按钮（☰ 或返回）都抵掉页头内边距的一半（-8px）", () => {
+    const css = stripComments(
+      [...indexHtml.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
+        .map((m) => m[1])
+        .join("\n"),
+    );
+    const block =
+      /\.boot-page-header \.boot-back,\s*\.boot-page-header \.boot-menu\s*\{([^}]*)\}/.exec(
+        css,
+      )?.[1];
+    expect(block).toContain("margin-left: -8px");
+  });
+
+  it("地址里的 ?lang= 是坏的百分号编码也不打断壳（照常回落、照常撤壳）", async () => {
+    vi.useFakeTimers();
+    const { doc, flushFrames } = boot({ search: "?lang=%E0%A4%A" });
+    expect(doc.getElementById("boot-slow-text")!.textContent).toBe(
+      "网络较慢，仍在加载…",
+    );
+    doc.getElementById("root")!.innerHTML = "<main>list</main>";
+    await paint(flushFrames);
+    expect(doc.getElementById("boot-shell")).toBeNull();
+  });
+
+  it.each([
+    [undefined, ""],
+    ["480", "480px"],
+    ["1000", "640px"],
+    ["100", "220px"],
+    ["abc", ""],
+  ])(
+    "桌面对话索引列的宽度跟着拖过的宽度（agentre.sidebarWidth.chat = %s → %s）（L4）",
+    (stored, width) => {
+      vi.useFakeTimers();
+      const doc = boot({
+        storage: stored ? { "agentre.sidebarWidth.chat": stored } : {},
+      }).doc;
+      const rule = doc.querySelector("style[data-boot-index]")?.textContent;
+      // 注入发生在主 <style> 解析之前，规则排在它前面：选择器必须比主样式表里的
+      // `.boot-index` 更具体，否则后者的 320px 照样赢。
+      if (width)
+        expect(rule).toContain(`html .boot-index { width: ${width}; }`);
+      else expect(rule).toBeUndefined();
+    },
+  );
+
+  it("字色、底色与应用的同一处同一个 token：chip 与输入框占位是 fill-muted，公开页是外框色（L1、L3、L5）", () => {
+    const css = stripComments(
+      [...indexHtml.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
+        .map((m) => m[1])
+        .join("\n"),
+    );
+    const rule = (selector: string) => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return (
+        new RegExp(`(^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(css)?.[2] ??
+        ""
+      );
+    };
+
+    expect(rule(".boot-chip")).toContain("color: var(--fill-muted-foreground)");
+    expect(rule(".boot-composer")).toContain(
+      "color: var(--fill-muted-foreground)",
+    );
+    expect(rule('html[data-boot="plain"] #boot-shell')).toContain(
+      "background: var(--chrome)",
+    );
+  });
+
+  it("对话页的壳：返回、转录骨架、输入框占位（L2）", () => {
+    vi.useFakeTimers();
+    const conv = boot({ path: "/chat/01JABCDEF" }).doc.querySelector(
+      "[data-shape='conv']",
+    )!;
+
+    expect(conv.querySelector("[data-boot='back']")).toBeTruthy();
+    expect(conv.querySelectorAll("[data-boot='bubble']")).toHaveLength(4);
+    expect(visibleText(conv.querySelector("[data-boot='composer']"))).toBe(
+      "回复…",
+    );
+  });
+
+  it("公开页的壳没有控制台的形状，8 秒后照样提示网络慢（L3）", async () => {
+    vi.useFakeTimers();
+    const { doc } = boot({ path: "/login" });
+    const shell = doc.getElementById("boot-shell")!;
+
+    expect(shapeOf(doc)).toBe("plain");
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(shell.hasAttribute("data-slow")).toBe(true);
+  });
+
+  it("桌面宽度的壳有侧栏与内容页；记着收起时侧栏是收起的（L4）", () => {
+    vi.useFakeTimers();
+    const open = boot().doc;
+    const desk = open.querySelector("[data-boot='desk']")!;
+
+    expect(desk.querySelectorAll("[data-boot='nav-item']")).toHaveLength(6);
+    expect(desk.querySelector("[data-boot='index']")).toBeTruthy();
+    expect(desk.querySelector("[data-boot='sheet']")).toBeTruthy();
+    expect(open.documentElement.hasAttribute("data-boot-nav")).toBe(false);
+
+    const collapsed = boot({
+      storage: { "agentre.console.navCollapsed": "1" },
+    }).doc;
+    expect(collapsed.documentElement.getAttribute("data-boot-nav")).toBe(
+      "collapsed",
+    );
   });
 
   it("深浅色跟着应用的主题偏好走，不跟错一帧", () => {
