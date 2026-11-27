@@ -14,7 +14,7 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
-    "@agentre-hub/agentre-ui": "github:agentre-hub/agentre#f826802c93437f4315aba1cfc3734c3adf0ef27c&path:/frontend/packages/agentre-ui",
+    "@agentre-hub/agentre-ui": "github:agentre-hub/agentre#ce1be80c93580fd4c7ee14831a17b1c03a89c3d0&path:/frontend/packages/agentre-ui",
     "@agentre-hub/agentre-wire": "github:agentre-hub/agentre#fa4e6951dd9675a45b5ae0ecfb9df021f8ca1ad6&path:/frontend/packages/agentre-wire",
     "@bufbuild/protobuf": "^2.14.0",
     "@dnd-kit/core": "^6.3.1",

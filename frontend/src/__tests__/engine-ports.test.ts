@@ -889,6 +889,7 @@ describe("browser engine settings ports", () => {
       "codex",
       "piagent",
       "openclaw",
+      "antigravity",
     ]);
     const [hermes] = await adapter.listBackends();
     const unsupported = "This backend type is unavailable here.";
