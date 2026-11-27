@@ -122,7 +122,7 @@ func strp(s string) *string { return &s }
 
 // ---- 读 ----
 
-func TestList_GivenProvider_ThenKeyIsMaskedAndPlaintextNeverLeaves(t *testing.T) {
+func TestList_GivenProvider_ThenNoKeyCharactersAndOnlyAPIKeySet(t *testing.T) {
 	h := setup(t)
 	resp, err := h.do(t, fromAgentred, list(agentrewire.CtlKind_CTL_KIND_PROVIDER), false)
 	require.NoError(t, err)
@@ -130,12 +130,29 @@ func TestList_GivenProvider_ThenKeyIsMaskedAndPlaintextNeverLeaves(t *testing.T)
 	require.Len(t, items, 1)
 	p := items[0].GetProvider()
 	assert.Equal(t, int64(50), p.GetId())
-	assert.Equal(t, "sk-o••••••abcd", p.GetApiKey())
+	assert.Empty(t, p.GetApiKey(), "API key 只写：连掩码也不给")
 	assert.True(t, p.GetApiKeySet())
 	assert.Equal(t, int32(1), p.GetBackendRefs())
 	raw, err := protojson.Marshal(resp)
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), plainAPIKey)
+	assert.NotContains(t, string(raw), "sk-o")
+	assert.NotContains(t, string(raw), "••")
+}
+
+func TestGet_GivenProvider_ThenNoKeyCharactersAndOnlyAPIKeySet(t *testing.T) {
+	h := setup(t)
+	resp, err := h.do(t, fromAgentred, get(agentrewire.CtlKind_CTL_KIND_PROVIDER, 50), false)
+	require.NoError(t, err)
+	p := resp.GetGet().GetResource().GetProvider()
+	require.NotNil(t, p)
+	assert.Empty(t, p.GetApiKey(), "API key 只写：连掩码也不给")
+	assert.True(t, p.GetApiKeySet())
+	raw, err := protojson.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), plainAPIKey)
+	assert.NotContains(t, string(raw), "sk-o")
+	assert.NotContains(t, string(raw), "••")
 }
 
 func TestGet_GivenAgent_ThenReferencesAreRowIDsInChainOrder(t *testing.T) {
@@ -147,6 +164,39 @@ func TestGet_GivenAgent_ThenReferencesAreRowIDsInChainOrder(t *testing.T) {
 	assert.Equal(t, int64(10), a.GetDepartmentId())
 	assert.Equal(t, []int64{40}, a.GetBackendIds())
 	assert.True(t, a.GetPinned())
+}
+
+func TestRead_GivenAgentProjectOrProvider_ThenSyncIDIsTheStoredSyncID(t *testing.T) {
+	h := setup(t)
+	cases := []struct {
+		kind agentrewire.CtlKind
+		id   int64
+		want string
+	}{
+		{agentrewire.CtlKind_CTL_KIND_AGENT, 20, "agent-1"},
+		{agentrewire.CtlKind_CTL_KIND_PROJECT, 60, "proj-1"},
+		{agentrewire.CtlKind_CTL_KIND_PROVIDER, 50, "prov-1"},
+	}
+	for _, c := range cases {
+		resp, err := h.do(t, fromAgentred, get(c.kind, c.id), false)
+		require.NoError(t, err)
+		r := resp.GetGet().GetResource()
+		var got string
+		switch c.kind {
+		case agentrewire.CtlKind_CTL_KIND_AGENT:
+			got = r.GetAgent().GetSyncId()
+		case agentrewire.CtlKind_CTL_KIND_PROJECT:
+			got = r.GetProject().GetSyncId()
+		default:
+			got = r.GetProvider().GetSyncId()
+		}
+		assert.Equal(t, c.want, got, "kind %v get", c.kind)
+	}
+
+	resp, err := h.do(t, fromAgentred, list(agentrewire.CtlKind_CTL_KIND_PROVIDER), false)
+	require.NoError(t, err)
+	require.Len(t, resp.GetList().GetItems(), 1)
+	assert.Equal(t, "prov-1", resp.GetList().GetItems()[0].GetProvider().GetSyncId())
 }
 
 func TestList_GivenModels_ThenIDIsDerivedStablyFromProviderAndKey(t *testing.T) {
@@ -503,7 +553,11 @@ func TestWrite_GivenUnsupportedServerOps_ThenClearRejectionAndNoWrite(t *testing
 	assert.Equal(t, http.StatusUnprocessableEntity, statusOf(t, err))
 	assert.Contains(t, err.Error(), "desktop")
 
-	assert.Equal(t, http.StatusUnprocessableEntity, statusOf(t, ErrSendUnsupported))
+}
+
+func TestSend_GivenServerPath_ThenTheAnswerNamesTheOwningAgentred(t *testing.T) {
+	assert.Equal(t, http.StatusMisdirectedRequest, statusOf(t, ErrSendHandledByAgentred))
+	assert.Contains(t, ErrSendHandledByAgentred.Error(), "handled by the agentred that owns the session")
 }
 
 func TestWrite_GivenReadOnlyField_ThenBadRequest(t *testing.T) {

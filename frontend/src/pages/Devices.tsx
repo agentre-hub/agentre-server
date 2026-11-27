@@ -110,6 +110,8 @@ interface SessionCounts {
 const ACTIVE = 1;
 const KIND_AGENTRED = "agentred";
 const KIND_DESKTOP = "desktop";
+/** agrctl 的账号对端：调用方而不是执行机，没有在线/离线，只有最近使用时间。 */
+const KIND_CLI = "cli";
 
 /**
  * 「最后在线」的相对形态。
@@ -140,8 +142,17 @@ function statusTone(d: DeviceItem): StatusTone {
   return d.online ? "running" : "idle";
 }
 
-function statusLabel(d: DeviceItem, t: (key: string) => string): string {
+function statusLabel(
+  d: DeviceItem,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  locale: string,
+): string {
   if (d.status !== ACTIVE) return t("device.manage.statusRevoked");
+  if (d.kind === KIND_CLI) {
+    return t("device.manage.statusLastUsed", {
+      time: formatLastActive(d.last_seen_at, locale),
+    });
+  }
   return d.online
     ? t("device.manage.statusOnline")
     : d.kind === KIND_DESKTOP
@@ -573,7 +584,10 @@ function DeviceRow({
   //
   // 修的是呈现而不是刷新策略：让中继每 30 秒回写一次 last_seen_at，等于给每台设备
   // 加一条恒定写入，换来一个此刻没人需要的精确值。
-  const lastActive = d.online ? "" : formatLastActive(d.last_seen_at, locale);
+  const lastActive =
+    d.online || d.kind === KIND_CLI
+      ? ""
+      : formatLastActive(d.last_seen_at, locale);
   const meta = [d.platform, versionText, lastActive]
     .filter(Boolean)
     .join(" · ");
@@ -606,21 +620,25 @@ function DeviceRow({
         </span>
         <StatusMark
           tone={statusTone(d)}
-          label={statusLabel(d, t)}
+          label={statusLabel(d, t, locale)}
           testId={`device-status-${d.id}`}
         />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          data-testid={`device-expand-${d.id}`}
-          aria-expanded={isExpanded}
-          aria-label={
-            isExpanded ? t("device.manage.collapse") : t("device.manage.expand")
-          }
-          onClick={onToggle}
-        >
-          {isExpanded ? <ChevronUp /> : <ChevronDown />}
-        </Button>
+        {d.kind !== KIND_CLI && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            data-testid={`device-expand-${d.id}`}
+            aria-expanded={isExpanded}
+            aria-label={
+              isExpanded
+                ? t("device.manage.collapse")
+                : t("device.manage.expand")
+            }
+            onClick={onToggle}
+          >
+            {isExpanded ? <ChevronUp /> : <ChevronDown />}
+          </Button>
+        )}
         {revocable && (
           <DeviceRowMenu
             id={d.id}
@@ -701,7 +719,9 @@ function MobileDeviceRow({
   // 在线不说时间、离线不说版本：前者是自相矛盾的旧时刻（见 DeviceRow），后者此刻
   // 没人关心——要紧的是它什么时候还在。
   const tail = (
-    d.online ? [versionText] : [formatLastActive(d.last_seen_at, locale)]
+    d.online || d.kind === KIND_CLI
+      ? [versionText]
+      : [formatLastActive(d.last_seen_at, locale)]
   )
     .filter(Boolean)
     .map((part) => SEP + part)
@@ -745,7 +765,7 @@ function MobileDeviceRow({
           </span>
           <span className="min-w-0 truncate">
             <span className={cn(isOnline(d) && "text-status-running-text")}>
-              {statusLabel(d, t)}
+              {statusLabel(d, t, locale)}
             </span>
             {tail}
             {upgrade && (
@@ -861,10 +881,12 @@ function MobileDeviceDetail({
     ? deviceVersionText(versionState, t)
     : d.version;
   const subtitle = [
-    statusLabel(d, t),
+    statusLabel(d, t, locale),
     versionText,
     d.platform,
-    d.online ? "" : formatLastActive(d.last_seen_at, locale),
+    d.online || d.kind === KIND_CLI
+      ? ""
+      : formatLastActive(d.last_seen_at, locale),
   ]
     .filter(Boolean)
     .join(SEP);

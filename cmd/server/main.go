@@ -25,6 +25,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/personal_token_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/portforward_link_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
@@ -77,6 +78,7 @@ func main() {
 	user_identity_repo.RegisterUserIdentity(user_identity_repo.NewUserIdentity())
 	device_repo.RegisterDevice(device_repo.NewDevice())
 	device_token_repo.RegisterDeviceToken(device_token_repo.NewDeviceToken())
+	personal_token_repo.RegisterPersonalToken(personal_token_repo.NewPersonalToken())
 	device_flow_repo.RegisterDeviceFlow(device_flow_repo.NewDeviceFlow())
 	portforward_link_repo.RegisterLink(portforward_link_repo.NewLink())
 	sync_repo.RegisterSyncObject(sync_repo.NewSyncObject())
@@ -97,6 +99,12 @@ func main() {
 
 	err = cago.New(ctx, cfg).
 		Registry(component.Core()).
+		// protorpc 的日志来源必须紧跟 Core 交出:Core 装好 cago logger,而之后的
+		// 组件(RegisterDefaults 建的端口转发池与镜像连接)才会创建 protorpc 连接。
+		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
+			bootstrap.InstallProtorpcLogger()
+			return nil
+		})).
 		// trace 必须尽早注册：其余组件和 mux 中间件都会先判断 trace.Default()
 		// 是否存在再决定要不要接链路。放在 Core 之后、业务组件之前。
 		//

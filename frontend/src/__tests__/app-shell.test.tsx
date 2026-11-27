@@ -186,6 +186,28 @@ describe("桌面 SideNav（任务 2 外壳，R969Y）", () => {
     expect(screen.queryByText("0/1")).toBeNull();
   });
 
+  it("设备 Meta 与总览同一口径：agrctl 的 cli 设备不算在线、也不算台数", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return me;
+      if (path.startsWith("/v1/agent-sessions?")) {
+        return { total: 0, groups: [] };
+      }
+      if (path === "/v1/devices") {
+        return {
+          devices: [
+            { id: 1, kind: "desktop", online: true },
+            { id: 2, kind: "agentred", online: false },
+            { id: 3, kind: "cli", online: false },
+          ],
+        };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    renderShell();
+    expect(await screen.findByText("1/2")).toBeTruthy();
+    expect(screen.queryByText("1/3")).toBeNull();
+  });
+
   it("桌面无汉堡按钮、无抽屉", async () => {
     renderShell();
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();

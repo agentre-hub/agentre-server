@@ -34,7 +34,7 @@ import {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,
 } from "@/lib/accountChannel";
-import { deviceRoster } from "@/lib/devices";
+import { deviceRoster, runsSessions } from "@/lib/devices";
 import { readNavCollapsed, writeNavCollapsed } from "@/lib/navCollapsed";
 import { attentionRoster, type AttentionCounts } from "@/lib/attentionCount";
 import { agentreLogoUrl, cn } from "@agentre-hub/agentre-ui";
@@ -186,10 +186,7 @@ export default function AppShell({
       .get()
       .then((list) => {
         if (!alive()) return;
-        setDeviceMeta({
-          online: list.filter((d) => d.online).length,
-          total: list.length,
-        });
+        setDeviceMeta(deviceMetaOf(list));
       })
       .catch(() => {});
   }, []);
@@ -203,10 +200,7 @@ export default function AppShell({
     deviceRoster
       .get()
       .then((list) => {
-        setDeviceMeta({
-          online: list.filter((d) => d.online).length,
-          total: list.length,
-        });
+        setDeviceMeta(deviceMetaOf(list));
       })
       .catch(() => {});
   }, []);
@@ -625,4 +619,19 @@ export default function AppShell({
       {mobileDrawer}
     </MobileDrawerProvider>
   );
+}
+
+/**
+ * 侧栏「设备 在线/全部」与总览同一口径：只数能跑会话的机器。agrctl 的 cli 设备是调用方，
+ * 没有在线态，算进去就成了一台永远离线的设备。
+ */
+function deviceMetaOf(list: { kind: string; online: boolean }[]): {
+  online: number;
+  total: number;
+} {
+  const machines = list.filter(runsSessions);
+  return {
+    online: machines.filter((d) => d.online).length,
+    total: machines.length,
+  };
 }

@@ -40,7 +40,7 @@ import {
   clearLocalPathOnMachine,
   setLocalPathOnMachine,
 } from "@/lib/projectLocalPath";
-import { fetchDevices } from "@/lib/devices";
+import { fetchDevices, runsSessions } from "@/lib/devices";
 import { projectFailureText } from "@/lib/projectErrors";
 import type { DisposableProjectFsPort } from "@/lib/projectFsPort";
 
@@ -267,7 +267,8 @@ export function createProjectCreatePorts(
       // 读不上来就回空，包据此把那一格整格收掉 —— 一个点开是空的入口比没有更糟。
       list: () =>
         fetchDevices().then(
-          (rows) => rows.map(toPickerMachine),
+          // agrctl 的 cli 设备不是机器：没有路径可配，也不该被当成一台离线的桌面。
+          (rows) => rows.filter(runsSessions).map(toPickerMachine),
           () => [],
         ),
       fs,

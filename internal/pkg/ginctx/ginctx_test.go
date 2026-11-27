@@ -63,3 +63,10 @@ func TestCSRFToken_MissingReadsAsEmpty(t *testing.T) {
 	SetCSRFToken(c, "")
 	assert.Equal(t, "", CSRFToken(c))
 }
+
+func TestScopes_RoundTripAndAbsentIsEmpty(t *testing.T) {
+	c := newCtx()
+	assert.Empty(t, Scopes(c))
+	SetScopes(c, []string{"read", "chat"})
+	assert.Equal(t, []string{"read", "chat"}, Scopes(c))
+}

@@ -44,7 +44,8 @@ import {
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
 import { fetchAgents } from "@/lib/agents";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { fetchDevices, runsSessions, type DeviceItem } from "@/lib/devices";
+import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
 import {
   fetchStatsOverview,
@@ -285,6 +286,9 @@ export default function Overview() {
   const [devices, setDevices] = useState<DeviceItem[] | null>(null);
   const [agents, setAgents] = useState<AgentItem[] | null>(null);
   const [projects, setProjects] = useState<ProjectNode[] | null>(null);
+  // 模型分布记的是会话钉的模型 key（服务生成的引用键）；人认得的模型 id 从供应商目录里
+  // 查。目录取不到就保持空，那一行退回写 key。
+  const { providers } = useEngineCatalog();
 
   useAliveEffect(
     (alive) => {
@@ -335,7 +339,7 @@ export default function Overview() {
   );
 
   const firstOffline = useMemo(
-    () => (devices ?? []).find((d) => !d.online),
+    () => (devices ?? []).filter(runsSessions).find((d) => !d.online),
     [devices],
   );
   const agentsBySync = useMemo(
@@ -345,6 +349,16 @@ export default function Overview() {
   const projectsBySync = useMemo(
     () => new Map((projects ?? []).map((p) => [p.syncId, p])),
     [projects],
+  );
+  const modelLabel = useCallback(
+    (providerKey: string, modelKey: string) => {
+      const model = providers
+        .find((p) => p.provider_key === providerKey)
+        ?.models.find((m) => m.model_key === modelKey);
+      // 目录里找不到（模型已删 / 目录取不到）就写 key：宁可一串引用键，也不写空。
+      return model?.model_id || model?.name || modelKey;
+    },
+    [providers],
   );
 
   const rangeLabel = t(`overview.stats.range.${loadedRange ?? range}`);
@@ -708,6 +722,7 @@ export default function Overview() {
                   <BackendsBody
                     backends={stats.backends}
                     models={stats.models}
+                    modelLabel={modelLabel}
                   />
                 )}
               </StatsCard>
@@ -922,9 +937,12 @@ function AgentRankRow({
 function BackendsBody({
   backends,
   models,
+  modelLabel,
 }: {
   backends: { backend_type: string; count: number }[];
   models: { provider_key: string; model_key: string; count: number }[];
+  /** 把 (provider_key, model_key) 写成人认得的模型 id。 */
+  modelLabel: (providerKey: string, modelKey: string) => string;
 }) {
   const { t } = useTranslation();
   const total = backends.reduce((sum, b) => sum + b.count, 0);
@@ -995,7 +1013,7 @@ function BackendsBody({
               >
                 {m.model_key ? (
                   <span className="min-w-0 truncate font-mono text-2xs text-code-foreground">
-                    {m.model_key}
+                    {modelLabel(m.provider_key, m.model_key)}
                   </span>
                 ) : (
                   // 「跟随 Agent 绑定」是翻译过的正文，不能上等宽——包里只自托管了

@@ -197,7 +197,11 @@ export default function Settings() {
   }, []);
   const syncedDevices =
     loadedDevices?.filter(
-      (device) => device.kind !== "web" && device.kind !== "browser",
+      // agrctl 的 cli 设备拿不到 sync（决策 15），不算「已同步」的设备。
+      (device) =>
+        device.kind !== "web" &&
+        device.kind !== "browser" &&
+        device.kind !== "cli",
     ).length ?? null;
   const executionDevices =
     loadedDevices?.filter((device) => isExecutionDevice(device.kind)).length ??

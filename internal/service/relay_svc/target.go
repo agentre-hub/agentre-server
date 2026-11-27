@@ -35,7 +35,7 @@ const SignalChannelID = ReservedChannelPrefix + "signal"
 // ResolveTarget 把一条通道声明的目标解析成路由。
 //
 // 两种形式最终都汇到 ConnectClient，那是有意的：那里握着这个账号能不能寻址这台
-// 机器的全部判据（归属、活跃、isAddressableKind、在线登记、帧总线可达）。目标从
+// 机器的全部判据（归属、活跃、device_entity.RunsSessions、在线登记、帧总线可达）。目标从
 // 连接级降到通道级之后，这些判据必须**逐通道**重跑一遍——conversation: 解析出来的
 // 机器同样要过，否则「浏览器 device kind 不得成为中继目标」这道闸就等于删掉了。
 func (s *relaySvc) ResolveTarget(ctx context.Context, accountID int64, target string) (Route, error) {
@@ -94,7 +94,7 @@ func (s *relaySvc) ResolveTarget(ctx context.Context, accountID int64, target st
 //     去认它。那时该做的是重新分段，不是加 if。
 const (
 	// ChannelCodeTargetNotFound 目标解析不出机器：账号里没有这条对话，或指纹
-	// 不属于这个账号 / 不是可寻址的 kind（isAddressableKind）。
+	// 不属于这个账号 / 不是可寻址的 kind（device_entity.RunsSessions）。
 	ChannelCodeTargetNotFound int32 = -32010
 	// ChannelCodeTargetOffline 目标机器在册但此刻没有中继连接。
 	ChannelCodeTargetOffline int32 = -32011

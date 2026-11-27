@@ -455,6 +455,7 @@ func TestRevoke(t *testing.T) {
 		convey.Convey("撤销后该设备名下的 access token 立即失效，且不经 Redis", func() {
 			mini := hubtest.Redis(t)
 			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+			mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 			dev := &device_entity.Device{
 				ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Fingerprint: "sha256:aaaa", Status: consts.ACTIVE,
 			}
@@ -489,6 +490,7 @@ func TestRevoke(t *testing.T) {
 		convey.Convey("撤销后该设备手上未过期的 refresh token 也换不到新凭据", func() {
 			hubtest.Redis(t)
 			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+			mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 			dev := &device_entity.Device{ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Status: consts.ACTIVE}
 
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -563,6 +565,7 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	convey.Convey("撤销设备时清掉挂在它上面、永远执行不了的删除待办（决策 7）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -580,6 +583,7 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	convey.Convey("清待办失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -598,6 +602,7 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	convey.Convey("设备行查不到时跳过待办清理，撤销照常成功", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, nil)
@@ -617,6 +622,7 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 	convey.Convey("撤销设备时清掉它上报的本机路径清单（R18）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -632,6 +638,7 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 	convey.Convey("purger 落库失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -655,6 +662,7 @@ func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 	convey.Convey("撤销设备时把只属于它的账号级同步对象落墓碑", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -674,6 +682,7 @@ func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 	convey.Convey("设备行查不到时跳过账号级清理，撤销照常成功", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, nil)
@@ -696,6 +705,7 @@ func TestRevoke_GivenNoPurgerConfigured_DoesNotPanic(t *testing.T) {
 	convey.Convey("未装配 purger 时 Revoke 不 panic（默认空操作）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().ListActiveChildren(gomock.Any(), int64(42)).Return(nil, nil).AnyTimes()
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -1610,4 +1620,200 @@ func TestListUserDevices_CarriesTheAccountLevelDisplayName(t *testing.T) {
 	assert.Equal(t, "办公室那台", items[0].DisplayName)
 	assert.Equal(t, "wangyizhideMacBook-Pro.local", items[0].Name, "自报名不被备注名顶掉")
 	assert.Equal(t, "", items[1].DisplayName, "没设过备注名就是空串，消费端据此回落到 name")
+}
+
+// cli 设备（agrctl）不连中继，列表不给它在线态——即便 Redis 里恰有同指纹的登记也一样
+// （在线是 daemon 的概念；cli 的活动信号是 last_seen_at，即最近一次令牌签发/刷新）。
+func TestListUserDevices_CLIDeviceIsNeverOnlineAndKeepsLastUsed(t *testing.T) {
+	convey.Convey("cli 设备 Online 恒为 false，LastSeenAt 原样给出", t, func() {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+
+		mini := miniredis.RunT(t)
+		redisClient := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+		t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+		relay := relay_svc.New(
+			relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second},
+			nil, nil, redisClient, stubForwarder{},
+		)
+		relay_svc.SetDefault(relay)
+		t.Cleanup(func() { relay_svc.SetDefault(nil) })
+
+		mD.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
+			{ID: 50, UserID: 7, Name: "agrctl@laptop", Kind: device_entity.KindCLI, Fingerprint: "fp-cli", LastSeenAt: 1234, Status: 1},
+			{ID: 43, UserID: 7, Name: "agentred-1", Kind: "agentred", Fingerprint: "fp-b", LastSeenAt: 999, Status: 1},
+		}, nil)
+		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: 7, Fingerprint: "fp-cli", InstanceID: "server-a"}))
+		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: 7, Fingerprint: "fp-b", InstanceID: "server-a"}))
+
+		items, err := svc.ListUserDevices(ctx, 7, 0)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(items, convey.ShouldHaveLength, 2)
+		convey.So(items[0].Kind, convey.ShouldEqual, "cli")
+		convey.So(items[0].Online, convey.ShouldBeFalse)
+		convey.So(items[0].LastSeenAt, convey.ShouldEqual, int64(1234))
+		convey.So(items[1].Online, convey.ShouldBeTrue)
+	})
+}
+
+// ---- 桌面代签 cli 子设备（规格 2026-11-25「身份与登录 → 桌面代签」） ----
+
+const (
+	desktopFP = "sha256:desktop-own-fingerprint"
+	childFP   = "sha256:child-cli-fingerprint"
+)
+
+func activeDesktop() *device_entity.Device {
+	return &device_entity.Device{
+		ID: 10, UserID: 7, Kind: device_entity.KindDesktop, Fingerprint: desktopFP,
+		Platform: "darwin/arm64", Version: "1.0.0", Status: consts.ACTIVE,
+	}
+}
+
+func TestMintCLIChild_DesktopMintsItsOwnCLIDeviceWithTokenPair(t *testing.T) {
+	ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+	mD.EXPECT().Find(gomock.Any(), int64(10)).Return(activeDesktop(), nil)
+	mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), childFP).Return(nil, nil)
+	var upserted device_entity.Device
+	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, d *device_entity.Device) error { d.ID = 55; upserted = *d; return nil },
+	)
+	var stored *device_token_entity.DeviceToken
+	mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, tok *device_token_entity.DeviceToken) error { stored = tok; return nil },
+	)
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	out, err := svc.MintCLIChild(ctx, MintCLIChildInput{
+		UserID: 7, CallerDeviceID: 10, Fingerprint: childFP, Name: "agrctl on mac",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, device_entity.KindCLI, upserted.Kind)
+	assert.Equal(t, int64(10), upserted.ParentDeviceID)
+	assert.Equal(t, childFP, upserted.Fingerprint)
+	assert.Equal(t, int64(7), upserted.UserID)
+	assert.Equal(t, "agrctl on mac", upserted.Name)
+	assert.Equal(t, consts.ACTIVE, upserted.Status)
+	assert.Equal(t, int64(55), out.DeviceID)
+	assert.NotEmpty(t, out.AccessToken)
+	assert.NotEmpty(t, out.RefreshToken)
+	assert.Equal(t, int64(55), stored.DeviceID)
+	assert.Equal(t, hashutil.SHA256Hex(out.AccessToken), stored.AccessTokenHash)
+}
+
+func TestMintCLIChild_SameFingerprintReissuesForTheSameChild(t *testing.T) {
+	ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+	mD.EXPECT().Find(gomock.Any(), int64(10)).Return(activeDesktop(), nil)
+	mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), childFP).Return(&device_entity.Device{
+		ID: 55, UserID: 7, Kind: device_entity.KindCLI, ParentDeviceID: 10, Fingerprint: childFP, Status: consts.ACTIVE,
+	}, nil)
+	// 旧凭据链整条作废：同一个孩子只有一条在用的链，丢了凭据重新申请不会留下两条。
+	mT.EXPECT().DeleteByDevice(gomock.Any(), int64(55)).Return(nil)
+	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, d *device_entity.Device) error { d.ID = 55; return nil },
+	)
+	mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	out, err := svc.MintCLIChild(ctx, MintCLIChildInput{UserID: 7, CallerDeviceID: 10, Fingerprint: childFP, Name: "n"})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(55), out.DeviceID)
+}
+
+func TestMintCLIChild_RejectsTheCallersOwnFingerprint(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	mD.EXPECT().Find(gomock.Any(), int64(10)).Return(activeDesktop(), nil)
+
+	out, err := svc.MintCLIChild(ctx, MintCLIChildInput{UserID: 7, CallerDeviceID: 10, Fingerprint: desktopFP, Name: "n"})
+
+	assert.Nil(t, out)
+	var he *httputils.Error
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, code.InvalidParameter, he.Code)
+}
+
+func TestMintCLIChild_RejectsAFingerprintBelongingToAnotherDevice(t *testing.T) {
+	for name, other := range map[string]*device_entity.Device{
+		"another desktop":         {ID: 20, UserID: 7, Kind: device_entity.KindDesktop, Fingerprint: childFP, Status: consts.ACTIVE},
+		"another desktop's child": {ID: 21, UserID: 7, Kind: device_entity.KindCLI, ParentDeviceID: 99, Fingerprint: childFP, Status: consts.ACTIVE},
+		"a login-flow cli device": {ID: 22, UserID: 7, Kind: device_entity.KindCLI, Fingerprint: childFP, Status: consts.ACTIVE},
+		"a revoked agentred":      {ID: 23, UserID: 7, Kind: device_entity.KindAgentred, Fingerprint: childFP, Status: consts.DELETE},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, mD, _, _, svc, mock := setupDeviceTest(t)
+			mock.ExpectBegin()
+			mock.ExpectRollback()
+			mD.EXPECT().Find(gomock.Any(), int64(10)).Return(activeDesktop(), nil)
+			mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), childFP).Return(other, nil)
+
+			out, err := svc.MintCLIChild(ctx, MintCLIChildInput{UserID: 7, CallerDeviceID: 10, Fingerprint: childFP, Name: "n"})
+
+			assert.Nil(t, out)
+			var he *httputils.Error
+			require.ErrorAs(t, err, &he)
+			assert.Equal(t, 409, he.Status)
+		})
+	}
+}
+
+func TestMintCLIChild_OnlyAnActiveDesktopMayMint(t *testing.T) {
+	cases := map[string]*device_entity.Device{
+		"agentred":        {ID: 10, UserID: 7, Kind: device_entity.KindAgentred, Status: consts.ACTIVE},
+		"cli":             {ID: 10, UserID: 7, Kind: device_entity.KindCLI, Status: consts.ACTIVE},
+		"web":             {ID: 10, UserID: 7, Kind: device_entity.KindWeb, Status: consts.ACTIVE},
+		"revoked desktop": {ID: 10, UserID: 7, Kind: device_entity.KindDesktop, Status: consts.DELETE},
+		"foreign desktop": {ID: 10, UserID: 8, Kind: device_entity.KindDesktop, Status: consts.ACTIVE},
+	}
+	for name, caller := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+			mD.EXPECT().Find(gomock.Any(), int64(10)).Return(caller, nil)
+
+			out, err := svc.MintCLIChild(ctx, MintCLIChildInput{UserID: 7, CallerDeviceID: 10, Fingerprint: childFP, Name: "n"})
+
+			assert.Nil(t, out)
+			var he *httputils.Error
+			require.ErrorAs(t, err, &he)
+			assert.Equal(t, 403, he.Status)
+		})
+	}
+}
+
+func TestMintCLIChild_PersonalTokenCallerHasNoDeviceAndIsRefused(t *testing.T) {
+	ctx, _, _, _, svc, _ := setupDeviceTest(t)
+
+	out, err := svc.MintCLIChild(ctx, MintCLIChildInput{UserID: 7, CallerDeviceID: 0, Fingerprint: childFP, Name: "n"})
+
+	assert.Nil(t, out)
+	var he *httputils.Error
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, 403, he.Status)
+}
+
+func TestRevoke_CascadesToTheDesktopsChildCLIDevices(t *testing.T) {
+	ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+	mD.EXPECT().Find(gomock.Any(), int64(10)).Return(activeDesktop(), nil)
+	mD.EXPECT().ListActiveChildren(gomock.Any(), int64(10)).Return([]*device_entity.Device{
+		{ID: 55, UserID: 7, Kind: device_entity.KindCLI, ParentDeviceID: 10},
+		{ID: 56, UserID: 7, Kind: device_entity.KindCLI, ParentDeviceID: 10},
+	}, nil)
+	for _, id := range []int64{10, 55, 56} {
+		mT.EXPECT().RevokeChain(gomock.Any(), id, gomock.Any()).Return(nil)
+		mD.EXPECT().Revoke(gomock.Any(), id, gomock.Any()).Return(nil)
+	}
+
+	require.NoError(t, svc.Revoke(ctx, 10))
+}
+
+func TestRevoke_ChildListFailureSurfacesSoTheRevokeCanBeRetried(t *testing.T) {
+	ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+	mD.EXPECT().Find(gomock.Any(), int64(10)).Return(activeDesktop(), nil).AnyTimes()
+	mT.EXPECT().RevokeChain(gomock.Any(), int64(10), gomock.Any()).Return(nil)
+	mD.EXPECT().Revoke(gomock.Any(), int64(10), gomock.Any()).Return(nil)
+	mD.EXPECT().ListActiveChildren(gomock.Any(), int64(10)).Return(nil, errors.New("db down"))
+
+	require.Error(t, svc.Revoke(ctx, 10))
 }

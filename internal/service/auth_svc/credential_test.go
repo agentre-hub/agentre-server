@@ -91,3 +91,39 @@ func TestCredentialResolver_MissingHalvesAreInvalid(t *testing.T) {
 		ResolveBearer(ctx, ticket.Token)
 	assert.ErrorIs(t, err, device_svc.ErrBearerInvalid)
 }
+
+// 个人 token 是第四种凭据：交给它自己的解析方，解析出 personal_token 形态的身份（不属于
+// 任何设备、带范围与 token 名），设备服务与短效凭据存储都认不下它。
+func TestCredentialResolver_ResolvesPersonalTokens(t *testing.T) {
+	testutils.Redis(t)
+	ctx := context.Background()
+	pat := device_svc.Principal{
+		AccountID: 7, Kind: device_svc.KindPersonalToken, PeerFingerprint: "pat:fp", Handle: "pat:11",
+		Scopes: []string{"read", "chat"}, TokenName: "ci",
+	}
+	resolver := NewCredentialResolver(
+		knownDevice("device-token", device_svc.Principal{AccountID: 7, DeviceID: 42, Kind: "desktop"}), newSvc()).
+		WithPersonalTokens(knownDevice("agr_pat_x", pat))
+
+	got, err := resolver.ResolveBearer(ctx, "agr_pat_x")
+	require.NoError(t, err)
+	assert.Equal(t, pat, *got)
+
+	device, err := resolver.ResolveBearer(ctx, "device-token")
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), device.DeviceID, "设备 access token 仍先交给设备服务")
+
+	_, err = resolver.ResolveBearer(ctx, "unknown")
+	assert.ErrorIs(t, err, device_svc.ErrBearerInvalid)
+}
+
+// 个人 token 解析方判不出来（查库失败）同样原样上交，不再去问短效凭据存储。
+func TestCredentialResolver_PersonalTokenResolverFailureIsPassedThrough(t *testing.T) {
+	testutils.Redis(t)
+	boom := errors.New("database unavailable")
+	resolver := NewCredentialResolver(nil, newSvc()).WithPersonalTokens(deviceResolverFunc(
+		func(context.Context, string) (*device_svc.Principal, error) { return nil, boom }))
+
+	_, err := resolver.ResolveBearer(context.Background(), "agr_pat_x")
+	assert.ErrorIs(t, err, boom)
+}

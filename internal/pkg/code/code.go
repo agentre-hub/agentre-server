@@ -44,6 +44,9 @@ const (
 	// RefreshTokenInvalid：refresh_token 缺失、查不到，或已被并发的那一次轮换换掉。
 	// 与 RefreshTokenReplay 的区别是这里没有证据表明凭据泄露，因此不撤整条链。
 	RefreshTokenInvalid = 30308
+	// DeviceIncompatibleRelease 那台 agentred 跑着协议版本不同的发行版，握手被它拒了。
+	// 控制台/agrctl 从这里远程升不了它：要在那台机器上自己升（agentred update）。
+	DeviceIncompatibleRelease = 30309
 )
 
 // Relay 30400~30499

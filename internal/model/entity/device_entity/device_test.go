@@ -121,3 +121,13 @@ func TestEffectiveName(t *testing.T) {
 		assert.Equal(t, "", missing.EffectiveName())
 	})
 }
+
+// 能跑会话的机器只有 desktop 与 agentred：中继只寻址它们，控制台的设备在线台数与逐台
+// 上报也只数它们。cli（agrctl 对端）与 web 是调用方，不是机器。
+func TestRunsSessions(t *testing.T) {
+	assert.True(t, RunsSessions(KindDesktop))
+	assert.True(t, RunsSessions(KindAgentred))
+	assert.False(t, RunsSessions(KindCLI))
+	assert.False(t, RunsSessions(KindWeb))
+	assert.False(t, RunsSessions(""))
+}

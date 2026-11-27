@@ -11,6 +11,9 @@ const (
 	KindDesktop  = "desktop"
 	KindAgentred = "agentred"
 	KindWeb      = "web"
+	// KindCLI 是账号下的 agrctl 对端（`agrctl login` 走 Device Flow 得到）：它是调用方，
+	// 不是执行机——不连中继、不是派发目标、拿不到 engine snapshot 与 sync。
+	KindCLI = "cli"
 )
 
 type Device struct {
@@ -28,13 +31,23 @@ type Device struct {
 	Platform    string `gorm:"column:platform;default:''"`
 	Version     string `gorm:"column:version;default:''"`
 	Fingerprint string `gorm:"column:fingerprint"`
-	LastSeenAt  int64  `gorm:"column:last_seen_at;default:0"`
-	Status      int    `gorm:"column:status;default:1"`
-	Createtime  int64  `gorm:"column:createtime;default:0"`
-	Updatetime  int64  `gorm:"column:updatetime;default:0"`
+	// ParentDeviceID 是代签这台设备的桌面设备 id，0 = 没有上级。只有桌面代签出来的 cli 子
+	// 设备带它：撤销那台桌面时按它连带撤销全部子设备。
+	ParentDeviceID int64 `gorm:"column:parent_device_id;default:0"`
+	LastSeenAt     int64 `gorm:"column:last_seen_at;default:0"`
+	Status         int   `gorm:"column:status;default:1"`
+	Createtime     int64 `gorm:"column:createtime;default:0"`
+	Updatetime     int64 `gorm:"column:updatetime;default:0"`
 }
 
 func (*Device) TableName() string { return "devices" }
+
+// RunsSessions 判定这种 kind 的设备是不是能跑会话的机器（desktop / agentred）。中继只寻址
+// 它们，控制台的「设备在线 n/m」与逐台上报进度也只数它们；判据只此一份，加一种能跑会话的
+// kind 时只改这里（前端的同名判据在 frontend/src/lib/devices.ts）。
+func RunsSessions(kind string) bool {
+	return kind == KindAgentred || kind == KindDesktop
+}
 
 func (d *Device) IsActive() bool { return d != nil && d.Status == consts.ACTIVE }
 

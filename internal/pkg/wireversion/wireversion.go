@@ -45,4 +45,8 @@ var Protocol = protocolversion.Protocol()
 // 0.8.0：规格 2026-11-03-session-process-ports 新增 RUNTIME_LIST_SESSION_PROCESSES /
 // RUNTIME_KILL_SESSION_PROCESS（会话留下的进程与监听端口），方法集变了，floor 随 pkg/wire
 // 的 pin 一起抬。
-const MinSupported = "0.8.0"
+//
+// 0.9.0：规格 2026-11-25-agrctl-account-peer——agentred 拒绝在运行中的会话上再开一轮
+// （RUNTIME_RUN 回 CodeRuntimeSessionRunning），并自己在轮末补发残留插话；控制台随之不再
+// 在浏览器里补发。两边必须同版本切换，floor 随 pkg/wire 的 pin 一起抬。
+const MinSupported = "0.9.0"

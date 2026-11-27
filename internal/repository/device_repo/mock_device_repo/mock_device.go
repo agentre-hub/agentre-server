@@ -86,6 +86,21 @@ func (mr *MockDeviceRepoMockRecorder) ListActiveByUsers(ctx, userIDs any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListActiveByUsers", reflect.TypeOf((*MockDeviceRepo)(nil).ListActiveByUsers), ctx, userIDs)
 }
 
+// ListActiveChildren mocks base method.
+func (m *MockDeviceRepo) ListActiveChildren(ctx context.Context, parentID int64) ([]*device_entity.Device, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListActiveChildren", ctx, parentID)
+	ret0, _ := ret[0].([]*device_entity.Device)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListActiveChildren indicates an expected call of ListActiveChildren.
+func (mr *MockDeviceRepoMockRecorder) ListActiveChildren(ctx, parentID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListActiveChildren", reflect.TypeOf((*MockDeviceRepo)(nil).ListActiveChildren), ctx, parentID)
+}
+
 // ListByUser mocks base method.
 func (m *MockDeviceRepo) ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error) {
 	m.ctrl.T.Helper()

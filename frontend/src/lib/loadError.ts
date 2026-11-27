@@ -1,7 +1,8 @@
 /**
  * 一次失败该给用户看什么（整句，没有「什么失败了」那半句时用）。
  *
- * 服务端的 `ApiError.message` 恒为中文（本服务没有语言中间件），所以它从不进界面。
+ * 服务端的 `ApiError.message` 不跟界面语言走（只按 Accept-Language 首选标签确切点名的
+ * 语言包回，浏览器的区域标签落回中文），所以它从不进界面。
  * 读失败带「什么没取到」那半句的，直接走 `describeFailure`（规格 2026-11-05-ux-polish W5）。
  */
 import { apiPermissionFailure } from "@/lib/describeFailure";

@@ -272,7 +272,7 @@ func TestRelayClient_GivenOneChannelTargetIsOffline_ThenOnlyThatChannelFails(t *
 	require.Equal(t, response, link.next(t, "c-alpha", "同连接另一条通道收不到应答了"))
 }
 
-// isAddressableKind 逐通道重查：两种目标形式解析出来的机器都要过它。
+// device_entity.RunsSessions 逐通道重查：两种目标形式解析出来的机器都要过它。
 //
 // 这里的设备存在、活跃、指纹也对得上，唯一不合格的是 kind，因此拒绝只可能出自
 // 那一次重查；而重查发生在 upgrade **之后**，所以它是通道级的，连接还活着。

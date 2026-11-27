@@ -47,3 +47,11 @@ type PendingInfo struct {
 	Name      string
 	ExpiresIn int
 }
+
+// MintCLIChildInput 是桌面代签 cli 子设备的入参。
+type MintCLIChildInput struct {
+	UserID         int64
+	CallerDeviceID int64
+	Fingerprint    string
+	Name           string
+}

@@ -209,7 +209,10 @@ func (e *Engine) Snapshot(c *gin.Context, _ *api.SnapshotRequest) (*api.Snapshot
 		out.CLIOverlays = append(out.CLIOverlays, api.SnapshotCLIOverlay{BackendSyncID: o.BackendSyncID, CLIPath: o.CLIPath})
 	}
 	for _, b := range snap.Backends {
-		out.Backends = append(out.Backends, api.SnapshotBackend{BackendSyncID: b.BackendSyncID, Config: b.Config})
+		out.Backends = append(out.Backends, api.SnapshotBackend{
+			BackendSyncID: b.BackendSyncID, ProviderKey: b.ProviderKey, ModelKey: b.ModelKey,
+			ReasoningEffort: b.ReasoningEffort, EnvJSON: b.EnvJSON, Config: b.Config,
+		})
 	}
 	return out, nil
 }

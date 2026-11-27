@@ -49,7 +49,7 @@ func textOf(t *testing.T, f TranscriptFrameView) string {
 	return p.Event.Text
 }
 
-// 归约器明确不消费的那 8 种（共享包 `@agentre-hub/agentre-ui` 的 transcript/frames.ts，
+// 归约器明确不消费的那 4 种（共享包 `@agentre-hub/agentre-ui` 的 transcript/frames.ts，
 // applyFrame 里 return 掉的那一档）在传输里就不该出现——它们到了浏览器也只是被丢掉。
 func TestProjectTranscriptFrames_DropsKindsTheReducerNeverConsumes(t *testing.T) {
 	in := []TranscriptFrameView{
@@ -58,14 +58,44 @@ func TestProjectTranscriptFrames_DropsKindsTheReducerNeverConsumes(t *testing.T)
 		ev(3, "permission_mode_changed", ""),
 		ev(5, "tool_use_end", ""),
 		ev(6, "retry", ""),
-		ev(7, "subagent_started", ""),
-		ev(8, "subagent_progress", ""),
-		ev(9, "subagent_done", ""),
-		ev(10, "subagent_model", ""),
 		ev(11, "done", ""),
 	}
 	out := projectTranscriptFrames(in)
 	assert.Equal(t, []string{"user_message", "done"}, kindsOf(t, out))
+}
+
+// subagent 生命周期四帧是子代理卡的**唯一**来路：归约器（frames.ts 的
+// EventSubagentStarted/Progress/Done/Model 分支）把它们并进外层那条 tool_use 的
+// overlay。`agrctl send --wait` 升级的 shell 调用尤其如此——工具名与入参都还是 shell
+// 的，卡片只认 overlay 的 origin=agrctl；落库后的卡投影成帧时只剩一条 subagent_done
+// 快照（agentre internal/pkg/transcript/projection.go）。削掉它，控制台的转录上那张卡
+// 就退回一行普通的 Bash。
+func TestProjectTranscriptFrames_KeepsSubagentLifecycleFrames(t *testing.T) {
+	shell := TranscriptFrameView{Seq: 1, Method: "runtime.event", Params: json.RawMessage(
+		`{"sessionId":42,"event":{"kind":"tool_use_start","id":"tu-sh","name":"Bash",` +
+			`"input":{"command":"agrctl send --agent verifier --wait \"hi\""}}}`)}
+	done := TranscriptFrameView{Seq: 2, Method: "runtime.event", Params: json.RawMessage(
+		`{"sessionId":42,"event":{"kind":"subagent_done","toolCallId":"tu-sh","info":` +
+			`{"kind":"agrctl_send","origin":"agrctl","status":"completed","finalText":"inner-pong",` +
+			`"taskDescription":"hi","toolUses":1}}}`)}
+	model := TranscriptFrameView{Seq: 3, Method: "runtime.event", Params: json.RawMessage(
+		`{"sessionId":42,"event":{"kind":"subagent_model","toolCallId":"tu-sh","model":"claude-sonnet"}}`)}
+	in := []TranscriptFrameView{
+		shell,
+		ev(4, "subagent_started", ""),
+		ev(5, "subagent_progress", ""),
+		done,
+		model,
+	}
+
+	out := projectTranscriptFrames(in)
+
+	assert.Equal(t, []string{"tool_use_start", "subagent_started", "subagent_progress", "subagent_done", "subagent_model"},
+		kindsOf(t, out))
+	require.Len(t, out, 5)
+	// 载荷原样下行：origin / finalText 没了，卡片认不出来、也没有结论。
+	assert.JSONEq(t, string(done.Params), string(out[3].Params))
+	assert.JSONEq(t, string(model.Params), string(out[4].Params))
 }
 
 // steer_consumed 是「轮次在跑时插进来的那句话」唯一的来路：runtime.steer 不发
@@ -143,7 +173,7 @@ func TestProjectTranscriptFrames_MergesAcrossDroppedFrames(t *testing.T) {
 	in := []TranscriptFrameView{
 		ev(1, "text_delta", "前"),
 		ev(2, "runtime_status", ""),
-		ev(3, "subagent_progress", ""),
+		ev(3, "retry", ""),
 		ev(4, "text_delta", "后"),
 	}
 	out := projectTranscriptFrames(in)

@@ -1,5 +1,11 @@
 {
   "aria": {
     "rowActionsNamed": "{{name}} 的操作"
+  },
+  "sendFailure": {
+    "sessionRunning": {
+      "titleUnknown": "这条对话已经在运行中",
+      "body": "这条对话上已经有一轮在运行,没能收下这条消息。消息没有发出去,等那一轮结束后再重发。"
+    }
   }
 }

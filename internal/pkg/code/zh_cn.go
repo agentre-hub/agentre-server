@@ -5,7 +5,8 @@ import "github.com/cago-frame/cago/pkg/i18n"
 // 中文包同时注册在 "zh-CN" 与 i18n.DefaultLang 两个标签下。
 //
 // 后者不是冗余：cago 的 i18n.T 在 ctx 没有语言时回落到 i18n.DefaultLang，而那个
-// 常量是全小写的 "zh-cn"；本服务没有设置语言的中间件，于是**每一次**错误构造都走
+// 常量是全小写的 "zh-cn"；只有请求的 Accept-Language 首选标签确切是某个语言包时
+// middleware.Language 才放进语言，其余（没带头、浏览器的 en-US 等）错误构造都走
 // 那条回落分支。只注册 "zh-CN" 时 langs["zh-cn"] 是 nil map，取回的是零值空串，
 // 客户端拿到 {"code":…,"msg":""}——有码无文案。两个标签指向同一份 map，没有副本。
 func init() {
@@ -32,12 +33,13 @@ var zhCN = map[int]string{
 	DeviceFlowInvalidGrant:         "device_code 无效",
 	DeviceFlowUserCodeInvalid:      "user_code 格式不正确或不存在",
 
-	DeviceNotFound:      "设备不存在",
-	DeviceRevoked:       "设备授权已被撤销",
-	RefreshTokenReplay:  "检测到 refresh token 重放，已撤销该设备所有凭证",
-	RefreshTokenExpired: "refresh token 已过期，请重新授权",
-	RefreshTokenInvalid: "refresh token 无效，请重新授权",
-	DeviceListFailed:    "拉取设备列表失败",
+	DeviceNotFound:            "设备不存在",
+	DeviceRevoked:             "设备授权已被撤销",
+	RefreshTokenReplay:        "检测到 refresh token 重放，已撤销该设备所有凭证",
+	RefreshTokenExpired:       "refresh token 已过期，请重新授权",
+	RefreshTokenInvalid:       "refresh token 无效，请重新授权",
+	DeviceListFailed:          "拉取设备列表失败",
+	DeviceIncompatibleRelease: "该设备运行的发行版与服务器不兼容，无法远程升级；请在那台机器上自己执行 `agentred update`",
 
 	RelayDaemonNotFound: "该账号未登记此 daemon",
 	RelayDaemonOffline:  "daemon 当前离线",

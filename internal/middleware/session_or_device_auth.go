@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/apierr"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 )
 
 // SessionOrDeviceAuth accepts either a device access token Bearer (preferred) or a
@@ -17,11 +18,25 @@ import (
 // 与 SessionAuth 共用 sessionPrincipal。这里只编排先后与本组的终止形态。allowedOrigins
 // 原样转给 originOK，与 CSRF() 是同一份名单（router.go 传的都是 cfg.ConsoleOrigins()）。
 func SessionOrDeviceAuth(tokens BearerResolver, allowedOrigins []string) gin.HandlerFunc {
+	return sessionOrBearer(tokens, allowedOrigins, devicePrincipal)
+}
+
+// SessionOrAccountAuth 与 SessionOrDeviceAuth 同一条判定，只是 Bearer 分支另外认个人 token
+// （此时 device_id 为 0、device_kind 是 personal_token、范围落在 ginctx.Scopes）。个人 token
+// 只该进显式挂了 RequireScope 的路由组：本中间件自己不裁范围。tokens 须是认得个人 token 的
+// 解析方（router.go 的 accountBearer）。
+func SessionOrAccountAuth(tokens BearerResolver, allowedOrigins []string) gin.HandlerFunc {
+	return sessionOrBearer(tokens, allowedOrigins, accountPrincipal)
+}
+
+type principalFunc func(*gin.Context, BearerResolver, string) (*device_svc.Principal, int, int, bool)
+
+func sessionOrBearer(tokens BearerResolver, allowedOrigins []string, principal principalFunc) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 出示了 Bearer 就只走 Bearer：令牌不认时不回落到 cookie，否则一枚已失效的凭据
 		// 只要同时带着一份有效 cookie 就还能进来。
 		if token, presented := bearerToken(c); presented {
-			p, status, businessCode, ok := devicePrincipal(c, tokens, token)
+			p, status, businessCode, ok := principal(c, tokens, token)
 			if !ok {
 				apierr.Abort(c, status, businessCode)
 				return
