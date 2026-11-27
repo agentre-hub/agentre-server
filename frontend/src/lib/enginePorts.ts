@@ -100,6 +100,9 @@ const BROWSER_BACKEND_TYPES = [
   "codex",
   "piagent",
   "openclaw",
+  // antigravity 与 claudecode / codex 同一套读写：绑 gemini 供应商、按设备 cli_path、
+  // env_json；不在名单上的类型整行都不显示，账号里已有的 antigravity 后端就会凭空消失。
+  "antigravity",
 ] as const satisfies readonly BackendType[];
 const BROWSER_BACKEND_TYPE_SET = new Set<string>(BROWSER_BACKEND_TYPES);
 
