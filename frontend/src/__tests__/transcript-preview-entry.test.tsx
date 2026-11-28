@@ -144,4 +144,31 @@ describe("previewFile 端口的能力探测", () => {
     expect(typeof withPreview.previewFile).toBe("function");
     expect(without.previewFile).toBeUndefined();
   });
+
+  it("共享包给了 {root, path} 形状的目标时谢绝接手：网页端没有工作根，不凭空解释", () => {
+    const previewFile = vi.fn().mockReturnValue(true);
+    const ports = createServerTranscriptPorts({
+      submitToolPermission: async () => undefined,
+      submitAnswer: async () => undefined,
+      submitToolApproval: async () => undefined,
+      previewFile,
+    });
+
+    const took = ports.previewFile?.(1, { root: "/srv/other", path: "a.md" });
+
+    expect(took).toBe(false);
+    expect(previewFile).not.toHaveBeenCalled();
+  });
+
+  it("网页端不提供新增的可选端口：认领路径 / 应用内网页预览", () => {
+    const ports = createServerTranscriptPorts({
+      submitToolPermission: async () => undefined,
+      submitAnswer: async () => undefined,
+      submitToolApproval: async () => undefined,
+      previewFile: () => true,
+    });
+
+    expect(ports.claimPath).toBeUndefined();
+    expect(ports.previewURL).toBeUndefined();
+  });
 });
